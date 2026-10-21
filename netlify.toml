@@ -1,0 +1,4 @@
+# Netlify serves the static site in web/ as is; there is no build step.
+[build]
+  publish = "web"
+  command = ""
