@@ -50,7 +50,8 @@ create table public.staff (
   city            text check (length(city) <= 80),
   emergency_name  text check (length(emergency_name) <= 80),
   emergency_phone text check (length(emergency_phone) <= 30),
-  start_date      date -- in service since
+  start_date      date, -- in service since
+  xp_bonus        int not null default 0 check (xp_bonus between 0 and 100000) -- XP a manager gave, on top of the work
 );
 create unique index staff_name_key on public.staff (lower(name));
 
@@ -1384,9 +1385,9 @@ language sql stable set search_path = public as $$
            coalesce(round(sum(mins)), 0)::int as minutes, count(*)::int as entries,
            (count(*) filter (where on_time))::int as on_time, (count(*) filter (where stayed))::int as stayed
       from e)
-  select json_build_object('xp', xp, 'level', app_private.level_for(xp), 'minutes', minutes,
-                           'entries', entries, 'on_time', on_time, 'stayed', stayed)
-    from x
+  select json_build_object('xp', x.xp + b.bonus, 'level', app_private.level_for(x.xp + b.bonus), 'minutes', minutes,
+                           'entries', entries, 'on_time', on_time, 'stayed', stayed, 'bonus', b.bonus)
+    from x cross join (select coalesce((select xp_bonus from public.staff where id = p_staff), 0) as bonus) b
 $$;
 
 -- Checks an avatar before it is saved. Items above the person's level are refused,
@@ -1496,7 +1497,7 @@ begin
   return json_build_object(
     'person', json_build_object('id', s.id, 'name', s.name, 'role', s.role, 'hourly_rate', s.hourly_rate,
       'active', s.active, 'locked', coalesce(s.locked_until > now(), false), 'contract_type', s.contract_type,
-      'payroll_id', s.payroll_id, 'created_at', s.created_at, 'avatar', s.avatar),
+      'payroll_id', s.payroll_id, 'created_at', s.created_at, 'avatar', s.avatar, 'xp_bonus', s.xp_bonus),
     'profile', app_private.profile_json(s),
     'xp', app_private.xp_json(s.id),
     'contracts', app_private.contracts_json(s.id),
@@ -1611,4 +1612,21 @@ begin
     from public.staff st
     cross join lateral (select app_private.xp_json(st.id) as x) j
    where st.active), '[]'::json);
+end $$;
+
+-- Bonus XP a manager gives someone, on top of what their work earns. It counts
+-- for the level and the all-time ranking, never for hours or pay.
+create function public.mgr_set_xp_bonus(p_token text, p_id uuid, p_bonus int) returns json
+language plpgsql security definer set search_path = public, extensions as $$
+declare v public.staff;
+begin
+  v := app_private.current_manager(p_token);
+  if p_bonus is null or p_bonus not between 0 and 100000 then
+    raise exception using message = 'Bonus XP must be between 0 and 100000.', errcode = 'P0001';
+  end if;
+  update public.staff set xp_bonus = p_bonus where id = p_id;
+  if not found then
+    raise exception using message = 'That person wasn''t found.', errcode = 'P0001';
+  end if;
+  return json_build_object('ok', true);
 end $$;

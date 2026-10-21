@@ -103,6 +103,7 @@ const SERVER_NL = {
   'The end date must be after the start date.': 'De einddatum moet na de begindatum liggen.',
   'Check the amounts.': 'Controleer de bedragen.',
   'Early check-in must be between 0 and 120 minutes.': 'Vroeger inklokken moet tussen 0 en 120 minuten liggen.',
+  'Bonus XP must be between 0 and 100000.': 'Bonus-XP moet tussen 0 en 100.000 liggen.',
 };
 const SERVER_NL_PATTERNS = [
   [/^(.+) already has a shift that overlaps one of these\.$/, '$1 heeft al een shift die met een van deze overlapt.'],
@@ -288,7 +289,8 @@ function showLevelUp() {
       <div class="levelup-pic">${S.me.avatar ? Avatar.render(S.me.avatar, { view: 'bust' }) : `<span class="levelup-num">${up.to}</span>`}</div>
       <p class="section-label">Level omhoog</p>
       <h2 id="modal-title">Level ${up.to} · ${esc(levelTitle(up.to))}</h2>
-      <p>Goed bezig, ${esc(S.me.name.split(' ')[0])}! ${rewards.length ? `Nieuw voor je avatar: <strong>${rewards.map(esc).join(', ')}</strong>.` : 'Blijf zo doorgaan voor de volgende beloning.'}</p>
+      <p>Goed bezig, ${esc(S.me.name.split(' ')[0])}! ${rewards.length > 4 ? `Je hebt <strong>${rewards.length} nieuwe dingen</strong> voor je avatar vrijgespeeld.`
+        : rewards.length ? `Nieuw voor je avatar: <strong>${rewards.map(esc).join(', ')}</strong>.` : 'Blijf zo doorgaan voor de volgende beloning.'}</p>
     </div>
     <div class="form-actions"><button type="button" data-close>Sluiten</button>${rewards.length ? '<button type="button" class="primary" id="lu-avatar">Avatar aanpassen</button>' : ''}</div>`);
   const b = $('#lu-avatar', d);
@@ -957,15 +959,21 @@ function dayEntries(list) {
   return out;
 }
 
+// The part of the day: the shift's own name, or Middag / Avond from its start time.
+const shiftPart = s => s.label || (new Date(s.starts_at).getHours() < 16 ? 'Middag' : 'Avond');
+const partClass = part => /middag/i.test(part) ? ' is-day' : /avond/i.test(part) ? ' is-eve' : '';
+
 function calEntry(x, manager, t) {
   const past = new Date(x.ends_at) <= t;
   const time = `${fmt.time(x.starts_at)} – ${fmt.time(x.ends_at)}`;
+  const part = shiftPart(x);
   const who = x.open ? `Open${x.count > 1 ? ` ×${x.count}` : ''}` : esc(x.staff_name) + (x.mine && !manager ? ' (jij)' : '');
   const pic = x.open ? '' : x.staff_avatar ? `<span class="cal-pic">${Avatar.head(x.staff_avatar)}</span>` : `<span class="cal-pic cal-initials">${esc(initials(x.staff_name))}</span>`;
   const cls = `cal-shift${x.open ? ' is-open' : ''}${x.mine && !manager ? ' is-mine' : ''}${past ? ' is-past' : ''}`;
   const clickable = manager || (!past && (x.open || x.mine));
-  const title = esc(`${x.label ? x.label + ', ' : ''}${time}${x.open ? (manager ? ' (open)' : ' – tik om op te nemen') : ''}`);
-  const inner = `${pic}<b>${who}:</b> <span class="t">${time}</span>`;
+  const title = esc(`${part}, ${time}${x.open ? (manager ? ' (open)' : ' – tik om op te nemen') : ''}`);
+  const inner = `<span class="cal-line"><span class="cal-tag${partClass(part)}">${esc(part)}</span><span class="t">${time}</span></span>
+    <span class="cal-who">${pic}<b>${who}</b></span>`;
   return clickable
     ? `<button type="button" class="${cls}" data-shift="${x.id}" title="${title}">${inner}</button>`
     : `<span class="${cls}" title="${title}">${inner}</span>`;
@@ -1758,6 +1766,7 @@ async function viewProfile(el, current) {
         <p class="section-label">${esc(S.me.name)}</p>
         <h2 class="hero-level">Level ${lvl} <span>· ${esc(levelTitle(lvl))}</span></h2>
         ${xpBar(xp)}
+        ${xp.bonus ? `<p class="muted small">Waarvan ${num(xp.bonus, 0)} bonus-XP van je verantwoordelijke.</p>` : ''}
         ${next.length ? `<p class="small">Op level ${lvl + 1} krijg je: <strong>${next.map(esc).join(', ')}</strong></p>` : ''}
         <div class="stats stats-3">
           <div class="stat"><span class="v">${fmt.hours(xp.minutes)}</span><span class="k">Uren gewerkt</span></div>
@@ -2365,6 +2374,8 @@ async function viewMember(el, current) {
             <div class="field"><label for="pm-pid">Werknemersnummer (Securex)</label><input id="pm-pid" maxlength="30" autocomplete="off" value="${esc(p.payroll_id || '')}"></div>
             <div class="field"><label for="pm-start">In dienst sinds</label><input id="pm-start" data-k="start_date" inputmode="numeric" placeholder="dd/mm/jjjj" maxlength="10" value="${esc(isoToDMY(pr.start_date))}"></div>
             <div class="field"><label for="pm-role">Rol</label><select id="pm-role"><option value="staff">Medewerker</option><option value="manager" ${p.role === 'manager' ? 'selected' : ''}>Verantwoordelijke</option></select></div>
+            <div class="field"><label for="pm-bonus">Bonus-XP</label><input id="pm-bonus" type="number" min="0" max="100000" step="1" inputmode="numeric" value="${p.xp_bonus || 0}">
+              <span class="help">XP die jij geeft, bovenop het werk. Telt voor het level, niet voor de uren of het loon. Level 20 = ${num(xpForLevel(20), 0)} XP.</span></div>
             <div class="field wide"><label class="check"><input type="checkbox" id="pm-active" ${p.active ? 'checked' : ''} ${self ? 'disabled' : ''}> Actief</label>
               <span class="help">${self ? 'Je kan jezelf niet op inactief zetten.' : 'Inactieve mensen kunnen zich niet aanmelden en hun toekomstige shiften komen weer open te staan. Hun uren blijven bewaard.'}</span></div>
           </div>
@@ -2378,6 +2389,7 @@ async function viewMember(el, current) {
           <h2 class="hero-level">Level ${xp.level} <span>· ${esc(levelTitle(xp.level))}</span></h2>
           ${xpBar(xp)}
           <dl class="kv">
+            ${xp.bonus ? `<dt>Bonus-XP</dt><dd>${num(xp.bonus, 0)}</dd>` : ''}
             <dt>Uren gewerkt</dt><dd>${fmt.hours(xp.minutes)} uur</dd>
             <dt>Keer gewerkt</dt><dd>${xp.entries}</dd>
             <dt>Op tijd begonnen</dt><dd>${xp.entries ? Math.round(xp.on_time / xp.entries * 100) + '%' : '—'}</dd>
@@ -2432,6 +2444,8 @@ async function viewMember(el, current) {
     const pin = $('#pm-pin', pm).value.trim(), rate = $('#pm-rate', pm).value, start = parseDMY($('#pm-start', pm).value);
     if (pin && !/^\d{4,8}$/.test(pin)) { err.textContent = 'De pincode moet 4 tot 8 cijfers hebben.'; return; }
     if (start == null) { err.textContent = 'Vul de datum van indiensttreding in als dd/mm/jjjj, bv. 01/09/2026.'; return; }
+    const bonus = Number($('#pm-bonus', pm).value || 0);
+    if (!Number.isInteger(bonus) || bonus < 0 || bonus > 100000) { err.textContent = 'Bonus-XP moet een getal tussen 0 en 100.000 zijn.'; return; }
     await busy($('button[type=submit]', pm), async () => {
       await rpc('mgr_save_staff', {
         p_id: p.id, p_name: $('#pm-name', pm).value, p_pin: pin || null, p_role: $('#pm-role', pm).value,
@@ -2439,6 +2453,7 @@ async function viewMember(el, current) {
       });
       await rpc('mgr_save_staff_payroll', { p_id: p.id, p_contract_type: $('#pm-type', pm).value || null, p_payroll_id: $('#pm-pid', pm).value.trim() });
       await rpc('mgr_save_profile', { p_id: p.id, p_profile: { start_date: start } });
+      if (bonus !== (p.xp_bonus || 0)) await rpc('mgr_set_xp_bonus', { p_id: p.id, p_bonus: bonus });
       toast(pin ? `Opgeslagen. Nieuwe pincode: ${pin}` : 'Opgeslagen.');
       await loadStaff(true);
       if (self) { await refreshMe(); renderShell(); } else renderView();
