@@ -1,14 +1,26 @@
 {
   "lang": "nl-BE",
-  "name": "Prikklok",
+  "name": "Chen's Garden Prikklok",
   "short_name": "Prikklok",
   "start_url": "./",
   "display": "standalone",
-  "background_color": "#F2F3F5",
-  "theme_color": "#D9541E",
+  "background_color": "#F4EDE1",
+  "theme_color": "#6E141A",
   "icons": [
-    { "src": "icon.svg", "sizes": "any", "type": "image/svg+xml" },
-    { "src": "icon-512.png", "sizes": "512x512", "type": "image/png" },
-    { "src": "icon-180.png", "sizes": "180x180", "type": "image/png" }
+    {
+      "src": "icon.svg",
+      "sizes": "any",
+      "type": "image/svg+xml"
+    },
+    {
+      "src": "icon-512.png",
+      "sizes": "512x512",
+      "type": "image/png"
+    },
+    {
+      "src": "icon-180.png",
+      "sizes": "180x180",
+      "type": "image/png"
+    }
   ]
 }

@@ -439,7 +439,7 @@ begin
   perform app_private.ensure_template_shifts(p_from, p_to);
   return coalesce((select json_agg(json_build_object(
       'id', sh.id, 'starts_at', sh.starts_at, 'ends_at', sh.ends_at, 'label', sh.label, 'notes', sh.notes,
-      'staff_id', sh.staff_id, 'staff_name', st.name, 'mine', coalesce(sh.staff_id = v.id, false),
+      'staff_id', sh.staff_id, 'staff_name', st.name, 'staff_avatar', st.avatar, 'mine', coalesce(sh.staff_id = v.id, false),
       'standard', sh.template_id is not null)
       order by sh.starts_at, st.name nulls last, sh.template_slot)
     from public.shifts sh left join public.staff st on st.id = sh.staff_id
@@ -1394,9 +1394,10 @@ $$;
 create function app_private.clean_avatar(p_avatar jsonb, p_level int, p_current jsonb) returns jsonb
 language plpgsql immutable set search_path = public as $$
 declare k text; val jsonb; v_need int;
-  v_locks constant jsonb := '{"hat": {"cap": 2, "bandana": 5, "chef": 8, "crown": 10},
-    "shoes": {"bunny": 3, "monster": 7}, "outer": {"puffer": 4}, "glasses": {"sun": 6},
-    "top": {"chef": 8}, "hairColor": {"pink": 9, "blue": 9, "lilac": 9}}';
+  v_locks constant jsonb := '{"hat": {"cap": 2, "bandana": 5, "chef": 8, "crown": 10, "bucket": 14},
+    "shoes": {"bunny": 3, "monster": 7, "dragon": 18, "gold": 19}, "outer": {"puffer": 4, "apron": 13, "leather": 17},
+    "glasses": {"sun": 6, "heart": 16}, "top": {"chef": 8, "garden": 15}, "hairColor": {"pink": 9, "blue": 9, "lilac": 9},
+    "neck": {"headphones": 11, "chain": 12}, "aura": {"gold": 20}}';
 begin
   if p_avatar is null or jsonb_typeof(p_avatar) = 'null' then
     return null;
@@ -1574,4 +1575,40 @@ begin
      set require_shift = coalesce(p_require_shift, true), clock_in_early_minutes = p_early_minutes
    where id = 1;
   return json_build_object('ok', true);
+end $$;
+
+-- --------------------------------------------------------------- ranking
+
+-- XP earned since p_from, counted the same way as app_private.xp_json.
+create function app_private.xp_since(p_staff uuid, p_from timestamptz) returns int
+language sql stable set search_path = public as $$
+  with g as (select make_interval(mins => grace_minutes) as grace from public.settings where id = 1)
+  select (coalesce(floor(sum(extract(epoch from (e.clock_out - e.clock_in))) / 360), 0)
+          + 5 * count(*) filter (where e.clock_in <= sh.starts_at + g.grace)
+          + 5 * count(*) filter (where e.clock_out >= sh.ends_at - g.grace))::int
+    from public.time_entries e
+    left join public.shifts sh on sh.id = e.shift_id
+    cross join g
+   where e.staff_id = p_staff and e.deleted_at is null and e.clock_out is not null and e.clock_in >= p_from
+$$;
+
+revoke all on all functions in schema app_private from public, anon, authenticated;
+
+-- Everyone active with their level, for the Ranglijst. Only XP and level are
+-- shared, not hours. month_xp counts from the 1st of this month.
+create function public.leaderboard(p_token text) returns json
+language plpgsql stable security definer set search_path = public, extensions as $$
+declare v public.staff; v_tz text; v_from timestamptz;
+begin
+  v := app_private.current_staff(p_token);
+  select coalesce(timezone, 'UTC') into v_tz from public.settings where id = 1;
+  v_from := date_trunc('month', now() at time zone v_tz) at time zone v_tz;
+  return coalesce((select json_agg(json_build_object(
+      'id', st.id, 'name', st.name, 'avatar', st.avatar, 'me', st.id = v.id,
+      'xp', (j.x ->> 'xp')::int, 'level', (j.x ->> 'level')::int,
+      'month_xp', app_private.xp_since(st.id, v_from))
+      order by lower(st.name))
+    from public.staff st
+    cross join lateral (select app_private.xp_json(st.id) as x) j
+   where st.active), '[]'::json);
 end $$;

@@ -253,13 +253,14 @@ const isManager = () => S.me && S.me.role === 'manager';
 // A person's picture for lists: their avatar's head, or their initials.
 function personPic(p, cls = '') {
   return p && p.avatar
-    ? `<span class="avatar pic ${cls}" aria-hidden="true">${Avatar.render(p.avatar, { view: 'head' })}</span>`
+    ? `<span class="avatar pic ${cls}" aria-hidden="true">${Avatar.head(p.avatar)}</span>`
     : `<span class="avatar ${cls}" aria-hidden="true">${esc(initials(p && p.name))}</span>`;
 }
 const picFor = (id, name, cls = '') => personPic((S.staff || []).find(p => p.id === id) || { name }, cls);
 
 // Level L needs 25 * (L - 1) * (L + 2) XP, the same formula as the database.
-const LEVEL_TITLES = ['Nieuwkomer', 'Starter', 'Teamspeler', 'Vaste waarde', 'Doorzetter', 'Ster', 'Topper', 'Kampioen', 'Held', 'Legende'];
+const LEVEL_TITLES = ['Nieuwkomer', 'Starter', 'Teamspeler', 'Vaste waarde', 'Doorzetter', 'Ster', 'Topper', 'Kampioen', 'Held', 'Legende',
+  'Meester', 'Grootmeester', 'Kanjer', 'Tijger', 'Kraanvogel', 'Feniks', 'Draak', 'Keizer', 'Jade', 'Gouden draak'];
 const xpForLevel = l => 25 * (l - 1) * (l + 2);
 const levelTitle = l => LEVEL_TITLES[Math.min(l, LEVEL_TITLES.length) - 1];
 const levelPill = xp => `<span class="pill lvl">Level ${xp ? xp.level : 1}</span>`;
@@ -402,21 +403,25 @@ const ICONS = {
   requests: '<svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round"><path d="M4 4h16v12H8l-4 4z"/><path d="M9 9l2 2 4-4"/></svg>',
   team: '<svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round"><circle cx="12" cy="8" r="4"/><path d="M4 21c0-4 4-6 8-6s8 2 8 6"/></svg>',
   profile: '<svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"><circle cx="12" cy="12" r="9"/><circle cx="9" cy="10" r=".6" fill="currentColor"/><circle cx="15" cy="10" r=".6" fill="currentColor"/><path d="M8.5 14.5c1.8 2 5.2 2 7 0"/></svg>',
+  ranking: '<svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"><path d="M8 21h8M12 17v4M7 4h10v5a5 5 0 0 1-10 0z"/><path d="M7 6H4a3 3 0 0 0 3 4M17 6h3a3 3 0 0 1-3 4"/></svg>',
+  more: '<svg viewBox="0 0 24 24" fill="currentColor"><circle cx="5" cy="12" r="2"/><circle cx="12" cy="12" r="2"/><circle cx="19" cy="12" r="2"/></svg>',
+  signout: '<svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"><path d="M14 4h4a2 2 0 0 1 2 2v12a2 2 0 0 1-2 2h-4M10 16l-4-4 4-4M6 12h10"/></svg>',
 };
 
 function tabsFor() {
   return isManager()
-    ? [['today', 'Vandaag'], ['schedule', 'Planning'], ['monthly', 'Overzicht'], ['requests', 'Aanvragen'], ['team', 'Team']]
-    : [['clock', 'Klok'], ['shifts', 'Shiften'], ['hours', 'Mijn uren'], ['profile', 'Profiel']];
+    ? [['today', 'Vandaag'], ['schedule', 'Planning'], ['monthly', 'Overzicht'], ['requests', 'Aanvragen'], ['team', 'Team'], ['ranking', 'Ranglijst'], ['profile', 'Profiel']]
+    : [['clock', 'Klok'], ['shifts', 'Shiften'], ['hours', 'Mijn uren'], ['ranking', 'Ranglijst'], ['profile', 'Profiel']];
 }
-const ICON_FOR = { clock: 'clock', shifts: 'shifts', hours: 'hours', profile: 'profile', today: 'today', schedule: 'shifts', monthly: 'monthly', requests: 'requests', team: 'team' };
+const ICON_FOR = { clock: 'clock', shifts: 'shifts', hours: 'hours', profile: 'profile', ranking: 'ranking', today: 'today', schedule: 'shifts', monthly: 'monthly', requests: 'requests', team: 'team' };
 
 /* --------------------------------------------------------------- modal */
 
 const modal = {
-  open(html, onMount, { wide = false } = {}) {
+  open(html, onMount, { wide = false, sheet = false } = {}) {
     const d = $('#modal');
     d.classList.toggle('wide', wide);
+    d.classList.toggle('sheet', sheet);
     d.innerHTML = `<div class="modal-body">${html}</div>`;
     $$('[data-close]', d).forEach(b => b.addEventListener('click', () => modal.close()));
     if (!d.open) d.showModal();
@@ -425,7 +430,7 @@ const modal = {
     if (first) first.focus();
     return d;
   },
-  close() { const d = $('#modal'); if (d.open) d.close(); d.innerHTML = ''; d.classList.remove('wide'); },
+  close() { const d = $('#modal'); if (d.open) d.close(); d.innerHTML = ''; d.classList.remove('wide', 'sheet'); },
   confirm({ title, body = '', ok = 'Bevestigen', danger = false }) {
     return new Promise(resolve => {
       let done = false;
@@ -447,8 +452,11 @@ const modal = {
 
 function renderAuthShell(html) {
   stopPolling();
-  $('#app').innerHTML = `<main class="auth"><div class="auth-card">${html}</div></main>`;
+  $('#app').innerHTML = `<main class="auth${CFG.logo ? ' branded' : ''}"><div class="auth-card">${html}</div></main>`;
 }
+const authBrand = name => CFG.logo
+  ? `<div class="auth-logo"><img src="${esc(CFG.logo)}" alt="${esc(name || 'Logo')}"></div>`
+  : '<div class="brand"><span class="mark" aria-hidden="true"></span><span class="section-label">Prikklok</span></div>';
 
 function loadError(e) {
   renderAuthShell(`<div class="card"><h1>Kan niet laden</h1><p>${esc(e.message)}</p><button class="primary" id="reload">Opnieuw proberen</button></div>`);
@@ -482,9 +490,9 @@ async function showSignIn(message) {
   if (status.setup_needed) return showSetup();
 
   renderAuthShell(`
-    <div class="brand"><span class="mark" aria-hidden="true"></span><span class="section-label">Prikklok</span></div>
+    ${authBrand(status.business_name)}
     <div>
-      <h1>${esc(status.business_name)}</h1>
+      <h1>${CFG.logo ? 'Prikklok' : esc(status.business_name)}</h1>
       <p class="lede">Meld je aan om in te klokken, shiften op te nemen en je uren te bekijken.</p>
     </div>
     <form class="card" id="login-form" novalidate>
@@ -528,7 +536,7 @@ async function showSignIn(message) {
 
 function showSetup() {
   renderAuthShell(`
-    <div class="brand"><span class="mark" aria-hidden="true"></span><span class="section-label">Prikklok</span></div>
+    ${authBrand('')}
     <div>
       <h1>Stel je prikklok in</h1>
       <p class="lede">Jij wordt de verantwoordelijke. Daarna kan je je personeel toevoegen, shiften plannen en de link delen.</p>
@@ -594,33 +602,63 @@ async function signOut({ silent = false } = {}) {
   await showSignIn(silent ? 'Je bent afgemeld. Meld je opnieuw aan.' : '');
 }
 
-function renderShell() {
+// The logo from config.js, or the business name in text.
+const logoHTML = cls => CFG.logo
+  ? `<img class="${cls}" src="${esc(CFG.logo)}" alt="${esc(S.settings.business_name || 'Logo')}">`
+  : `<span class="${cls} logo-text">${esc(S.settings.business_name)}</span>`;
+
+async function askSignOut() {
+  if (await modal.confirm({ title: 'Afmelden?', body: 'Je hebt je naam en pincode nodig om je opnieuw aan te melden.', ok: 'Afmelden' })) signOut();
+}
+
+// Phones show at most five buttons at the bottom; the rest goes under "Meer".
+function bottomTabs() {
   const tabs = tabsFor();
+  return tabs.length > 5 ? { main: tabs.slice(0, 4), more: tabs.slice(4) } : { main: tabs, more: [] };
+}
+function openMore() {
+  const { more } = bottomTabs();
+  const d = modal.open(`
+    <h2 id="modal-title">Meer</h2>
+    <div class="sheet-list">
+      ${more.map(([k, l]) => `<button type="button" class="sheet-item" data-sheet-tab="${k}">${ICONS[ICON_FOR[k]]}<span>${l}</span></button>`).join('')}
+      <button type="button" class="sheet-item" id="sheet-signout">${ICONS.signout}<span>Afmelden</span></button>
+    </div>
+    <div class="form-actions"><button type="button" data-close>Sluiten</button></div>`, null, { sheet: true });
+  $$('[data-sheet-tab]', d).forEach(b => b.addEventListener('click', () => { modal.close(); location.hash = b.dataset.sheetTab; }));
+  $('#sheet-signout', d).addEventListener('click', () => { modal.close(); askSignOut(); });
+}
+
+function renderShell() {
+  const tabs = tabsFor(), { main, more } = bottomTabs();
+  const badge = k => k === 'requests' ? '<span class="count" data-badge hidden></span>' : '';
   document.title = `${S.settings.business_name} · Prikklok`;
   $('#app').innerHTML = `
     <header class="topbar">
       <div class="topbar-inner">
         <div class="brand">
-          <button class="me-btn" id="me-btn" aria-label="Mijn profiel" title="Mijn profiel">${personPic(S.me, 'lg')}</button>
+          <button class="me-btn" id="me-btn" aria-label="Mijn profiel" title="Mijn profiel">${personPic(S.me, 'lg')}${S.me.avatar ? '' : '<span class="me-plus" aria-hidden="true">+</span>'}</button>
           <div class="brand-text">
-            <div class="biz">${esc(S.settings.business_name)}</div>
-            <div class="who">${esc(S.me.name)}${isManager() ? ' · Verantwoordelijke' : ''}</div>
+            <div class="biz">${esc(S.me.name)}</div>
+            <div class="who">${isManager() ? 'Verantwoordelijke' : `Level ${S.me.xp ? S.me.xp.level : 1} · ${esc(levelTitle(S.me.xp ? S.me.xp.level : 1))}`}</div>
           </div>
         </div>
-        <button class="ghost sm" id="signout">Afmelden</button>
+        <a class="logo-link" href="#" aria-label="${esc(S.settings.business_name)}, naar het begin">${logoHTML('logo')}</a>
+        <div class="topbar-end"><button class="ghost sm" id="signout">Afmelden</button></div>
       </div>
       <nav class="tabs" aria-label="Onderdelen"><div class="tabs-inner">
-        ${tabs.map(([k, l]) => `<button class="tab" data-tab="${k}">${l}${k === 'requests' ? '<span class="count" data-badge hidden></span>' : ''}</button>`).join('')}
+        ${tabs.map(([k, l]) => `<button class="tab" data-tab="${k}">${l}${badge(k)}</button>`).join('')}
       </div></nav>
     </header>
     <main class="view" id="view"></main>
     <nav class="bnav" aria-label="Onderdelen">
-      ${tabs.map(([k, l]) => `<button data-tab="${k}">${ICONS[ICON_FOR[k]]}<span>${l}</span>${k === 'requests' ? '<span class="count" data-badge hidden></span>' : ''}</button>`).join('')}
+      ${main.map(([k, l]) => `<button data-tab="${k}">${ICONS[ICON_FOR[k]]}<span>${l}</span>${badge(k)}</button>`).join('')}
+      ${more.length ? `<button id="bnav-more" data-more="${more.map(t => t[0]).join(' ')}" aria-haspopup="dialog">${ICONS.more}<span>Meer</span></button>` : ''}
     </nav>`;
-  $('#signout').addEventListener('click', async () => {
-    if (await modal.confirm({ title: 'Afmelden?', body: 'Je hebt je naam en pincode nodig om je opnieuw aan te melden.', ok: 'Afmelden' })) signOut();
-  });
+  $('#signout').addEventListener('click', askSignOut);
   $$('[data-tab]').forEach(b => b.addEventListener('click', () => { location.hash = b.dataset.tab; }));
+  const mb = $('#bnav-more');
+  if (mb) mb.addEventListener('click', openMore);
   $('#me-btn').addEventListener('click', () => { location.hash = 'profile'; });
   updateBadges();
   route();
@@ -635,7 +673,7 @@ function updateBadges() {
 }
 
 const VIEWS = {
-  clock: viewClock, shifts: viewShifts, hours: viewHours, profile: viewProfile,
+  clock: viewClock, shifts: viewShifts, hours: viewHours, profile: viewProfile, ranking: viewRanking,
   today: viewToday, schedule: viewSchedule, monthly: viewMonthly, requests: viewRequests, team: viewTeam, member: viewMember,
 };
 
@@ -647,10 +685,12 @@ function route() {
   let v = location.hash.replace('#', ''), tab = v;
   const member = v.match(/^team\/([0-9a-f-]{36})$/);
   if (member && isManager()) { S.memberId = member[1]; v = 'member'; tab = 'team'; }
-  else if (v !== 'profile' && !tabs.includes(v)) { v = tabs[0]; tab = v; }
+  else if (!tabs.includes(v)) { v = tabs[0]; tab = v; }
   if (S.view !== v) S.month = null;
   S.view = v;
   $$('[data-tab]').forEach(b => b.setAttribute('aria-current', b.dataset.tab === tab ? 'page' : 'false'));
+  const mb = $('#bnav-more');
+  if (mb) mb.setAttribute('aria-current', mb.dataset.more.split(' ').includes(tab) ? 'page' : 'false');
   stopPolling();
   renderView();
 }
@@ -921,10 +961,11 @@ function calEntry(x, manager, t) {
   const past = new Date(x.ends_at) <= t;
   const time = `${fmt.time(x.starts_at)} – ${fmt.time(x.ends_at)}`;
   const who = x.open ? `Open${x.count > 1 ? ` ×${x.count}` : ''}` : esc(x.staff_name) + (x.mine && !manager ? ' (jij)' : '');
+  const pic = x.open ? '' : x.staff_avatar ? `<span class="cal-pic">${Avatar.head(x.staff_avatar)}</span>` : `<span class="cal-pic cal-initials">${esc(initials(x.staff_name))}</span>`;
   const cls = `cal-shift${x.open ? ' is-open' : ''}${x.mine && !manager ? ' is-mine' : ''}${past ? ' is-past' : ''}`;
   const clickable = manager || (!past && (x.open || x.mine));
   const title = esc(`${x.label ? x.label + ', ' : ''}${time}${x.open ? (manager ? ' (open)' : ' – tik om op te nemen') : ''}`);
-  const inner = `<b>${who}:</b> <span class="t">${time}</span>`;
+  const inner = `${pic}<b>${who}:</b> <span class="t">${time}</span>`;
   return clickable
     ? `<button type="button" class="${cls}" data-shift="${x.id}" title="${title}">${inner}</button>`
     : `<span class="${cls}" title="${title}">${inner}</span>`;
@@ -1554,32 +1595,40 @@ function timeFixModal(entry) {
 
 const LOCK_ICON = '<svg viewBox="0 0 24 24" width="12" height="12" fill="none" stroke="currentColor" stroke-width="2.4" stroke-linecap="round" aria-hidden="true"><rect x="5" y="11" width="14" height="10" rx="2"/><path d="M8 11V8a4 4 0 0 1 8 0v3"/></svg>';
 const AV_TABS = [
-  ['face', 'Gezicht', ['skin', 'eyes', 'eyeColor', 'brows', 'mouth', 'beard', 'extra']],
+  ['face', 'Gezicht', ['body', 'skin', 'eyes', 'eyeColor', 'brows', 'mouth', 'beard', 'extra']],
   ['hair', 'Haar', ['hair', 'hairColor']],
   ['clothes', 'Kleren', ['top', 'topColor', 'outer', 'outerColor', 'bottom', 'bottomColor']],
   ['shoes', 'Schoenen', ['shoes', 'shoeColor']],
-  ['extras', "Extra's", ['hat', 'hatColor', 'glasses', 'earrings', 'piercing']],
+  ['extras', "Extra's", ['hat', 'hatColor', 'glasses', 'neck', 'neckColor', 'earrings', 'piercing', 'aura']],
 ];
 const AV_GROUP = {
   skin: 'Huidskleur', eyes: 'Ogen', eyeColor: 'Kleur van je ogen', brows: 'Wenkbrauwen', mouth: 'Mond', beard: 'Baard en snor',
   extra: 'Sproeten en blos', hair: 'Kapsel', hairColor: 'Haarkleur', top: 'Bovenstuk', topColor: 'Kleur', outer: 'Jas',
   outerColor: 'Kleur van je jas', bottom: 'Broek of rok', bottomColor: 'Kleur', shoes: 'Schoenen', shoeColor: 'Kleur',
   hat: 'Op je hoofd', hatColor: 'Kleur', glasses: 'Bril', earrings: 'Oorbellen', piercing: 'Piercing',
+  body: 'Figuur', neck: 'Rond je hals', neckColor: 'Kleur', aura: 'Rond je avatar',
 };
 // The part of the drawing each tile shows.
 const AV_CROP = {
   eyes: '56 62 88 88', brows: '56 56 88 88', mouth: '70 98 60 60', beard: '44 56 112 112', hair: '26 2 148 148', hat: '26 0 148 148',
   glasses: '54 56 92 92', earrings: '36 52 128 128', piercing: '74 92 52 52', top: '18 136 164 164', outer: '18 136 164 164',
   bottom: '14 240 172 172', shoes: '44 346 112 66', hairColor: '26 2 148 148',
+  body: '14 20 172 172', neck: '46 120 108 108', aura: '0 0 200 412',
 };
 const COLOR_NAMES = {
   white: 'wit', black: 'zwart', navy: 'marineblauw', maroon: 'bordeaux', red: 'rood', pink: 'roze', lilac: 'lila', sky: 'lichtblauw',
   green: 'groen', olive: 'olijfgroen', mustard: 'mosterdgeel', beige: 'beige', gray: 'grijs', cream: 'crème', grey: 'grijs',
   blue: 'blauw', light: 'licht', indigo: 'donkerblauw', chestnut: 'kastanjebruin', dark: 'donkerbruin', brown: 'bruin',
   blonde: 'blond', platinum: 'platinablond', auburn: 'roodbruin', ginger: 'rossig', hazel: 'hazelnoot',
+  ruby: 'robijnrood',
 };
+// Long Dutch compounds in the small tiles break at the seam: Paarden-staart.
+const SOFT_HYPHENS = ['Paarden|staart', 'Konijnen|sloffen', 'Monster|sloffen', 'Draken|sloffen', 'Midden|scheiding', 'Zij|scheiding',
+  'Mannen|knot', 'Vissers|hoedje', 'Hartjes|bril', 'Kop|telefoon', 'Body|warmer', 'Zonne|bril', 'Jogging|broek', 'Fantasie|kleuren', 'Gouden| sneakers'];
+const hyph = label => SOFT_HYPHENS.reduce((t, w) => t.replace(w.replace('|', ''), w.replace('|', '\u00AD')), esc(label));
 const colorName = (k, v) => k === 'skin' ? `huidskleur ${v.slice(1)}` : COLOR_NAMES[v] || v;
-const avShown = (k, c) => !((k === 'topColor' && c.top === 'chef') || (k === 'outerColor' && c.outer === 'none') ||
+const avShown = (k, c) => !((k === 'topColor' && ['chef', 'garden'].includes(c.top)) || (k === 'outerColor' && c.outer === 'none') ||
+  (k === 'neckColor' && !['scarf', 'bowtie'].includes(c.neck)) ||
   (k === 'shoeColor' && !['sneakers', 'boots'].includes(c.shoes)) || (k === 'hatColor' && !['beanie', 'cap', 'bandana'].includes(c.hat)));
 
 function openAvatarEditor() {
@@ -1608,7 +1657,7 @@ function openAvatarEditor() {
         if (k === 'top') look.outer = 'none';
         return `<button type="button" class="av-tile${locked(k, v) ? ' is-locked' : ''}" data-k="${k}" data-v="${v}" aria-pressed="${c[k] === v}" ${locked(k, v) ? 'disabled' : ''}
           title="${esc(label)}${locked(k, v) ? ` · vanaf level ${need(k, v)}` : ''}">
-          <span class="av-tile-pic">${Avatar.render(look, { view: AV_CROP[k] || 'tile' })}</span><span class="av-tile-label">${esc(label)}</span>${lockNote(k, v)}</button>`;
+          <span class="av-tile-pic">${Avatar.render(look, { view: AV_CROP[k] || 'tile' })}</span><span class="av-tile-label">${hyph(label)}</span>${lockNote(k, v)}</button>`;
       }).join('')}</div>`;
     }
     return `<div class="av-group"><h3>${AV_GROUP[k]}</h3>${body}</div>`;
@@ -1676,7 +1725,7 @@ function rewardTiles(avatar, level) {
     const on = level >= r.l;
     return `<div class="reward ${on ? 'is-on' : 'is-locked'}">
       <span class="reward-pic">${Avatar.render(look, { view: AV_CROP[r.k] })}</span>
-      <span class="reward-lvl">${on ? '✓ ' : LOCK_ICON}Level ${r.l}</span><span class="reward-name">${esc(r.label)}</span></div>`;
+      <span class="reward-lvl">${on ? '✓ ' : LOCK_ICON}Level ${r.l}</span><span class="reward-name">${hyph(r.label)}</span></div>`;
   }).join('');
 }
 
@@ -1747,10 +1796,12 @@ async function viewProfile(el, current) {
             <div class="field"><label for="pin-new2">Herhaal de nieuwe</label><input id="pin-new2" class="pin-input" type="password" inputmode="numeric" pattern="[0-9]*" maxlength="8" autocomplete="new-password"></div>
           </div><p class="form-error" id="pin-err"></p><div class="form-actions"><button type="submit" class="primary">Pincode wijzigen</button></div></form>
         </section>
+        <button type="button" class="signout-wide" id="pf-signout">${ICONS.signout}<span>Afmelden</span></button>
       </div>
     </div>`;
   $('#edit-avatar', el).addEventListener('click', () => openAvatarEditor());
   $('#edit-avatar-pic', el).addEventListener('click', () => openAvatarEditor());
+  $('#pf-signout', el).addEventListener('click', askSignOut);
   $$('[data-contract]', el).forEach(b => b.addEventListener('click', () => downloadContract(b.dataset.contract, b)));
   const pf = $('#pf-form', el);
   pf.addEventListener('submit', async ev => {
@@ -1778,6 +1829,50 @@ async function viewProfile(el, current) {
       toast('Je pincode is gewijzigd. Andere toestellen zijn afgemeld.');
     }).catch(e => { err.textContent = e.message; });
   });
+}
+
+/* ------------------------------------------------------------- ranking */
+
+async function viewRanking(el, current) {
+  const list = await rpc('leaderboard');
+  if (!current()) return;
+  const mode = S.rankMode || 'all', key = mode === 'month' ? 'month_xp' : 'xp';
+  const ranked = [...list].sort((a, b) => b[key] - a[key] || b.xp - a.xp || a.name.localeCompare(b.name, 'nl'));
+  let rank = 0, prev = null;
+  ranked.forEach((p, i) => { if (p[key] !== prev) { rank = i + 1; prev = p[key]; } p.rank = rank; });
+  const me = ranked.find(p => p.me), month = fmt.monthName(now());
+  const above = me && ranked[ranked.indexOf(me) - 1];
+  const anyXp = ranked.some(p => p[key] > 0);
+  const figure = p => p.avatar ? Avatar.render(p.avatar, { title: p.name }) : `<span class="hero-empty">${Avatar.render(Avatar.DEFAULT)}</span>`;
+  const spot = (p, place) => p ? `
+    <div class="podium-spot place-${place}${p.me ? ' is-me' : ''}">
+      <div class="podium-pic">${figure(p)}</div>
+      <div class="podium-name">${esc(p.name)}${p.me ? ' <span class="pill accent">jij</span>' : ''}</div>
+      <div class="podium-meta">${levelPill(p)} <span class="mono">${p[key]} XP</span></div>
+      <div class="podium-step"><span>${p.rank}</span></div>
+    </div>` : '<div class="podium-spot is-empty"></div>';
+  el.innerHTML = `
+    <div class="view-head">
+      <div><h1>Ranglijst</h1><p>Wie van het team heeft het hoogste level? XP verdien je met werken: 10 per uur, +5 als je op tijd begint en +5 als je blijft tot het einde.</p></div>
+      <div class="chips" role="group" aria-label="Periode">
+        <button type="button" class="chip${mode === 'all' ? ' is-on' : ''}" data-rank-mode="all" aria-pressed="${mode === 'all'}">Altijd</button>
+        <button type="button" class="chip${mode === 'month' ? ' is-on' : ''}" data-rank-mode="month" aria-pressed="${mode === 'month'}">Deze maand</button>
+      </div>
+    </div>
+    ${me ? `<p class="hint info">Jij staat <strong>${me.rank}e</strong> van ${ranked.length}${mode === 'month' ? ` in ${month}` : ''}, met ${me[key]} XP.${above && above[key] > me[key] ? ` Nog ${above[key] - me[key] + 1} XP om ${esc(above.name)} in te halen.` : ''}</p>` : ''}
+    ${anyXp ? `<section class="card podium" aria-label="Top drie">${spot(ranked[1], 2)}${spot(ranked[0], 1)}${spot(ranked[2], 3)}</section>`
+      : `<p class="empty">${mode === 'month' ? `Nog niemand heeft XP in ${month}. Wie als eerste werkt, staat bovenaan.` : 'Nog niemand heeft XP. Wie als eerste werkt, staat bovenaan.'}</p>`}
+    <section class="card">
+      <div class="card-head"><h2>${mode === 'month' ? `XP in ${month}` : 'Iedereen'}</h2><span class="muted small">${plural(ranked.length, 'persoon', 'personen')}</span></div>
+      <div class="rows rank-rows">${ranked.map(p => `
+        <div class="row rank-row${p.me ? ' mine' : ''}">
+          <div class="person"><span class="rank-num">${p.rank}</span>${personPic(p, 'lg')}
+            <div class="row-main"><span class="row-title">${esc(p.name)}${p.me ? ' <span class="pill accent">jij</span>' : ''}</span>
+              <span class="row-sub">${levelPill(p)} ${esc(levelTitle(p.level))}</span></div></div>
+          <span class="rank-xp mono">${p[key]} XP</span>
+        </div>`).join('')}</div>
+    </section>`;
+  $$('[data-rank-mode]', el).forEach(b => b.addEventListener('click', () => { S.rankMode = b.dataset.rankMode; renderView(); }));
 }
 
 /* ---------------------------------------------------------- manager: today */
@@ -2150,7 +2245,7 @@ async function viewTeam(el, current) {
       <section class="card">
         <div class="card-head"><h2>Mensen</h2><span class="pill">${staff.filter(p => p.active).length} actief</span></div>
         <div class="rows">${staff.map(p => `
-          <div class="row">
+          <div class="row team-row">
             <div class="person">${personPic(p, 'lg')}
               <div class="row-main"><span class="row-title">${esc(p.name)}${p.id === S.me.id ? ' (jij)' : ''} ${levelPill(p.xp)}</span>
               <span class="row-sub">${p.role === 'manager' ? 'Verantwoordelijke' : 'Medewerker'}${p.contract_type ? ` · ${CONTRACT_SHORT[p.contract_type]}` : ''}${p.hourly_rate != null ? ` · ${fmt.money(p.hourly_rate)}/u` : ''}${p.payroll_id ? ` · nr. ${esc(p.payroll_id)}` : ''}</span></div></div>
