@@ -30,10 +30,12 @@ const Avatar = (() => {
   // [key, Dutch label]
   const STYLES = {
     body: [['female', 'Vrouw'], ['male', 'Man']],
-    hair: [['long', 'Lang'], ['wavy', 'Golvend'], ['longcurly', 'Lange krullen'], ['bob', 'Bob'], ['pixie', 'Pixie'],
-      ['bun', 'Knot'], ['spacebuns', 'Twee knotjes'], ['ponytail', 'Paardenstaart'], ['pigtails', 'Staartjes'], ['braids', 'Vlechten'],
-      ['locs', 'Dreadlocks'], ['curly', 'Krullen'], ['afro', 'Afro'], ['short', 'Kort'], ['sidepart', 'Zijscheiding'],
-      ['quiff', 'Kuif'], ['curtains', 'Middenscheiding'], ['fade', 'Fade'], ['manbun', 'Mannenknot'], ['buzz', 'Heel kort'], ['none', 'Kaal']],
+    hair: [['long', 'Lang'], ['bangs', 'Lang met pony'], ['wavy', 'Golvend'], ['longcurly', 'Lange krullen'], ['lob', 'Halflang'],
+      ['shag', 'Laagjes'], ['bob', 'Bob'], ['pixie', 'Pixie'], ['halfup', 'Half opgestoken'], ['bun', 'Knot'], ['spacebuns', 'Twee knotjes'],
+      ['ponytail', 'Paardenstaart'], ['highpony', 'Hoge staart'], ['pigtails', 'Staartjes'], ['braids', 'Vlechten'], ['sidebraid', 'Zijvlecht'],
+      ['locs', 'Dreadlocks'], ['cornrows', 'Cornrows'], ['curly', 'Krullen'], ['afro', 'Afro'], ['short', 'Kort'], ['sidepart', 'Zijscheiding'],
+      ['slickback', 'Achterover'], ['quiff', 'Kuif'], ['spiky', 'Stekeltjes'], ['curtains', 'Middenscheiding'], ['curlytop', 'Krullen bovenop'],
+      ['mullet', 'Matje'], ['mohawk', 'Hanenkam'], ['fade', 'Fade'], ['manbun', 'Mannenknot'], ['buzz', 'Heel kort'], ['none', 'Kaal']],
     eyes: [['round', 'Rond'], ['almond', 'Amandel'], ['side', 'Opzij'], ['happy', 'Lachend']],
     brows: [['soft', 'Zacht'], ['arched', 'Gebogen'], ['straight', 'Recht']],
     mouth: [['smile', 'Glimlach'], ['grin', 'Lach'], ['neutral', 'Neutraal'], ['pout', 'Pruillip'], ['smirk', 'Grijns']],
@@ -44,7 +46,7 @@ const Avatar = (() => {
     bottom: [['baggy', 'Wijde jeans'], ['straight', 'Rechte jeans'], ['joggers', 'Joggingbroek'], ['skirt', 'Rok'], ['shorts', 'Short']],
     shoes: [['sneakers', 'Sneakers'], ['boots', 'Laarsjes'], ['bunny', 'Konijnensloffen'], ['monster', 'Monstersloffen'],
       ['dragon', 'Drakensloffen'], ['gold', 'Gouden sneakers']],
-    hat: [['none', 'Geen'], ['beanie', 'Muts'], ['headband', 'Haarband'], ['cap', 'Pet'], ['bandana', 'Bandana'], ['chef', 'Koksmuts'],
+    hat: [['none', 'Geen'], ['beanie', 'Muts'], ['headband', 'Haarband'], ['hijab', 'Hoofddoek'], ['cap', 'Pet'], ['bandana', 'Bandana'], ['chef', 'Koksmuts'],
       ['crown', 'Kroon'], ['bucket', 'Vissershoedje']],
     glasses: [['none', 'Geen'], ['round', 'Rond'], ['square', 'Vierkant'], ['sun', 'Zonnebril'], ['heart', 'Hartjesbril']],
     neck: [['none', 'Geen'], ['scarf', 'Sjaal'], ['bowtie', 'Strikje'], ['headphones', 'Koptelefoon'], ['chain', 'Gouden ketting']],
@@ -265,6 +267,9 @@ const Avatar = (() => {
     const capSlick = 'M 56 98 C 52 58 76 35 100 35 C 124 35 148 58 144 98 C 140 78 128 63 100 59 C 72 63 60 78 56 98 Z';
     const capLines = strand('M 99 50 C 88 56 72 66 62 88') + strand(mirror('M 99 50 C 88 56 72 66 62 88'));
     const covered = ['beanie', 'bucket', 'chef'].includes(c.hat); // these hats hide a bun
+    if (c.hat === 'hijab') return { back: '', front: '' }; // the headscarf covers all hair
+    const side = 'M 56 94 L 62 94 L 61 110 L 57 110 Z'; // short sideburn
+    const sideburns = shape(side, hc) + shape(mirror(side), hc);
     let back = '', front = '';
     switch (c.hair) {
       case 'long': {
@@ -421,6 +426,94 @@ const Avatar = (() => {
           circ(100, 26, 11.5, hc, OL) + line('M 93 24 Q 100 18 107 26', hd, 1.2, 0.6) + path('M 92 33 L 108 33 L 107 37 L 93 37 Z', dark(hc, 0.4)));
         front = shape(capSlick, hc) + strand('M 100 37 C 84 40 70 50 62 76') + strand(mirror('M 100 37 C 84 40 70 50 62 76')) +
           shape('M 56 94 L 61 94 L 60.5 108 L 57 108 Z', hc) + shape(mirror('M 56 94 L 61 94 L 60.5 108 L 57 108 Z'), hc) + shine;
+        break;
+      case 'bangs': {
+        back = shape('M 100 30 C 70 30 50 50 50 92 L 48 160 C 47 200 50 240 54 262 L 146 262 C 150 240 153 200 152 160 L 150 92 C 150 50 130 30 100 30 Z', hd);
+        const s = 'M 54 96 C 50 130 54 170 60 205 C 64 230 66 245 70 260 C 74 252 78 243 80 232 C 76 200 70 160 66 124 C 64 108 62 96 58 88 Z';
+        front = both(s).map(d => shape(d, hc)).join('') +
+          shape('M 52 112 C 46 60 72 32 100 32 C 128 32 154 60 148 112 C 146 96 144 86 140 76 Q 121 81 100 77 Q 79 81 60 76 C 56 86 54 96 52 112 Z', hc) +
+          strand('M 76 78 L 74 60') + strand('M 90 79 L 89 56') + strand('M 110 79 L 111 56') + strand('M 124 78 L 126 60') +
+          strand('M 60 120 C 62 170 66 210 72 248') + strand(mirror('M 60 120 C 62 170 66 210 72 248')) + shine;
+        break;
+      }
+      case 'lob': {
+        back = shape('M 100 30 C 70 30 50 50 50 92 L 50 168 Q 52 186 60 190 L 140 190 Q 148 186 150 168 L 150 92 C 150 50 130 30 100 30 Z', hd);
+        const s = 'M 54 96 C 50 124 52 160 58 186 Q 66 194 78 188 C 72 160 66 126 64 106 C 63 98 60 92 58 88 Z';
+        front = both(s).map(d => shape(d, hc)).join('') + shape(capPart, hc) + capLines + shine +
+          strand('M 60 118 C 60 146 62 168 68 184') + strand(mirror('M 60 118 C 60 146 62 168 68 184'));
+        break;
+      }
+      case 'shag': {
+        back = shape('M 100 28 C 68 28 48 50 48 94 C 46 120 50 140 46 160 L 56 168 L 60 160 L 70 172 L 130 172 L 140 160 L 144 168 L 154 160 C 150 140 154 120 152 94 C 152 50 132 28 100 28 Z', hd);
+        const s = 'M 54 96 C 48 118 52 140 48 160 L 58 154 L 56 172 L 68 160 L 70 174 C 70 150 64 120 62 100 Z';
+        front = both(s).map(d => shape(d, hc)).join('') +
+          shape('M 52 108 C 46 58 72 30 100 30 C 128 30 154 58 148 108 C 146 94 142 84 134 78 C 124 72 112 72 104 86 L 100 64 L 96 86 C 88 72 76 72 66 78 C 58 84 54 94 52 108 Z', hc) +
+          strand('M 98 66 C 90 56 76 58 66 72') + strand(mirror('M 98 66 C 90 56 76 58 66 72')) + strand('M 58 120 L 56 150') + strand(mirror('M 58 120 L 56 150')) + shine;
+        break;
+      }
+      case 'halfup': {
+        back = shape('M 100 30 C 70 30 50 50 50 92 L 48 160 C 47 200 50 240 54 262 L 146 262 C 150 240 153 200 152 160 L 150 92 C 150 50 130 30 100 30 Z', hd) +
+          (covered ? '' : circ(100, 28, 10, hc, OL) + line('M 93 26 Q 100 20 107 28', hd, 1.2, 0.6));
+        const s = 'M 54 96 C 50 130 54 170 60 205 C 64 230 66 245 70 260 C 74 252 78 243 80 232 C 76 200 70 160 66 124 C 64 108 62 96 58 88 Z';
+        front = both(s).map(d => shape(d, hc)).join('') + shape(capSlick, hc) +
+          strand('M 100 37 C 84 40 70 50 62 76') + strand(mirror('M 100 37 C 84 40 70 50 62 76')) + strand('M 60 120 C 62 170 66 210 72 248') + shine;
+        break;
+      }
+      case 'sidebraid': {
+        back = shape('M 100 30 C 68 30 50 52 50 96 L 52 128 L 148 128 L 150 96 C 150 52 132 30 100 30 Z', hd);
+        let braid = '';
+        // over the shoulder and down the front
+        for (let i = 0; i < 9; i++) {
+          const x = (63 + i * 3.1 - (i % 2) * 2).toFixed(1), y = 112 + i * 15;
+          braid += ell(x, y, 8.5, 10, hc, OL) + line(`M ${x - 6} ${y - 2} Q ${x} ${y + 4} ${+x + 6} ${y - 2}`, hd, 1.1, 0.5);
+        }
+        braid += ell(89, 243, 4, 3, dark(hc, 0.45)) + path('M 85 245 L 93 245 L 92 258 L 86 258 Z', hc, OL);
+        front = shape('M 56 98 C 60 104 64 108 70 106 C 66 100 62 94 60 90 Z', hc) + braid + shape(capPart, hc) + capLines + shine;
+        break;
+      }
+      case 'highpony':
+        back = shape('M 100 34 C 72 34 54 52 54 96 L 146 96 C 146 52 128 34 100 34 Z', hd) +
+          shape('M 94 30 C 106 6 140 8 152 34 C 162 62 160 112 154 152 C 146 122 144 82 136 58 C 128 42 114 36 104 38 Z', hc) +
+          line('M 146 50 C 152 80 150 112 152 140', hd, 1.2, 0.45) + ell(100, 30, 6, 4.5, dark(hc, 0.4));
+        front = shape(capSlick, hc) + strand('M 100 37 C 84 40 70 50 62 76') + strand(mirror('M 100 37 C 84 40 70 50 62 76')) + shine;
+        break;
+      case 'cornrows': {
+        front = shape('M 58 96 C 54 56 76 36 100 36 C 124 36 146 56 142 96 C 140 80 132 66 100 62 C 68 66 60 80 58 96 Z', hc);
+        for (const x of [72, 84, 100, 116, 128]) {
+          const top = x === 100 ? 38 : x < 100 ? 40 + (100 - x) * 0.12 : 40 + (x - 100) * 0.12;
+          front += line(`M ${x} 64 Q ${x + (x - 100) * 0.12} 52 ${x + (x - 100) * 0.05} ${top}`, hd, 3.2, 0.75) +
+            `<path d="M ${x} 64 Q ${x + (x - 100) * 0.12} 52 ${x + (x - 100) * 0.05} ${top}" fill="none" stroke="${hl}" stroke-width="1.1" stroke-dasharray="2 2.4" opacity=".5"/>`;
+        }
+        back = shape('M 100 36 C 72 36 56 54 56 92 L 144 92 C 144 54 128 36 100 36 Z', hd);
+        break;
+      }
+      case 'slickback':
+        back = shape('M 100 30 C 72 30 54 50 54 92 L 146 92 C 146 50 128 30 100 30 Z', hd);
+        front = shape('M 58 96 C 54 56 76 30 100 30 C 124 30 146 56 142 96 C 140 80 132 68 122 62 C 110 56 90 56 78 62 C 68 68 60 80 58 96 Z', hc) + sideburns +
+          strand('M 82 60 Q 84 44 92 34') + strand('M 96 58 Q 98 42 104 32') + strand('M 112 58 Q 114 44 120 36') + strand('M 72 66 Q 72 52 78 42') + shine;
+        break;
+      case 'spiky':
+        back = shape('M 100 30 C 72 30 54 50 54 92 L 146 92 C 146 50 128 30 100 30 Z', hd);
+        front = shape('M 56 98 C 52 70 58 52 66 44 L 64 30 L 76 38 L 80 22 L 90 34 L 98 18 L 106 32 L 116 20 L 120 36 L 134 28 L 134 44 C 142 52 148 70 144 98 C 142 84 138 74 130 68 C 116 62 86 62 72 68 C 64 74 58 86 56 98 Z', hc) + sideburns +
+          strand('M 80 50 L 82 36') + strand('M 98 48 L 98 30') + strand('M 116 50 L 116 34');
+        break;
+      case 'mohawk':
+        front = path('M 58 96 C 54 56 76 38 100 38 C 124 38 146 56 142 96 C 140 80 132 66 100 62 C 68 66 60 80 58 96 Z', hc, 'opacity=".32"') +
+          shape('M 88 64 C 84 42 88 20 94 8 L 100 2 L 106 8 C 112 20 116 42 112 64 Z', hc) +
+          strand('M 96 56 L 97 14') + strand('M 104 56 L 103 14') + line('M 92 40 Q 94 20 100 8', hl, 2.4, 0.35);
+        break;
+      case 'curlytop': {
+        front = path('M 58 96 C 56 70 66 56 76 52 L 124 52 C 134 56 144 70 142 96 C 140 82 132 70 120 66 L 80 66 C 68 70 60 82 58 96 Z', hc, 'opacity=".45"');
+        for (const [x, y, r] of [[72, 52, 10], [84, 42, 11], [100, 38, 12], [116, 42, 11], [128, 52, 10], [78, 62, 8], [92, 56, 9], [108, 56, 9], [122, 62, 8], [100, 28, 9], [86, 30, 8], [114, 30, 8]]) {
+          front += circ(x, y, r, hc, OL) + line(`M ${x - 4} ${y} Q ${x} ${y - 4} ${x + 4} ${y}`, hd, 1, 0.5);
+        }
+        break;
+      }
+      case 'mullet':
+        back = shape('M 100 30 C 72 30 54 50 54 92 L 54 150 Q 62 174 78 178 L 122 178 Q 138 174 146 150 L 146 92 C 146 50 128 30 100 30 Z', hd);
+        front = shape('M 56 100 C 50 52 76 29 102 29 C 128 29 150 50 145 100 C 143 88 141 78 136 70 C 126 62 112 64 98 59 C 86 66 70 64 62 74 C 59 82 57 92 56 100 Z', hc) +
+          shape('M 56 96 C 52 122 54 144 60 160 L 66 156 C 62 140 61 120 62 102 Z', hc) + shape(mirror('M 56 96 C 52 122 54 144 60 160 L 66 156 C 62 140 61 120 62 102 Z'), hc) +
+          strand('M 70 58 L 78 46') + strand('M 84 52 L 92 40') + strand('M 104 52 L 112 40') + strand('M 120 56 L 128 46') + shine;
         break;
       default:
         front = line('M 74 54 Q 86 46 98 46', '#FFFFFF', 3, 0.25);
@@ -698,6 +791,15 @@ const Avatar = (() => {
           path('M 62 40 L 138 40 L 138 54 L 62 54 Z', '#FFFFFF') +
           shape('M 60 70 Q 100 62 140 70 L 140 52 Q 100 46 60 52 Z', '#F4F4F4') +
           line('M 86 30 L 88 48', '#D9D9D9', 1.2) + line('M 112 30 L 110 48', '#D9D9D9', 1.2);
+      case 'hijab': {
+        // the scarf frames the face (an oval hole) and drapes over the shoulders
+        const outer = 'M 100 24 C 62 24 44 52 44 94 C 44 132 54 162 64 182 Q 100 206 136 182 C 146 162 156 132 156 94 C 156 52 138 24 100 24 Z';
+        const hole = 'M 100 54 C 78 54 64 70 64 96 C 64 124 78 146 100 151 C 122 146 136 124 136 96 C 136 70 122 54 100 54 Z';
+        return shape('M 62 176 Q 100 204 138 176 L 150 214 Q 100 240 50 214 Z', col) +
+          path(outer + ' ' + hole, col, `${OL} fill-rule="evenodd"`) +
+          line('M 64 94 C 64 70 78 56 100 56 C 122 56 136 70 136 94', cd, 2.2, 0.5) +
+          line('M 56 150 Q 72 176 100 182', cd, 1.3, 0.45) + line('M 120 168 Q 132 190 128 214', cd, 1.3, 0.45) + line('M 70 40 Q 86 32 100 32', cl, 3, 0.4);
+      }
       case 'headband':
         return shape('M 55 76 Q 100 44 145 76 L 146 85 Q 100 54 54 85 Z', col) + line('M 60 78 Q 100 52 140 78', cl, 1.2, 0.6);
       case 'bucket':

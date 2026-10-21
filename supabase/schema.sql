@@ -1361,10 +1361,10 @@ language sql stable set search_path = public as $$
     from public.contracts c where c.staff_id = p_staff and c.archived_at is null
 $$;
 
--- Levels: level L needs 25 * (L - 1) * (L + 2) XP, so 100, 250, 450, 700, ...
+-- Levels: level L needs 12.5 * (L - 1) * (L + 2) XP, so 50, 125, 225, 350, ... and 5225 for level 20.
 create function app_private.level_for(p_xp int) returns int
 language sql immutable set search_path = public as $$
-  select greatest(1, floor((sqrt(9 + 4 * greatest(coalesce(p_xp, 0), 0) / 25.0) - 1) / 2))::int
+  select greatest(1, floor((sqrt(9 + 4 * greatest(coalesce(p_xp, 0), 0) / 12.5) - 1) / 2))::int
 $$;
 
 -- XP: 10 per hour worked, +5 for starting a shift on time, +5 for staying until it ends.

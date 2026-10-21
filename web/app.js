@@ -259,10 +259,10 @@ function personPic(p, cls = '') {
 }
 const picFor = (id, name, cls = '') => personPic((S.staff || []).find(p => p.id === id) || { name }, cls);
 
-// Level L needs 25 * (L - 1) * (L + 2) XP, the same formula as the database.
+// Level L needs 12.5 * (L - 1) * (L + 2) XP (5225 for level 20), the same formula as the database.
 const LEVEL_TITLES = ['Nieuwkomer', 'Starter', 'Teamspeler', 'Vaste waarde', 'Doorzetter', 'Ster', 'Topper', 'Kampioen', 'Held', 'Legende',
   'Meester', 'Grootmeester', 'Kanjer', 'Tijger', 'Kraanvogel', 'Feniks', 'Draak', 'Keizer', 'Jade', 'Gouden draak'];
-const xpForLevel = l => 25 * (l - 1) * (l + 2);
+const xpForLevel = l => 12.5 * (l - 1) * (l + 2);
 const levelTitle = l => LEVEL_TITLES[Math.min(l, LEVEL_TITLES.length) - 1];
 const levelPill = xp => `<span class="pill lvl">Level ${xp ? xp.level : 1}</span>`;
 function xpBar(xp) {
