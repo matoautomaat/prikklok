@@ -14,3 +14,13 @@
   Cache-Control: no-cache
 /styles.css
   Cache-Control: no-cache
+/avatar.js
+  Cache-Control: no-cache
+/loonfiche.js
+  Cache-Control: no-cache
+/vendor/pdfjs/pdf.min.mjs
+  Content-Type: text/javascript; charset=utf-8
+  Cache-Control: public, max-age=604800
+/vendor/pdfjs/pdf.worker.min.mjs
+  Content-Type: text/javascript; charset=utf-8
+  Cache-Control: public, max-age=604800

@@ -1,7 +1,8 @@
 'use strict';
 
-/* Prikklok — staff pick shifts, clock in and out, and fix their times;
-   managers schedule, approve fixes, upload payslips and read the monthly hours.
+/* Prikklok — staff pick shifts, clock in and out, fix their times, keep their
+   profile and avatar up to date and level up by working; managers schedule,
+   approve fixes, upload payslips and contracts and read the monthly hours.
    All data goes through the Supabase RPC functions in supabase/schema.sql.
    The interface is in Dutch (Belgium); server messages are translated in tr(). */
 
@@ -26,6 +27,8 @@ const S = {
   staff: null,         // manager's team list
   poll: null,
   renderSeq: 0,
+  memberId: null,      // team member open in the member view
+  levelUp: null,       // { from, to } when the signed-in person just went up a level
 };
 
 /* ------------------------------------------------- server messages in Dutch */
@@ -87,12 +90,27 @@ const SERVER_NL = {
   'Pick a valid contract type.': 'Kies een geldig statuut.',
   'The employee number can be at most 30 characters.': 'Het werknemersnummer mag maximaal 30 tekens hebben.',
   'Wage codes must be short texts.': 'Looncodes moeten korte teksten zijn (maximaal 20 tekens).',
+  "You're not on the schedule right now. Pick up a shift first, or ask your manager.": 'Je staat nu niet op de planning. Neem eerst een shift op, of vraag het aan je verantwoordelijke.',
+  "These details couldn't be saved.": 'Deze gegevens konden niet opgeslagen worden.',
+  'Check the email address.': 'Controleer het e-mailadres.',
+  'Check the national register number (11 digits).': 'Controleer het rijksregisternummer (11 cijfers).',
+  'Check the IBAN account number.': 'Controleer het rekeningnummer (IBAN).',
+  'Check the dates.': 'Controleer de datums.',
+  'Check the date of birth.': 'Controleer de geboortedatum.',
+  "That avatar couldn't be saved.": 'Die avatar kon niet opgeslagen worden.',
+  "Your current PIN isn't right.": 'Je huidige pincode klopt niet.',
+  "That contract isn't available.": 'Dat contract is niet beschikbaar.',
+  'The end date must be after the start date.': 'De einddatum moet na de begindatum liggen.',
+  'Check the amounts.': 'Controleer de bedragen.',
+  'Early check-in must be between 0 and 120 minutes.': 'Vroeger inklokken moet tussen 0 en 120 minuten liggen.',
 };
 const SERVER_NL_PATTERNS = [
   [/^(.+) already has a shift that overlaps one of these\.$/, '$1 heeft al een shift die met een van deze overlapt.'],
   [/^(.+) already has a shift that overlaps\.$/, '$1 heeft op dat moment al een shift.'],
   [/^Shifts can't be dropped less than (\d+) hours before they start\. Ask your manager\.$/, 'Je kan een shift niet meer teruggeven minder dan $1 uur voor het begin. Vraag het aan je verantwoordelijke.'],
   [/^Too many wrong PINs\. Try again in (\d+) min, or ask your manager to reset your PIN\.$/, 'Te vaak een verkeerde pincode. Probeer opnieuw over $1 min, of vraag je verantwoordelijke om een nieuwe pincode.'],
+  [/^Your shift starts at (\d\d:\d\d)\. You can check in from (\d\d:\d\d)\.$/, 'Je shift begint om $1. Je kan inklokken vanaf $2.'],
+  [/^That item unlocks at level (\d+)\.$/, 'Dat krijg je pas vanaf level $1.'],
 ];
 function tr(msg) {
   if (!msg) return msg;
@@ -139,6 +157,7 @@ async function refreshMe() {
   S.pending = r.pending_requests || 0;
   S.offset = new Date(r.server_time).getTime() - Date.now();
   updateBadges();
+  checkLevelUp();
   return r;
 }
 
@@ -229,6 +248,133 @@ const $$ = (sel, root = document) => [...root.querySelectorAll(sel)];
 const initials = name => String(name || '?').trim().split(/\s+/).slice(0, 2).map(p => p[0]).join('').toUpperCase();
 const isManager = () => S.me && S.me.role === 'manager';
 
+/* ------------------------------------------------ people, avatars, levels */
+
+// A person's picture for lists: their avatar's head, or their initials.
+function personPic(p, cls = '') {
+  return p && p.avatar
+    ? `<span class="avatar pic ${cls}" aria-hidden="true">${Avatar.render(p.avatar, { view: 'head' })}</span>`
+    : `<span class="avatar ${cls}" aria-hidden="true">${esc(initials(p && p.name))}</span>`;
+}
+const picFor = (id, name, cls = '') => personPic((S.staff || []).find(p => p.id === id) || { name }, cls);
+
+// Level L needs 25 * (L - 1) * (L + 2) XP, the same formula as the database.
+const LEVEL_TITLES = ['Nieuwkomer', 'Starter', 'Teamspeler', 'Vaste waarde', 'Doorzetter', 'Ster', 'Topper', 'Kampioen', 'Held', 'Legende'];
+const xpForLevel = l => 25 * (l - 1) * (l + 2);
+const levelTitle = l => LEVEL_TITLES[Math.min(l, LEVEL_TITLES.length) - 1];
+const levelPill = xp => `<span class="pill lvl">Level ${xp ? xp.level : 1}</span>`;
+function xpBar(xp) {
+  const l = xp.level, a = xpForLevel(l), b = xpForLevel(l + 1);
+  const pct = Math.max(0, Math.min(100, Math.round((xp.xp - a) / (b - a) * 100)));
+  return `<div class="xpbar" role="progressbar" aria-valuemin="0" aria-valuemax="100" aria-valuenow="${pct}" aria-label="Op weg naar level ${l + 1}"><span style="width:${pct}%"></span></div>
+    <p class="xp-text"><span class="mono">${xp.xp} XP</span><span class="muted">nog ${b - xp.xp} XP tot level ${l + 1}</span></p>`;
+}
+
+function checkLevelUp() {
+  if (!S.me || !S.me.xp) return;
+  const key = `prikklok.level.${S.me.id}`, lvl = S.me.xp.level, seen = Number(store.get(key) || 0);
+  store.set(key, String(lvl));
+  if (seen && lvl > seen) S.levelUp = { from: seen, to: lvl };
+}
+function showLevelUp() {
+  const up = S.levelUp;
+  if (!up || $('#modal').open) return;
+  S.levelUp = null;
+  const rewards = [];
+  for (let l = up.from + 1; l <= up.to; l++) rewards.push(...Avatar.rewardsAt(l));
+  const d = modal.open(`
+    <div class="levelup">
+      <div class="levelup-pic">${S.me.avatar ? Avatar.render(S.me.avatar, { view: 'bust' }) : `<span class="levelup-num">${up.to}</span>`}</div>
+      <p class="section-label">Level omhoog</p>
+      <h2 id="modal-title">Level ${up.to} · ${esc(levelTitle(up.to))}</h2>
+      <p>Goed bezig, ${esc(S.me.name.split(' ')[0])}! ${rewards.length ? `Nieuw voor je avatar: <strong>${rewards.map(esc).join(', ')}</strong>.` : 'Blijf zo doorgaan voor de volgende beloning.'}</p>
+    </div>
+    <div class="form-actions"><button type="button" data-close>Sluiten</button>${rewards.length ? '<button type="button" class="primary" id="lu-avatar">Avatar aanpassen</button>' : ''}</div>`);
+  const b = $('#lu-avatar', d);
+  if (b) b.addEventListener('click', () => { modal.close(); openAvatarEditor(); });
+}
+
+/* -------------------------------------------- personal details and dates */
+
+// "30/07/1985", "30-7-1985", "30.07.1985" or "1985-07-30" -> "1985-07-30"; "" -> ""; else null
+function parseDMY(v) {
+  const t = String(v || '').trim();
+  if (!t) return '';
+  let m = t.match(/^(\d{1,2})[/.\- ](\d{1,2})[/.\- ](\d{4})$/), y, mo, d;
+  if (m) [, d, mo, y] = m.map(Number); else if ((m = t.match(/^(\d{4})-(\d{1,2})-(\d{1,2})$/))) [, y, mo, d] = m.map(Number); else return null;
+  const x = new Date(y, mo - 1, d);
+  return x.getFullYear() === y && x.getMonth() === mo - 1 && x.getDate() === d ? `${y}-${pad(mo)}-${pad(d)}` : null;
+}
+const isoToDMY = iso => iso ? dmy(new Date(iso + 'T00:00')) : '';
+const fmtNid = v => v && v.length === 11 ? `${v.slice(0, 2)}.${v.slice(2, 4)}.${v.slice(4, 6)}-${v.slice(6, 9)}.${v.slice(9)}` : (v || '');
+const fmtIban = v => (v || '').replace(/(.{4})/g, '$1 ').trim();
+const cleanNid = v => String(v || '').replace(/\D/g, '');
+const cleanIban = v => String(v || '').replace(/\s/g, '').toUpperCase();
+// "1.234,56", "1234,56" or "1234.56" -> 1234.56; "" -> null; else NaN
+function parseMoney(v) {
+  const t = String(v ?? '').trim().replace(/\s|€/g, '');
+  if (!t) return null;
+  if (/^\d{1,3}(\.\d{3})*(,\d{1,2})?$/.test(t) || /^\d+(,\d{1,2})?$/.test(t)) return Number(t.replace(/\./g, '').replace(',', '.'));
+  if (/^\d+(\.\d{1,2})?$/.test(t)) return Number(t);
+  return NaN;
+}
+const moneyInput = n => n == null ? '' : num(n, 2).replace(/\s/g, '');
+
+// [key, label, options]; the same fields for the person and for a manager.
+const PROFILE_FIELDS = [
+  ['phone', 'Telefoon', { type: 'tel', max: 30, auto: 'tel' }],
+  ['email', 'E-mail', { type: 'email', max: 120, auto: 'email' }],
+  ['birth_date', 'Geboortedatum', { date: true, auto: 'bday' }],
+  ['national_id', 'Rijksregisternummer', { max: 15, ph: '00.00.00-000.00', mono: true, mode: 'numeric', help: 'Staat op de achterkant van je identiteitskaart.' }],
+  ['street', 'Straat en huisnummer', { max: 120, auto: 'address-line1', wide: true }],
+  ['postcode', 'Postcode', { max: 10, auto: 'postal-code', mode: 'numeric' }],
+  ['city', 'Gemeente', { max: 80, auto: 'address-level2' }],
+  ['iban', 'Rekeningnummer (IBAN)', { max: 42, ph: 'BE00 0000 0000 0000', mono: true, wide: true, help: 'Hierop krijg je je loon.' }],
+  ['emergency_name', 'Noodcontact: naam', { max: 80 }],
+  ['emergency_phone', 'Noodcontact: telefoon', { type: 'tel', max: 30 }],
+];
+const FIELD_LABEL = Object.fromEntries(PROFILE_FIELDS.map(([k, l]) => [k, l]));
+const showValue = (k, v) => k === 'national_id' ? fmtNid(v) : k === 'iban' ? fmtIban(v) : /date/.test(k) ? isoToDMY(v) : (v ?? '');
+
+function profileFields(prefix, pr) {
+  return PROFILE_FIELDS.map(([k, label, o]) => `
+    <div class="field${o.wide ? ' wide' : ''}"><label for="${prefix}-${k}">${label}</label>
+      <input id="${prefix}-${k}" data-k="${k}" ${o.type ? `type="${o.type}"` : ''} maxlength="${o.max || 10}" ${o.auto ? `autocomplete="${o.auto}"` : 'autocomplete="off"'}
+        ${o.mode ? `inputmode="${o.mode}"` : ''} ${o.date ? 'inputmode="numeric" placeholder="dd/mm/jjjj"' : o.ph ? `placeholder="${o.ph}"` : ''} class="${o.mono ? 'mono-field' : ''}"
+        value="${esc(showValue(k, pr[k]))}">${o.help ? `<span class="help">${o.help}</span>` : ''}</div>`).join('');
+}
+// Reads the fields back; returns { values } or { error }.
+function readProfile(root) {
+  const out = {};
+  for (const inp of $$('input[data-k]', root)) {
+    const k = inp.dataset.k, v = inp.value.trim();
+    if (k === 'birth_date' || k === 'start_date') {
+      const iso = parseDMY(v);
+      if (iso == null) return { error: `Vul de ${k === 'birth_date' ? 'geboortedatum' : 'datum van indiensttreding'} in als dd/mm/jjjj, bv. 30/07/1999.`, field: inp };
+      out[k] = iso;
+    } else if (k === 'national_id') {
+      const d = cleanNid(v);
+      if (d && !Loonfiche.validNationalId(d)) return { error: 'Dat rijksregisternummer klopt niet. Het heeft 11 cijfers, bv. 85.07.30-033.28.', field: inp };
+      out[k] = d;
+    } else if (k === 'iban') {
+      const d = cleanIban(v);
+      if (d && !Loonfiche.validIban(d)) return { error: 'Dat rekeningnummer klopt niet. Controleer de IBAN, bv. BE68 5390 0754 7034.', field: inp };
+      out[k] = d;
+    } else out[k] = v;
+  }
+  return { values: out };
+}
+
+async function downloadFile(fn, id, btn) {
+  await busy(btn, async () => {
+    const f = await rpc(fn, { p_id: id });
+    const bin = atob(f.data.replace(/\s/g, ''));
+    const bytes = new Uint8Array(bin.length);
+    for (let i = 0; i < bin.length; i++) bytes[i] = bin.charCodeAt(i);
+    saveBlob(f.file_name, new Blob([bytes], { type: f.content_type }));
+  }).catch(() => {});
+}
+
 let toastTimer;
 function toast(msg, kind = '') {
   const t = $('#toast');
@@ -255,20 +401,22 @@ const ICONS = {
   monthly: '<svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round"><path d="M4 20V10M10 20V4M16 20v-7M22 20H2"/></svg>',
   requests: '<svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round"><path d="M4 4h16v12H8l-4 4z"/><path d="M9 9l2 2 4-4"/></svg>',
   team: '<svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round"><circle cx="12" cy="8" r="4"/><path d="M4 21c0-4 4-6 8-6s8 2 8 6"/></svg>',
+  profile: '<svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"><circle cx="12" cy="12" r="9"/><circle cx="9" cy="10" r=".6" fill="currentColor"/><circle cx="15" cy="10" r=".6" fill="currentColor"/><path d="M8.5 14.5c1.8 2 5.2 2 7 0"/></svg>',
 };
 
 function tabsFor() {
   return isManager()
     ? [['today', 'Vandaag'], ['schedule', 'Planning'], ['monthly', 'Overzicht'], ['requests', 'Aanvragen'], ['team', 'Team']]
-    : [['clock', 'Klok'], ['shifts', 'Shiften'], ['hours', 'Mijn uren']];
+    : [['clock', 'Klok'], ['shifts', 'Shiften'], ['hours', 'Mijn uren'], ['profile', 'Profiel']];
 }
-const ICON_FOR = { clock: 'clock', shifts: 'shifts', hours: 'hours', today: 'today', schedule: 'shifts', monthly: 'monthly', requests: 'requests', team: 'team' };
+const ICON_FOR = { clock: 'clock', shifts: 'shifts', hours: 'hours', profile: 'profile', today: 'today', schedule: 'shifts', monthly: 'monthly', requests: 'requests', team: 'team' };
 
 /* --------------------------------------------------------------- modal */
 
 const modal = {
-  open(html, onMount) {
+  open(html, onMount, { wide = false } = {}) {
     const d = $('#modal');
+    d.classList.toggle('wide', wide);
     d.innerHTML = `<div class="modal-body">${html}</div>`;
     $$('[data-close]', d).forEach(b => b.addEventListener('click', () => modal.close()));
     if (!d.open) d.showModal();
@@ -277,7 +425,7 @@ const modal = {
     if (first) first.focus();
     return d;
   },
-  close() { const d = $('#modal'); if (d.open) d.close(); d.innerHTML = ''; },
+  close() { const d = $('#modal'); if (d.open) d.close(); d.innerHTML = ''; d.classList.remove('wide'); },
   confirm({ title, body = '', ok = 'Bevestigen', danger = false }) {
     return new Promise(resolve => {
       let done = false;
@@ -453,7 +601,7 @@ function renderShell() {
     <header class="topbar">
       <div class="topbar-inner">
         <div class="brand">
-          <span class="mark" aria-hidden="true"></span>
+          <button class="me-btn" id="me-btn" aria-label="Mijn profiel" title="Mijn profiel">${personPic(S.me, 'lg')}</button>
           <div class="brand-text">
             <div class="biz">${esc(S.settings.business_name)}</div>
             <div class="who">${esc(S.me.name)}${isManager() ? ' · Verantwoordelijke' : ''}</div>
@@ -473,6 +621,7 @@ function renderShell() {
     if (await modal.confirm({ title: 'Afmelden?', body: 'Je hebt je naam en pincode nodig om je opnieuw aan te melden.', ok: 'Afmelden' })) signOut();
   });
   $$('[data-tab]').forEach(b => b.addEventListener('click', () => { location.hash = b.dataset.tab; }));
+  $('#me-btn').addEventListener('click', () => { location.hash = 'profile'; });
   updateBadges();
   route();
   if (isManager() && !S.settings.timezone) {
@@ -486,18 +635,22 @@ function updateBadges() {
 }
 
 const VIEWS = {
-  clock: viewClock, shifts: viewShifts, hours: viewHours,
-  today: viewToday, schedule: viewSchedule, monthly: viewMonthly, requests: viewRequests, team: viewTeam,
+  clock: viewClock, shifts: viewShifts, hours: viewHours, profile: viewProfile,
+  today: viewToday, schedule: viewSchedule, monthly: viewMonthly, requests: viewRequests, team: viewTeam, member: viewMember,
 };
 
+// #profile works for everyone (managers reach it through their picture);
+// #team/<id> opens one team member for managers.
 function route() {
   if (!S.me) return;
   const tabs = tabsFor().map(t => t[0]);
-  let v = location.hash.replace('#', '');
-  if (!tabs.includes(v)) v = tabs[0];
+  let v = location.hash.replace('#', ''), tab = v;
+  const member = v.match(/^team\/([0-9a-f-]{36})$/);
+  if (member && isManager()) { S.memberId = member[1]; v = 'member'; tab = 'team'; }
+  else if (v !== 'profile' && !tabs.includes(v)) { v = tabs[0]; tab = v; }
   if (S.view !== v) S.month = null;
   S.view = v;
-  $$('[data-tab]').forEach(b => b.setAttribute('aria-current', b.dataset.tab === v ? 'page' : 'false'));
+  $$('[data-tab]').forEach(b => b.setAttribute('aria-current', b.dataset.tab === tab ? 'page' : 'false'));
   stopPolling();
   renderView();
 }
@@ -507,12 +660,15 @@ async function renderView() {
   const el = $('#view');
   if (!el) return;
   const seq = ++S.renderSeq;
-  if (!el.dataset.view || el.dataset.view !== S.view) {
+  const key = S.view === 'member' ? `member/${S.memberId}` : S.view;
+  if (!el.dataset.view || el.dataset.key !== key) {
     el.innerHTML = '<div class="empty">Laden…</div>';
     el.dataset.view = S.view;
+    el.dataset.key = key;
   }
   try {
     await VIEWS[S.view](el, () => seq === S.renderSeq);
+    if (seq === S.renderSeq) showLevelUp();
   } catch (e) {
     if (e.code === 'auth') return;
     if (seq === S.renderSeq) el.innerHTML = `<div class="card"><h2>Deze pagina kon niet geladen worden</h2><p class="muted">${esc(e.message)}</p><div class="form-actions"><button class="primary" id="retry">Opnieuw proberen</button></div></div>`;
@@ -535,9 +691,21 @@ setInterval(() => {
   const t = now();
   $$('[data-live=clock]').forEach(e => { e.textContent = fmt.clock(t); });
   $$('[data-live=since]').forEach(e => { e.textContent = fmt.dur(minutesBetween(e.dataset.since, t)); });
+  const lock = $('[data-unlock-at]');
+  if (lock && t >= new Date(lock.dataset.unlockAt) && !$('#modal').open) { lock.removeAttribute('data-unlock-at'); renderView(); }
 }, 1000);
 
 /* --------------------------------------------------------- punch card */
+
+// Staff can check in during one of their shifts, or a few minutes before
+// it starts (Team → Instellingen). The database checks this too.
+function clockInState() {
+  if (isManager() || !S.settings.require_shift) return { ok: true };
+  const t = now(), early = (S.settings.clock_in_early_minutes || 0) * 60000;
+  if (S.nextShifts.some(s => new Date(s.starts_at) - early <= t && new Date(s.ends_at) > t)) return { ok: true };
+  const next = S.nextShifts.find(s => new Date(s.starts_at) > t);
+  return { ok: false, next, from: next ? new Date(new Date(next.starts_at) - early) : null };
+}
 
 function punchCard({ compact = false } = {}) {
   const e = S.openEntry, t = now(), grace = S.settings.grace_minutes;
@@ -560,11 +728,18 @@ function punchCard({ compact = false } = {}) {
       </div>
       <button class="big stop" data-act="clock-out">Uitklokken</button>`;
   } else {
+    const can = clockInState();
+    const soon = can.from && can.from - t < 18 * 3600000;
     body = `
       <div class="punch-status"><span class="dot"></span>Je bent niet ingeklokt</div>
       ${next ? `<div class="punch-meta">${new Date(next.starts_at) <= t ? 'Je shift is nu bezig' : 'Volgende shift'}: ${fmt.when(next.starts_at)} – ${fmt.time(next.ends_at)}${next.label ? ' · ' + esc(next.label) : ''}</div>`
         : '<div class="punch-meta muted">Geen shiften gepland. Neem er een op bij Shiften.</div>'}
-      <button class="big go" data-act="clock-in">Inklokken</button>`;
+      ${can.ok ? '<button class="big go" data-act="clock-in">Inklokken</button>' : `
+        <button class="big go" disabled aria-describedby="in-why">Inklokken</button>
+        <p class="hint info" id="in-why" ${soon ? `data-unlock-at="${can.from.toISOString()}"` : ''}>${soon
+          ? `Je kan inklokken vanaf <strong>${sameDay(can.from, t) ? fmt.time(can.from) : fmt.when(can.from)}</strong>, ${S.settings.clock_in_early_minutes ? `${S.settings.clock_in_early_minutes} minuten voor je shift begint` : 'als je shift begint'}.`
+          : 'Je kan alleen inklokken tijdens een shift waarvoor je ingepland bent. Neem er een op bij Shiften.'}
+          Gewerkt zonder in te klokken? <button class="link" data-act="forgot-in">Vergeten uren toevoegen</button></p>`}`;
   }
   return `
     <section class="punch ${e ? 'is-on' : ''} ${compact ? 'compact' : ''}" aria-label="In- en uitklokken">
@@ -593,6 +768,8 @@ function bindPunch(root, after) {
   }).catch(() => {}));
   const forgot = $('[data-act=forgot-out]', root);
   if (forgot) forgot.addEventListener('click', () => forgotCheckout(after));
+  const missed = $('[data-act=forgot-in]', root);
+  if (missed) missed.addEventListener('click', () => timeFixModal(null));
 }
 
 function forgotCheckout(after) {
@@ -656,11 +833,20 @@ async function viewClock(el, current) {
   const monthName = fmt.monthName(now());
   const hour = now().getHours();
   const hello = hour < 12 ? 'Goedemorgen' : hour < 18 ? 'Goedemiddag' : 'Goedenavond';
+  const xp = S.me.xp;
   el.innerHTML = `
-    <div class="view-head"><div><h1>${hello}, ${esc(S.me.name.split(' ')[0])}</h1></div></div>
+    <div class="view-head"><div class="hello">
+      <button class="hello-pic" data-go="profile" aria-label="Mijn profiel">${personPic(S.me, 'xl')}</button>
+      <div><h1>${hello}, ${esc(S.me.name.split(' ')[0])}</h1>
+        <p class="lvl-line">${levelPill(xp)} <span>${esc(levelTitle(xp.level))}</span> <span class="muted">· ${xp.xp} XP</span></p></div>
+    </div></div>
     <div class="grid-2">
       ${punchCard()}
       <div style="display:flex;flex-direction:column;gap:18px;min-width:0">
+        ${S.me.avatar ? '' : `<section class="card avatar-cta">
+          <div class="cta-pic" aria-hidden="true">${Avatar.render(Avatar.DEFAULT, { view: 'bust' })}</div>
+          <div><h2>Maak je avatar</h2><p class="muted small">Kies je kapsel, je kleren en je schoenen. Met elk level krijg je nieuwe dingen om te dragen.</p>
+          <button class="primary sm" id="make-avatar">Maak je avatar</button></div></section>`}
         <div class="stats stats-3">
           <div class="stat"><span class="v">${fmt.dur(weekMins)}</span><span class="k">Gewerkt deze week</span></div>
           <div class="stat good"><span class="v">${fmt.dur(mins)}</span><span class="k">Gewerkt in ${monthName}</span></div>
@@ -679,6 +865,8 @@ async function viewClock(el, current) {
     </div>`;
   bindPunch(el, renderView);
   $$('[data-go]', el).forEach(b => b.addEventListener('click', () => { location.hash = b.dataset.go; }));
+  const mk = $('#make-avatar', el);
+  if (mk) mk.addEventListener('click', () => openAvatarEditor());
 }
 
 /* ------------------------------------------------------- shifts & schedule */
@@ -1204,15 +1392,8 @@ function wageCodesModal() {
 
 const fmtSize = n => n >= 1048576 ? `${num(n / 1048576, 1)} MB` : `${Math.max(1, Math.round(n / 1024))} kB`;
 
-async function downloadPayslip(id, btn) {
-  await busy(btn, async () => {
-    const f = await rpc('get_payslip', { p_id: id });
-    const bin = atob(f.data.replace(/\s/g, ''));
-    const bytes = new Uint8Array(bin.length);
-    for (let i = 0; i < bin.length; i++) bytes[i] = bin.charCodeAt(i);
-    saveBlob(f.file_name, new Blob([bytes], { type: f.content_type }));
-  }).catch(() => {});
-}
+const downloadPayslip = (id, btn) => downloadFile('get_payslip', id, btn);
+const downloadContract = (id, btn) => downloadFile('get_contract', id, btn);
 
 function readAsBase64(file) {
   return new Promise((resolve, reject) => {
@@ -1269,6 +1450,8 @@ async function viewHours(el, current) {
       <div class="stat"><span class="v">${done.length}</span><span class="k">Gewerkte shiften</span></div>
       <div class="stat ${pendingReqs.length ? 'alert' : ''}"><span class="v">${pendingReqs.length}</span><span class="k">Aanpassingen in behandeling</span></div>
     </div>
+    ${(() => { const sl = slips.find(x => x.month === toDateInput(m)); return sl && sl.net_pay != null
+      ? `<p class="hint info">Volgens je loonfiche van ${fmt.monthName(m)} kreeg je <strong>${fmt.money(sl.net_pay)}</strong> netto uitbetaald${sl.gross_pay != null ? ` (${fmt.money(sl.gross_pay)} bruto)` : ''}.</p>` : ''; })()}
     <section class="card">
       <div class="card-head"><h2>Urenkaart</h2><button class="sm" id="add-missing">+ Vergeten uren toevoegen</button></div>
       ${data.entries.length ? `<div class="rows">${data.entries.map(x => `
@@ -1292,7 +1475,7 @@ async function viewHours(el, current) {
       ${slips.length ? `<div class="rows">${slips.map(p => `
         <div class="row">
           <div class="row-main"><span class="row-title">${fmt.month(new Date(p.month + 'T00:00'))}</span>
-            <span class="row-sub">${esc(p.file_name)} · ${fmtSize(p.size_bytes)}</span></div>
+            <span class="row-sub">${p.net_pay != null ? `<strong>Netto ${fmt.money(p.net_pay)}</strong>${p.gross_pay != null ? ` · bruto ${fmt.money(p.gross_pay)}` : ''} · ` : ''}${esc(p.file_name)} · ${fmtSize(p.size_bytes)}</span></div>
           <div class="row-actions"><button class="sm primary" data-payslip="${p.id}">Downloaden</button></div>
         </div>`).join('')}</div>`
         : '<p class="empty">Je loonfiches verschijnen hier zodra je verantwoordelijke ze uploadt.</p>'}
@@ -1367,6 +1550,236 @@ function timeFixModal(entry) {
   });
 }
 
+/* -------------------------------------------------- profile and avatar */
+
+const LOCK_ICON = '<svg viewBox="0 0 24 24" width="12" height="12" fill="none" stroke="currentColor" stroke-width="2.4" stroke-linecap="round" aria-hidden="true"><rect x="5" y="11" width="14" height="10" rx="2"/><path d="M8 11V8a4 4 0 0 1 8 0v3"/></svg>';
+const AV_TABS = [
+  ['face', 'Gezicht', ['skin', 'eyes', 'eyeColor', 'brows', 'mouth', 'beard', 'extra']],
+  ['hair', 'Haar', ['hair', 'hairColor']],
+  ['clothes', 'Kleren', ['top', 'topColor', 'outer', 'outerColor', 'bottom', 'bottomColor']],
+  ['shoes', 'Schoenen', ['shoes', 'shoeColor']],
+  ['extras', "Extra's", ['hat', 'hatColor', 'glasses', 'earrings', 'piercing']],
+];
+const AV_GROUP = {
+  skin: 'Huidskleur', eyes: 'Ogen', eyeColor: 'Kleur van je ogen', brows: 'Wenkbrauwen', mouth: 'Mond', beard: 'Baard en snor',
+  extra: 'Sproeten en blos', hair: 'Kapsel', hairColor: 'Haarkleur', top: 'Bovenstuk', topColor: 'Kleur', outer: 'Jas',
+  outerColor: 'Kleur van je jas', bottom: 'Broek of rok', bottomColor: 'Kleur', shoes: 'Schoenen', shoeColor: 'Kleur',
+  hat: 'Op je hoofd', hatColor: 'Kleur', glasses: 'Bril', earrings: 'Oorbellen', piercing: 'Piercing',
+};
+// The part of the drawing each tile shows.
+const AV_CROP = {
+  eyes: '56 62 88 88', brows: '56 56 88 88', mouth: '70 98 60 60', beard: '44 56 112 112', hair: '26 2 148 148', hat: '26 0 148 148',
+  glasses: '54 56 92 92', earrings: '36 52 128 128', piercing: '74 92 52 52', top: '18 136 164 164', outer: '18 136 164 164',
+  bottom: '14 240 172 172', shoes: '44 346 112 66', hairColor: '26 2 148 148',
+};
+const COLOR_NAMES = {
+  white: 'wit', black: 'zwart', navy: 'marineblauw', maroon: 'bordeaux', red: 'rood', pink: 'roze', lilac: 'lila', sky: 'lichtblauw',
+  green: 'groen', olive: 'olijfgroen', mustard: 'mosterdgeel', beige: 'beige', gray: 'grijs', cream: 'crème', grey: 'grijs',
+  blue: 'blauw', light: 'licht', indigo: 'donkerblauw', chestnut: 'kastanjebruin', dark: 'donkerbruin', brown: 'bruin',
+  blonde: 'blond', platinum: 'platinablond', auburn: 'roodbruin', ginger: 'rossig', hazel: 'hazelnoot',
+};
+const colorName = (k, v) => k === 'skin' ? `huidskleur ${v.slice(1)}` : COLOR_NAMES[v] || v;
+const avShown = (k, c) => !((k === 'topColor' && c.top === 'chef') || (k === 'outerColor' && c.outer === 'none') ||
+  (k === 'shoeColor' && !['sneakers', 'boots'].includes(c.shoes)) || (k === 'hatColor' && !['beanie', 'cap', 'bandana'].includes(c.hat)));
+
+function openAvatarEditor() {
+  const level = (S.me.xp || {}).level || 1;
+  const saved = S.me.avatar ? Avatar.normalize(S.me.avatar) : null;
+  let c = saved ? { ...saved } : { ...Avatar.DEFAULT }, tab = 'face';
+  const need = (k, v) => Avatar.levelOf(k, v);
+  const locked = (k, v) => need(k, v) > level && !(saved && saved[k] === v);
+  const lockNote = (k, v) => locked(k, v) ? `<span class="av-lock">${LOCK_ICON}Level ${need(k, v)}</span>` : '';
+
+  function group(k) {
+    if (!avShown(k, c)) return '';
+    let body;
+    if (k === 'extra') {
+      body = `<div class="av-tiles">${[['freckles', 'Sproeten'], ['blush', 'Blos']].map(([t, l]) => `
+        <button type="button" class="av-tile" data-toggle="${t}" aria-pressed="${!!c[t]}">
+          <span class="av-tile-pic">${Avatar.render({ ...c, [t]: true }, { view: '56 70 88 88' })}</span><span class="av-tile-label">${l}</span></button>`).join('')}</div>`;
+    } else if (Avatar.COLORS[k]) {
+      body = `<div class="swatches">${Object.entries(Avatar.COLORS[k]).map(([v, hexColor]) => `
+        <button type="button" class="swatch${locked(k, v) ? ' is-locked' : ''}" data-k="${k}" data-v="${v}" style="--c:${hexColor}" aria-pressed="${c[k] === v}"
+          aria-label="${esc(colorName(k, v))}${locked(k, v) ? `, vanaf level ${need(k, v)}` : ''}" title="${esc(colorName(k, v))}${locked(k, v) ? ` · vanaf level ${need(k, v)}` : ''}" ${locked(k, v) ? 'disabled' : ''}>${locked(k, v) ? LOCK_ICON : ''}</button>`).join('')}</div>`;
+    } else {
+      body = `<div class="av-tiles">${Avatar.STYLES[k].map(([v, label]) => {
+        const look = { ...c, [k]: v };
+        if (k === 'hair') look.hat = 'none';
+        if (k === 'top') look.outer = 'none';
+        return `<button type="button" class="av-tile${locked(k, v) ? ' is-locked' : ''}" data-k="${k}" data-v="${v}" aria-pressed="${c[k] === v}" ${locked(k, v) ? 'disabled' : ''}
+          title="${esc(label)}${locked(k, v) ? ` · vanaf level ${need(k, v)}` : ''}">
+          <span class="av-tile-pic">${Avatar.render(look, { view: AV_CROP[k] || 'tile' })}</span><span class="av-tile-label">${esc(label)}</span>${lockNote(k, v)}</button>`;
+      }).join('')}</div>`;
+    }
+    return `<div class="av-group"><h3>${AV_GROUP[k]}</h3>${body}</div>`;
+  }
+
+  const d = modal.open(`
+    <h2 id="modal-title">${saved ? 'Je avatar aanpassen' : 'Maak je avatar'}</h2>
+    <p>Je bent level ${level}. Dingen met een slotje krijg je op een hoger level.</p>
+    <div class="av-editor">
+      <div class="av-preview" id="av-preview"></div>
+      <div class="av-side">
+        <div class="chips av-tabs" role="tablist" aria-label="Onderdelen">${AV_TABS.map(([k, l]) => `<button type="button" class="chip" role="tab" data-av-tab="${k}">${l}</button>`).join('')}</div>
+        <div class="av-groups" id="av-groups"></div>
+      </div>
+    </div>
+    <p class="form-error" id="av-err"></p>
+    <div class="form-actions av-actions">
+      <button type="button" id="av-random">Willekeurig</button>
+      <span class="toolbar"><button type="button" data-close>Annuleren</button><button type="button" class="primary" id="av-save">Opslaan</button></span>
+    </div>`, d => {
+    const groups = $('#av-groups', d);
+    const draw = () => {
+      $('#av-preview', d).innerHTML = Avatar.render(c, { title: 'Je avatar' });
+      const keep = groups.scrollTop;
+      groups.innerHTML = AV_TABS.find(t => t[0] === tab)[2].map(group).join('');
+      groups.scrollTop = keep;
+      $$('[data-av-tab]', d).forEach(b => { b.classList.toggle('is-on', b.dataset.avTab === tab); b.setAttribute('aria-selected', b.dataset.avTab === tab); });
+    };
+    $$('[data-av-tab]', d).forEach(b => b.addEventListener('click', () => { tab = b.dataset.avTab; groups.scrollTop = 0; draw(); }));
+    groups.addEventListener('click', ev => {
+      const b = ev.target.closest('button');
+      if (!b || b.disabled) return;
+      if (b.dataset.toggle) c[b.dataset.toggle] = !c[b.dataset.toggle];
+      else if (b.dataset.k) c[b.dataset.k] = b.dataset.v;
+      draw();
+    });
+    $('#av-random', d).addEventListener('click', () => { c = Avatar.normalize(Avatar.random(level)); draw(); });
+    const save = $('#av-save', d);
+    save.addEventListener('click', () => busy(save, async () => {
+      await rpc('save_my_avatar', { p_avatar: c });
+      await refreshMe();
+      modal.close();
+      toast('Je avatar is opgeslagen.');
+      renderShell();
+    }).catch(e => { $('#av-err', d).textContent = e.message; }));
+    draw();
+  }, { wide: true });
+  return d;
+}
+
+// One tile per reward, showing the person wearing it.
+function rewardTiles(avatar, level) {
+  const base = Avatar.normalize(avatar || Avatar.DEFAULT), seen = new Set(), out = [];
+  for (const [k, items] of Object.entries(Avatar.UNLOCKS)) {
+    for (const [v, l] of Object.entries(items)) {
+      if (k === 'hairColor') { if (seen.has(k)) continue; seen.add(k); }
+      const label = k === 'hairColor' ? 'Fantasiekleuren voor je haar' : Avatar.STYLES[k].find(x => x[0] === v)[1];
+      out.push({ k, v, l, label });
+    }
+  }
+  return out.sort((a, b) => a.l - b.l).map(r => {
+    const look = { ...base, [r.k]: r.v };
+    if (r.k === 'hairColor') look.hat = 'none';
+    if (r.k === 'top') look.outer = 'none';
+    const on = level >= r.l;
+    return `<div class="reward ${on ? 'is-on' : 'is-locked'}">
+      <span class="reward-pic">${Avatar.render(look, { view: AV_CROP[r.k] })}</span>
+      <span class="reward-lvl">${on ? '✓ ' : LOCK_ICON}Level ${r.l}</span><span class="reward-name">${esc(r.label)}</span></div>`;
+  }).join('');
+}
+
+const fmtDate = iso => new Date(iso + 'T00:00').toLocaleDateString(LOCALE, { day: 'numeric', month: 'long', year: 'numeric' });
+const contractPeriod = c => c.starts_on ? (c.ends_on ? `${isoToDMY(c.starts_on)} – ${isoToDMY(c.ends_on)}` : `vanaf ${isoToDMY(c.starts_on)}`) : 'zonder datum';
+function contractRows(list, manager) {
+  if (!list.length) return `<p class="empty">${manager ? 'Nog geen contracten.' : 'Je verantwoordelijke heeft nog geen contract toegevoegd.'}</p>`;
+  const today = toDateInput(now());
+  return `<div class="rows">${list.map(c => {
+    const state = c.ends_on && c.ends_on < today ? '<span class="pill">Afgelopen</span>' : (!c.starts_on || c.starts_on <= today) ? '<span class="pill on">Loopt</span>' : '<span class="pill accent">Begint later</span>';
+    return `<div class="row">
+      <div class="row-main"><span class="row-title">${esc(c.title)} ${state}</span><span class="row-sub">${contractPeriod(c)} · ${esc(c.file_name)} · ${fmtSize(c.size_bytes)}</span></div>
+      <div class="row-actions"><button class="sm${manager ? '' : ' primary'}" data-contract="${c.id}">Downloaden</button>${manager ? `<button class="sm danger" data-contract-rm="${c.id}" data-title="${esc(c.title)}">Verwijderen</button>` : ''}</div>
+    </div>`;
+  }).join('')}</div>`;
+}
+
+async function viewProfile(el, current) {
+  const r = await rpc('my_profile');
+  if (!current()) return;
+  const xp = r.xp, lvl = xp.level, w = r.work;
+  S.me.avatar = r.avatar; S.me.xp = xp;
+  const next = Avatar.rewardsAt(lvl + 1);
+  el.innerHTML = `
+    <div class="view-head"><div><h1>Mijn profiel</h1><p>Je avatar, je level, je gegevens en je contracten.</p></div></div>
+    <section class="card profile-hero">
+      <button type="button" class="hero-pic" id="edit-avatar-pic" aria-label="${r.avatar ? 'Avatar aanpassen' : 'Maak je avatar'}">
+        ${r.avatar ? Avatar.render(r.avatar, { title: 'Je avatar' }) : `<span class="hero-empty">${Avatar.render(Avatar.DEFAULT)}</span><span class="hero-make">Maak je avatar</span>`}</button>
+      <div class="hero-main">
+        <p class="section-label">${esc(S.me.name)}</p>
+        <h2 class="hero-level">Level ${lvl} <span>· ${esc(levelTitle(lvl))}</span></h2>
+        ${xpBar(xp)}
+        ${next.length ? `<p class="small">Op level ${lvl + 1} krijg je: <strong>${next.map(esc).join(', ')}</strong></p>` : ''}
+        <div class="stats stats-3">
+          <div class="stat"><span class="v">${fmt.hours(xp.minutes)}</span><span class="k">Uren gewerkt</span></div>
+          <div class="stat"><span class="v">${xp.entries}</span><span class="k">Keer gewerkt</span></div>
+          <div class="stat"><span class="v">${xp.entries ? Math.round(xp.on_time / xp.entries * 100) + '%' : '—'}</span><span class="k">Op tijd begonnen</span></div>
+        </div>
+        <div class="toolbar"><button class="primary" id="edit-avatar">${r.avatar ? 'Avatar aanpassen' : 'Maak je avatar'}</button></div>
+        <details class="xp-how"><summary>Hoe verdien je XP?</summary>
+          <ul><li><strong>10 XP</strong> per uur dat je werkt</li><li><strong>+5 XP</strong> als je op tijd begint aan je shift</li><li><strong>+5 XP</strong> als je blijft tot je shift gedaan is</li></ul>
+          <p class="muted small">XP komt uit je urenkaart. Een aanpassing telt mee zodra je verantwoordelijke ze goedkeurt.</p></details>
+      </div>
+    </section>
+    <section class="card"><div class="card-head"><h2>Beloningen</h2><span class="muted small">Nieuwe dingen voor je avatar, per level</span></div>
+      <div class="rewards">${rewardTiles(r.avatar, lvl)}</div></section>
+    <div class="grid-2">
+      <section class="card"><h2>Mijn gegevens</h2>
+        <p class="muted small" style="margin-top:6px">Alleen jij en je verantwoordelijke zien dit. Ze zijn nodig voor je contract en je loonfiche.</p>
+        <form id="pf-form" novalidate><div class="form-grid" style="margin-top:12px">${profileFields('pf', r.profile)}</div>
+          <p class="form-error" id="pf-err"></p><div class="form-actions"><button type="submit" class="primary">Gegevens opslaan</button></div></form>
+      </section>
+      <div class="stack">
+        <section class="card"><h2>Werk</h2>
+          <dl class="kv">
+            <dt>Rol</dt><dd>${w.role === 'manager' ? 'Verantwoordelijke' : 'Medewerker'}</dd>
+            <dt>Statuut</dt><dd>${w.contract_type ? CONTRACTS[w.contract_type] : '—'}</dd>
+            <dt>Uurloon</dt><dd>${w.hourly_rate != null ? fmt.money(w.hourly_rate) : '—'}</dd>
+            <dt>In dienst sinds</dt><dd>${w.start_date ? fmtDate(w.start_date) : '—'}</dd>
+            <dt>Werknemersnummer</dt><dd>${w.payroll_id ? esc(w.payroll_id) : '—'}</dd>
+          </dl>
+          <p class="muted small" style="margin-top:10px">Klopt hier iets niet? Vraag het aan je verantwoordelijke.</p></section>
+        <section class="card"><h2>Contracten</h2>${contractRows(r.contracts, false)}</section>
+        <section class="card"><h2>Pincode wijzigen</h2>
+          <form id="pin-form" novalidate><div class="form-grid" style="margin-top:12px">
+            <div class="field"><label for="pin-old">Huidige pincode</label><input id="pin-old" class="pin-input" type="password" inputmode="numeric" pattern="[0-9]*" maxlength="8" autocomplete="current-password"></div>
+            <div class="field"><label for="pin-new">Nieuwe pincode</label><input id="pin-new" class="pin-input" type="password" inputmode="numeric" pattern="[0-9]*" maxlength="8" autocomplete="new-password"></div>
+            <div class="field"><label for="pin-new2">Herhaal de nieuwe</label><input id="pin-new2" class="pin-input" type="password" inputmode="numeric" pattern="[0-9]*" maxlength="8" autocomplete="new-password"></div>
+          </div><p class="form-error" id="pin-err"></p><div class="form-actions"><button type="submit" class="primary">Pincode wijzigen</button></div></form>
+        </section>
+      </div>
+    </div>`;
+  $('#edit-avatar', el).addEventListener('click', () => openAvatarEditor());
+  $('#edit-avatar-pic', el).addEventListener('click', () => openAvatarEditor());
+  $$('[data-contract]', el).forEach(b => b.addEventListener('click', () => downloadContract(b.dataset.contract, b)));
+  const pf = $('#pf-form', el);
+  pf.addEventListener('submit', async ev => {
+    ev.preventDefault();
+    const err = $('#pf-err', el); err.textContent = '';
+    const r2 = readProfile(pf);
+    if (r2.error) { err.textContent = r2.error; r2.field.focus(); return; }
+    await busy($('button[type=submit]', pf), async () => {
+      await rpc('save_my_profile', { p_profile: r2.values });
+      toast('Je gegevens zijn opgeslagen.');
+      renderView();
+    }).catch(e => { err.textContent = e.message; });
+  });
+  const pin = $('#pin-form', el);
+  pin.addEventListener('submit', async ev => {
+    ev.preventDefault();
+    const err = $('#pin-err', el); err.textContent = '';
+    const old = $('#pin-old', pin).value.trim(), nw = $('#pin-new', pin).value.trim();
+    if (!old) { err.textContent = 'Vul je huidige pincode in.'; return; }
+    if (!/^\d{4,8}$/.test(nw)) { err.textContent = 'De nieuwe pincode moet 4 tot 8 cijfers hebben.'; return; }
+    if (nw !== $('#pin-new2', pin).value.trim()) { err.textContent = 'De twee nieuwe pincodes zijn niet gelijk.'; return; }
+    await busy($('button[type=submit]', pin), async () => {
+      await rpc('change_my_pin', { p_old: old, p_new: nw });
+      pin.reset();
+      toast('Je pincode is gewijzigd. Andere toestellen zijn afgemeld.');
+    }).catch(e => { err.textContent = e.message; });
+  });
+}
+
 /* ---------------------------------------------------------- manager: today */
 
 // [pill style, label, code]
@@ -1394,6 +1807,7 @@ async function viewToday(el, current) {
   const [ov] = await Promise.all([
     rpc('mgr_overview', { p_day_start: day.toISOString(), p_day_end: addDays(day, 1).toISOString() }),
     refreshMe(),
+    loadStaff(),
   ]);
   if (!current()) return;
   S.pending = ov.pending_requests; updateBadges();
@@ -1414,7 +1828,7 @@ async function viewToday(el, current) {
           ${ov.working.length ? `<div class="rows">${ov.working.map(w => {
             const long = minutesBetween(w.clock_in, t) > 14 * 60;
             return `<div class="row">
-              <div class="person"><span class="avatar on">${esc(initials(w.name))}</span>
+              <div class="person">${picFor(w.staff_id, w.name, 'on')}
                 <div class="row-main"><span class="row-title">${esc(w.name)}</span>
                 <span class="row-sub">Binnen ${sameDay(w.clock_in, t) ? fmt.time(w.clock_in) : fmt.when(w.clock_in)} · <span data-live="since" data-since="${w.clock_in}">${fmt.dur(minutesBetween(w.clock_in, t))}</span>${w.shift ? ` · shift eindigt om ${fmt.time(w.shift.ends_at)}` : ' · geen shift'}</span>
                 ${long ? '<span class="pill bad">Meer dan 14u, waarschijnlijk vergeten uit te klokken</span>' : ''}</div></div>
@@ -1427,8 +1841,9 @@ async function viewToday(el, current) {
           ${ov.today.length ? `<div class="rows">${ov.today.map(s => {
             const [k, label] = shiftStatus(s, ov.working, t, grace);
             return `<div class="row">
+              <div class="person">${s.staff_id ? picFor(s.staff_id, s.staff_name) : '<span class="avatar open" aria-hidden="true">?</span>'}
               <div class="row-main"><span class="row-title">${s.staff_id ? esc(s.staff_name) : '<span class="muted">Open shift</span>'}</span>
-              <span class="row-sub"><span class="time">${fmt.range(s.starts_at, s.ends_at)}</span>${s.label ? ' · ' + esc(s.label) : ''}</span></div>
+              <span class="row-sub"><span class="time">${fmt.range(s.starts_at, s.ends_at)}</span>${s.label ? ' · ' + esc(s.label) : ''}</span></div></div>
               <span class="pill ${k}">${esc(label)}</span>
             </div>`;
           }).join('')}</div>` : '<p class="empty">Vandaag geen shiften gepland. <button class="link" data-go="schedule">Voeg er toe</button></p>'}
@@ -1510,7 +1925,7 @@ async function viewMonthly(el, current) {
         <thead><tr><th>Naam</th><th class="num">Gewerkt</th><th class="num">Gepland</th><th class="num">Shiften</th><th class="num">Te laat</th><th class="num">Vroeger weg</th><th class="num">Niet gekomen</th>${anyRate ? '<th class="num">Uurloon</th><th class="num">Geschat loon</th>' : ''}</tr></thead>
         <tbody>${people.map(p => `
           <tr class="clickable ${openId === p.id ? 'open' : ''}" data-person="${p.id}" tabindex="0" aria-expanded="${openId === p.id}">
-            <td><span class="person"><span class="avatar">${esc(initials(p.name))}</span><span><strong>${esc(p.name)}</strong>${p.active ? '' : ' <span class="pill">Inactief</span>'}${p.open_entries ? ' <span class="pill warn">Ingeklokt</span>' : ''}${p.pending_requests ? ` <span class="pill accent">${plural(p.pending_requests, 'aanpassing', 'aanpassingen')}</span>` : ''}</span></span></td>
+            <td><span class="person">${picFor(p.id, p.name)}<span><strong>${esc(p.name)}</strong>${p.active ? '' : ' <span class="pill">Inactief</span>'}${p.open_entries ? ' <span class="pill warn">Ingeklokt</span>' : ''}${p.pending_requests ? ` <span class="pill accent">${plural(p.pending_requests, 'aanpassing', 'aanpassingen')}</span>` : ''}</span></span></td>
             <td class="num"><strong>${fmt.dur(p.worked_minutes)}</strong></td>
             <td class="num">${fmt.dur(p.scheduled_minutes)}</td>
             ${cell(p.entries)}${cell(p.late, 'flag')}${cell(p.left_early, 'flag')}${cell(p.missed, 'flag')}
@@ -1524,20 +1939,22 @@ async function viewMonthly(el, current) {
     </section>
     ${sx.html}
     <section class="card">
-      <div class="card-head"><h2>Loonfiches voor ${label}</h2><span class="pill ${slips.length ? 'on' : ''}">${slips.length} van ${people.length} geüpload</span></div>
-      <p class="muted small" style="margin-top:6px">Upload de loonfiche van elke persoon als pdf of foto, tot 4 MB. Ze downloaden die zelf bij Mijn uren.</p>
+      <div class="card-head"><h2>Loonfiches voor ${label}</h2>
+        <div class="toolbar"><span class="pill ${slips.length ? 'on' : ''}">${slips.length} van ${people.length} geüpload</span><button class="sm primary" id="slip-bulk">Loonfiches uploaden</button></div></div>
+      <p class="muted small" style="margin-top:6px">Kies ze allemaal tegelijk, als pdf of foto tot 4 MB. De app leest voor wie elke loonfiche is, de maand en de bedragen, en vult ontbrekende gegevens aan. Jij kijkt het na voor het bewaard wordt. Iedereen downloadt de eigen loonfiche bij Mijn uren.</p>
       <div class="rows">${people.map(p => {
         const slip = slips.find(x => x.staff_id === p.id);
         return `<div class="row">
-          <div class="person"><span class="avatar">${esc(initials(p.name))}</span>
+          <div class="person">${picFor(p.id, p.name)}
             <div class="row-main"><span class="row-title">${esc(p.name)}</span>
-            <span class="row-sub">${slip ? `${esc(slip.file_name)} · ${fmtSize(slip.size_bytes)} · geüpload op ${fmt.short(slip.created_at)}` : 'Nog geen loonfiche'}</span></div></div>
+            <span class="row-sub">${slip ? `${slip.net_pay != null ? `Netto ${fmt.money(slip.net_pay)} · ` : ''}${esc(slip.file_name)} · ${fmtSize(slip.size_bytes)} · geüpload op ${fmt.short(slip.created_at)}` : 'Nog geen loonfiche'}</span></div></div>
           <div class="row-actions">${slip
             ? `<button class="sm" data-slip-get="${slip.id}">Downloaden</button><button class="sm" data-slip-up="${p.id}">Vervangen</button><button class="sm danger" data-slip-rm="${slip.id}" data-name="${esc(p.name)}">Verwijderen</button>`
             : `<button class="sm primary" data-slip-up="${p.id}">Loonfiche uploaden</button>`}</div>
         </div>`;
       }).join('')}</div>
       <input type="file" id="slip-file" accept="application/pdf,image/png,image/jpeg" hidden>
+      <input type="file" id="slip-files" accept="application/pdf,image/png,image/jpeg" multiple hidden>
     </section>
     <section class="card">
       <h2>Alle maanden</h2>
@@ -1576,18 +1993,11 @@ async function viewMonthly(el, current) {
   let uploadFor = null;
   $$('[data-slip-up]', el).forEach(b => b.addEventListener('click', () => { uploadFor = b; fileInput.value = ''; fileInput.click(); }));
   fileInput.addEventListener('change', () => {
-    const file = fileInput.files[0], btn = uploadFor;
-    if (!file || !btn) return;
-    const type = file.type || (/\.pdf$/i.test(file.name) ? 'application/pdf' : '');
-    if (!['application/pdf', 'image/png', 'image/jpeg'].includes(type)) { toast('Upload een pdf-, png- of jpg-bestand.', 'error'); return; }
-    if (file.size > 4 * 1024 * 1024) { toast('Dat bestand is groter dan 4 MB. Bewaar het als een kleinere pdf en probeer opnieuw.', 'error'); return; }
-    busy(btn, async () => {
-      const data = await readAsBase64(file);
-      await rpc('mgr_upload_payslip', { p_staff_id: btn.dataset.slipUp, p_month: toDateInput(m), p_file_name: file.name, p_content_type: type, p_data: data });
-      toast(`Loonfiche geüpload voor ${(people.find(p => p.id === btn.dataset.slipUp) || {}).name || 'deze persoon'}.`);
-      renderView();
-    }).catch(() => {});
+    if (fileInput.files[0] && uploadFor) payslipImport([fileInput.files[0]], { staffId: uploadFor.dataset.slipUp, month: toDateInput(m) });
   });
+  const many = $('#slip-files', el);
+  $('#slip-bulk', el).addEventListener('click', () => { many.value = ''; many.click(); });
+  many.addEventListener('change', () => { if (many.files.length) payslipImport([...many.files], { month: toDateInput(m) }); });
   $$('[data-slip-rm]', el).forEach(b => b.addEventListener('click', async () => {
     const ok = await modal.confirm({ title: `Loonfiche van ${b.dataset.name} verwijderen?`, body: `Die persoon kan de loonfiche van ${esc(label)} dan niet meer downloaden.`, ok: 'Loonfiche verwijderen', danger: true });
     if (!ok) return;
@@ -1680,7 +2090,7 @@ function entryModal(x, staffId) {
 /* ------------------------------------------------------- manager: requests */
 
 async function viewRequests(el, current) {
-  const r = await rpc('mgr_requests');
+  const [r] = await Promise.all([rpc('mgr_requests'), loadStaff()]);
   if (!current()) return;
   S.pending = r.pending.length; updateBadges();
   el.innerHTML = `
@@ -1692,7 +2102,7 @@ async function viewRequests(el, current) {
         const oldMins = q.current_in && q.current_out ? minutesBetween(q.current_in, q.current_out) : null;
         return `<div class="row" style="grid-template-columns:minmax(0,1fr)">
           <div class="row-main">
-            <div class="person"><span class="avatar">${esc(initials(q.name))}</span><span class="row-title">${esc(q.name)} · ${q.entry_id ? 'aanpassing' : 'vergeten uren'} voor ${fmt.dayLong(q.proposed_in)}</span></div>
+            <div class="person">${picFor(q.staff_id, q.name)}<span class="row-title">${esc(q.name)} · ${q.entry_id ? 'aanpassing' : 'vergeten uren'} voor ${fmt.dayLong(q.proposed_in)}</span></div>
             <dl class="compare">
               ${q.entry_id ? `<dt>Geregistreerd</dt><dd><span class="entry-io">${stamps({ clock_in: q.current_in, clock_out: q.current_out })}</span> ${oldMins != null ? `<span class="muted small">${fmt.dur(oldMins)}</span>` : ''}</dd>` : ''}
               <dt>Gevraagd</dt><dd><span class="entry-io">${stamps({ clock_in: q.proposed_in, clock_out: q.proposed_out })}</span> ${newMins != null ? `<strong class="mono small">${fmt.dur(newMins)}</strong>` : ''}</dd>
@@ -1741,12 +2151,12 @@ async function viewTeam(el, current) {
         <div class="card-head"><h2>Mensen</h2><span class="pill">${staff.filter(p => p.active).length} actief</span></div>
         <div class="rows">${staff.map(p => `
           <div class="row">
-            <div class="person"><span class="avatar">${esc(initials(p.name))}</span>
-              <div class="row-main"><span class="row-title">${esc(p.name)}${p.id === S.me.id ? ' (jij)' : ''}</span>
+            <div class="person">${personPic(p, 'lg')}
+              <div class="row-main"><span class="row-title">${esc(p.name)}${p.id === S.me.id ? ' (jij)' : ''} ${levelPill(p.xp)}</span>
               <span class="row-sub">${p.role === 'manager' ? 'Verantwoordelijke' : 'Medewerker'}${p.contract_type ? ` · ${CONTRACT_SHORT[p.contract_type]}` : ''}${p.hourly_rate != null ? ` · ${fmt.money(p.hourly_rate)}/u` : ''}${p.payroll_id ? ` · nr. ${esc(p.payroll_id)}` : ''}</span></div></div>
             <div class="row-actions">
-              ${p.locked ? '<span class="pill bad">Geblokkeerd</span>' : ''}${p.active ? '' : '<span class="pill">Inactief</span>'}
-              <button class="sm" data-person="${p.id}">Wijzigen</button>
+              ${p.locked ? '<span class="pill bad">Geblokkeerd</span>' : ''}${p.active ? '' : '<span class="pill">Inactief</span>'}${p.active && p.missing && p.missing.length ? '<span class="pill warn">Gegevens onvolledig</span>' : ''}
+              <button class="sm" data-person="${p.id}">Openen</button>
             </div>
           </div>`).join('')}</div>
       </section>
@@ -1767,13 +2177,16 @@ async function viewTeam(el, current) {
       </section>
     </div>
     <section class="card">
-      <h2>Instellingen</h2>
+      <h2 id="settings">Instellingen</h2>
       <form id="settings-form" novalidate>
         <div class="form-grid" style="margin-top:12px">
           <div class="field wide"><label for="st-biz">Naam van de zaak</label><input id="st-biz" maxlength="80" value="${esc(st.business_name)}"></div>
           <div class="field"><label for="st-cut">Personeel kan een shift teruggeven tot</label><select id="st-cut">${[0, 12, 24, 48, 72, 168].map(h => `<option value="${h}" ${h === st.drop_cutoff_hours ? 'selected' : ''}>${cutLabel(h)}</option>`).join('')}${[0, 12, 24, 48, 72, 168].includes(st.drop_cutoff_hours) ? '' : `<option value="${st.drop_cutoff_hours}" selected>${cutLabel(st.drop_cutoff_hours)}</option>`}</select></div>
           <div class="field"><label for="st-grace">Speling</label><select id="st-grace">${[0, 5, 10, 15].map(g => `<option value="${g}" ${g === st.grace_minutes ? 'selected' : ''}>${g} minuten</option>`).join('')}${[0, 5, 10, 15].includes(st.grace_minutes) ? '' : `<option value="${st.grace_minutes}" selected>${st.grace_minutes} minuten</option>`}</select><span class="help">Hoeveel minuten iemand te laat of te vroeg mag zijn voor het telt.</span></div>
           <div class="field"><label for="st-cur">Valutateken</label><input id="st-cur" maxlength="4" value="${esc(st.currency)}"></div>
+          <div class="field wide"><label class="check"><input type="checkbox" id="st-req" ${st.require_shift ? 'checked' : ''}> Personeel kan alleen inklokken tijdens een shift waarvoor het ingepland is</label>
+            <span class="help">Wie werkte zonder shift, voegt de uren toe bij Mijn uren en jij keurt ze goed. Verantwoordelijken kunnen altijd inklokken.</span></div>
+          <div class="field"><label for="st-early">Inklokken kan vanaf</label><select id="st-early">${[0, 5, 10, 15, 30, 60].map(m => `<option value="${m}" ${m === st.clock_in_early_minutes ? 'selected' : ''}>${m ? `${m} minuten voor de shift` : 'het begin van de shift'}</option>`).join('')}${[0, 5, 10, 15, 30, 60].includes(st.clock_in_early_minutes) ? '' : `<option value="${st.clock_in_early_minutes}" selected>${st.clock_in_early_minutes} minuten voor de shift</option>`}</select></div>
           <div class="field wide"><label>Tijdzone</label>
             <div class="copybox"><code>${esc(st.timezone || 'Niet ingesteld')}</code>${deviceTz && deviceTz !== st.timezone ? `<button type="button" class="sm" id="st-tz">${esc(deviceTz)} gebruiken</button>` : ''}</div>
             <span class="help">Vaste shiften worden in deze tijdzone aangemaakt.</span></div>
@@ -1807,7 +2220,7 @@ async function viewTeam(el, current) {
       renderView();
     }).catch(e => { err.textContent = e.message; });
   });
-  $$('[data-person]', el).forEach(b => b.addEventListener('click', () => personModal(staff.find(p => p.id === b.dataset.person))));
+  $$('[data-person]', el).forEach(b => b.addEventListener('click', () => { location.hash = `team/${b.dataset.person}`; }));
   const tzBtn = $('#st-tz', el);
   if (tzBtn) tzBtn.addEventListener('click', () => busy(tzBtn, async () => {
     await rpc('mgr_set_timezone', { p_tz: deviceTz });
@@ -1823,6 +2236,7 @@ async function viewTeam(el, current) {
         p_business_name: $('#st-biz', sf).value, p_drop_cutoff_hours: Number($('#st-cut', sf).value),
         p_grace_minutes: Number($('#st-grace', sf).value), p_currency: $('#st-cur', sf).value,
       });
+      await rpc('mgr_save_clock_rules', { p_require_shift: $('#st-req', sf).checked, p_early_minutes: Number($('#st-early', sf).value) });
       await refreshMe();
       toast('Instellingen opgeslagen.');
       renderShell();
@@ -1830,43 +2244,315 @@ async function viewTeam(el, current) {
   });
 }
 
-function personModal(p) {
-  const self = p.id === S.me.id;
-  modal.open(`
-    <h2 id="modal-title">${esc(p.name)} wijzigen</h2>
-    ${p.locked ? '<p class="hint bad">Geblokkeerd na te veel verkeerde pincodes. Stel een nieuwe pincode in om te deblokkeren.</p>' : ''}
-    <form id="pm-form" novalidate>
+/* ---------------------------------------------------- manager: one person */
+
+async function viewMember(el, current) {
+  const id = S.memberId;
+  const [r] = await Promise.all([rpc('mgr_get_staff', { p_id: id }), loadStaff()]);
+  if (!current()) return;
+  const p = r.person, pr = r.profile, xp = r.xp, self = p.id === S.me.id, first = p.name.split(' ')[0];
+  el.innerHTML = `
+    <div class="view-head"><div class="hello">
+      ${personPic(p, 'xl')}
+      <div><button class="link back" id="back">‹ Team</button><h1>${esc(p.name)}</h1>
+        <p class="lvl-line">${levelPill(xp)} <span>${esc(levelTitle(xp.level))}</span> <span class="muted">· ${p.role === 'manager' ? 'Verantwoordelijke' : 'Medewerker'}${p.active ? '' : ' · Inactief'}</span></p></div>
+    </div></div>
+    ${p.locked ? '<p class="hint bad">Geblokkeerd na te veel verkeerde pincodes. Stel hieronder een nieuwe pincode in om te deblokkeren.</p>' : ''}
+    <div class="grid-2">
+      <section class="card">
+        <h2>Werk en loon</h2>
+        <form id="pm-form" novalidate>
+          <div class="form-grid" style="margin-top:12px">
+            <div class="field wide"><label for="pm-name">Naam</label><input id="pm-name" maxlength="60" value="${esc(p.name)}" required><span class="help">Hiermee meldt ${esc(first)} zich aan.</span></div>
+            <div class="field"><label for="pm-pin">Nieuwe pincode</label><input id="pm-pin" class="pin-input" inputmode="numeric" pattern="[0-9]*" maxlength="8" placeholder="Leeg laten om te behouden"></div>
+            <div class="field"><label for="pm-rate">Uurloon (€)</label><input id="pm-rate" type="number" min="0" step="0.01" inputmode="decimal" value="${p.hourly_rate ?? ''}"></div>
+            <div class="field"><label for="pm-type">Statuut</label><select id="pm-type">${contractOptions(p.contract_type)}</select></div>
+            <div class="field"><label for="pm-pid">Werknemersnummer (Securex)</label><input id="pm-pid" maxlength="30" autocomplete="off" value="${esc(p.payroll_id || '')}"></div>
+            <div class="field"><label for="pm-start">In dienst sinds</label><input id="pm-start" data-k="start_date" inputmode="numeric" placeholder="dd/mm/jjjj" maxlength="10" value="${esc(isoToDMY(pr.start_date))}"></div>
+            <div class="field"><label for="pm-role">Rol</label><select id="pm-role"><option value="staff">Medewerker</option><option value="manager" ${p.role === 'manager' ? 'selected' : ''}>Verantwoordelijke</option></select></div>
+            <div class="field wide"><label class="check"><input type="checkbox" id="pm-active" ${p.active ? 'checked' : ''} ${self ? 'disabled' : ''}> Actief</label>
+              <span class="help">${self ? 'Je kan jezelf niet op inactief zetten.' : 'Inactieve mensen kunnen zich niet aanmelden en hun toekomstige shiften komen weer open te staan. Hun uren blijven bewaard.'}</span></div>
+          </div>
+          <p class="form-error" id="pm-err"></p>
+          <div class="form-actions"><button type="submit" class="primary">Opslaan</button></div>
+        </form>
+      </section>
+      <section class="card member-hero">
+        <div class="member-pic">${p.avatar ? Avatar.render(p.avatar) : `<span class="hero-empty">${Avatar.render(Avatar.DEFAULT)}</span>`}</div>
+        <div class="hero-main">
+          <h2 class="hero-level">Level ${xp.level} <span>· ${esc(levelTitle(xp.level))}</span></h2>
+          ${xpBar(xp)}
+          <dl class="kv">
+            <dt>Uren gewerkt</dt><dd>${fmt.hours(xp.minutes)} uur</dd>
+            <dt>Keer gewerkt</dt><dd>${xp.entries}</dd>
+            <dt>Op tijd begonnen</dt><dd>${xp.entries ? Math.round(xp.on_time / xp.entries * 100) + '%' : '—'}</dd>
+            <dt>Gestart in de app</dt><dd>${fmtDate(p.created_at.slice(0, 10))}</dd>
+          </dl>
+          ${p.avatar ? '' : `<p class="muted small">${esc(first)} heeft nog geen avatar gemaakt.</p>`}
+        </div>
+      </section>
+    </div>
+    <section class="card">
+      <div class="card-head"><h2>Persoonlijke gegevens</h2><button class="sm" id="from-slip">Invullen vanuit een loonfiche</button></div>
+      <p class="muted small" style="margin-top:6px">${esc(first)} kan deze gegevens ook zelf invullen bij Profiel. Alleen die persoon en de verantwoordelijken zien ze.</p>
+      <form id="pf-form" novalidate><div class="form-grid" style="margin-top:12px">${profileFields('mf', pr)}</div>
+        <p class="form-error" id="pf-err"></p><div class="form-actions"><button type="submit" class="primary">Gegevens opslaan</button></div></form>
+    </section>
+    <div class="grid-2">
+      <section class="card">
+        <h2>Contracten</h2>
+        ${contractRows(r.contracts, true)}
+        <details class="addbox" id="ct-box" style="margin-top:12px"><summary><span class="btn sm when-closed">+ Contract toevoegen</span></summary>
+          <form id="ct-form" novalidate>
+            <div class="form-grid">
+              <div class="field wide"><label for="ct-title">Naam</label><input id="ct-title" maxlength="80" placeholder="bv. Studentenovereenkomst 2026"></div>
+              <div class="field"><label for="ct-start">Begint op</label><input id="ct-start" inputmode="numeric" placeholder="dd/mm/jjjj" maxlength="10"></div>
+              <div class="field"><label for="ct-end">Eindigt op</label><input id="ct-end" inputmode="numeric" placeholder="dd/mm/jjjj (optioneel)" maxlength="10"></div>
+              <div class="field wide"><label>Bestand</label><div class="copybox"><code id="ct-name">Nog geen bestand gekozen</code><button type="button" class="sm" id="ct-pick">Kies een bestand</button></div>
+                <span class="help">Pdf of foto, tot 4 MB. ${esc(first)} kan het downloaden bij Profiel.</span></div>
+            </div>
+            <input type="file" id="ct-file" accept="application/pdf,image/png,image/jpeg" hidden>
+            <p class="form-error" id="ct-err"></p>
+            <div class="form-actions"><button type="button" id="ct-cancel">Annuleren</button><button type="submit" class="primary">Contract toevoegen</button></div>
+          </form>
+        </details>
+      </section>
+      <section class="card">
+        <div class="card-head"><h2>Loonfiches</h2><button class="sm primary" id="slip-up">Loonfiche uploaden</button></div>
+        ${r.payslips.length ? `<div class="rows">${r.payslips.map(x => `
+          <div class="row"><div class="row-main"><span class="row-title">${fmt.month(new Date(x.month + 'T00:00'))}</span>
+            <span class="row-sub">${x.net_pay != null ? `Netto ${fmt.money(x.net_pay)}${x.gross_pay != null ? ` · bruto ${fmt.money(x.gross_pay)}` : ''} · ` : ''}${esc(x.file_name)}</span></div>
+            <div class="row-actions"><button class="sm" data-slip-get="${x.id}">Downloaden</button></div></div>`).join('')}</div>`
+          : '<p class="empty">Nog geen loonfiches.</p>'}
+        <p class="muted small" style="margin-top:10px">De app leest de maand en de bedragen uit de loonfiche en vult ontbrekende gegevens aan. Jij kijkt het na voor het bewaard wordt.</p>
+      </section>
+    </div>
+    <input type="file" id="slip-file" accept="application/pdf,image/png,image/jpeg" hidden>`;
+
+  $('#back', el).addEventListener('click', () => { location.hash = 'team'; });
+  const pm = $('#pm-form', el);
+  pm.addEventListener('submit', async ev => {
+    ev.preventDefault();
+    const err = $('#pm-err', el); err.textContent = '';
+    const pin = $('#pm-pin', pm).value.trim(), rate = $('#pm-rate', pm).value, start = parseDMY($('#pm-start', pm).value);
+    if (pin && !/^\d{4,8}$/.test(pin)) { err.textContent = 'De pincode moet 4 tot 8 cijfers hebben.'; return; }
+    if (start == null) { err.textContent = 'Vul de datum van indiensttreding in als dd/mm/jjjj, bv. 01/09/2026.'; return; }
+    await busy($('button[type=submit]', pm), async () => {
+      await rpc('mgr_save_staff', {
+        p_id: p.id, p_name: $('#pm-name', pm).value, p_pin: pin || null, p_role: $('#pm-role', pm).value,
+        p_hourly_rate: rate === '' ? null : Number(rate), p_active: self ? true : $('#pm-active', pm).checked,
+      });
+      await rpc('mgr_save_staff_payroll', { p_id: p.id, p_contract_type: $('#pm-type', pm).value || null, p_payroll_id: $('#pm-pid', pm).value.trim() });
+      await rpc('mgr_save_profile', { p_id: p.id, p_profile: { start_date: start } });
+      toast(pin ? `Opgeslagen. Nieuwe pincode: ${pin}` : 'Opgeslagen.');
+      await loadStaff(true);
+      if (self) { await refreshMe(); renderShell(); } else renderView();
+    }).catch(e => { err.textContent = e.message; });
+  });
+  const pf = $('#pf-form', el);
+  pf.addEventListener('submit', async ev => {
+    ev.preventDefault();
+    const err = $('#pf-err', el); err.textContent = '';
+    const r2 = readProfile(pf);
+    if (r2.error) { err.textContent = r2.error; r2.field.focus(); return; }
+    await busy($('button[type=submit]', pf), async () => {
+      await rpc('mgr_save_profile', { p_id: p.id, p_profile: r2.values });
+      toast('Gegevens opgeslagen.');
+      await loadStaff(true);
+      renderView();
+    }).catch(e => { err.textContent = e.message; });
+  });
+
+  // contracts
+  const box = $('#ct-box', el), ctFile = $('#ct-file', el);
+  let chosen = null;
+  $('#ct-pick', el).addEventListener('click', () => { ctFile.value = ''; ctFile.click(); });
+  ctFile.addEventListener('change', () => {
+    chosen = ctFile.files[0] || null;
+    $('#ct-name', el).textContent = chosen ? `${chosen.name} · ${fmtSize(chosen.size)}` : 'Nog geen bestand gekozen';
+    if (chosen && !$('#ct-title', el).value.trim()) $('#ct-title', el).value = chosen.name.replace(/\.[a-z0-9]+$/i, '').replace(/[_-]+/g, ' ');
+  });
+  $('#ct-cancel', el).addEventListener('click', () => { box.open = false; });
+  $('#ct-form', el).addEventListener('submit', async ev => {
+    ev.preventDefault();
+    const err = $('#ct-err', el); err.textContent = '';
+    const a = parseDMY($('#ct-start', el).value), b = parseDMY($('#ct-end', el).value);
+    if (a == null || b == null) { err.textContent = 'Vul de datums in als dd/mm/jjjj, bv. 01/09/2026.'; return; }
+    if (a && b && b < a) { err.textContent = 'De einddatum moet na de begindatum liggen.'; return; }
+    const type = fileType(chosen);
+    if (!chosen) { err.textContent = 'Kies het bestand van het contract.'; return; }
+    if (!type) { err.textContent = 'Upload een pdf-, png- of jpg-bestand.'; return; }
+    if (chosen.size > 4 * 1024 * 1024) { err.textContent = 'Dat bestand is groter dan 4 MB. Bewaar het als een kleinere pdf en probeer opnieuw.'; return; }
+    await busy($('button[type=submit]', ev.target), async () => {
+      await rpc('mgr_upload_contract', {
+        p_staff_id: p.id, p_title: $('#ct-title', el).value, p_starts_on: a || null, p_ends_on: b || null,
+        p_file_name: chosen.name, p_content_type: type, p_data: await readAsBase64(chosen),
+      });
+      toast(`Contract toegevoegd. ${first} kan het downloaden bij Profiel.`);
+      renderView();
+    }).catch(e => { err.textContent = e.message; });
+  });
+  $$('[data-contract]', el).forEach(b => b.addEventListener('click', () => downloadContract(b.dataset.contract, b)));
+  $$('[data-contract-rm]', el).forEach(b => b.addEventListener('click', async () => {
+    const ok = await modal.confirm({ title: `“${b.dataset.title}” verwijderen?`, body: `${esc(first)} kan dit contract dan niet meer downloaden.`, ok: 'Contract verwijderen', danger: true });
+    if (!ok) return;
+    busy(null, async () => { await rpc('mgr_remove_contract', { p_id: b.dataset.contractRm }); toast('Contract verwijderd.'); renderView(); }).catch(() => {});
+  }));
+
+  // payslips: both buttons read the file and show what was found
+  const slipFile = $('#slip-file', el);
+  const pick = () => { slipFile.value = ''; slipFile.click(); };
+  $('#slip-up', el).addEventListener('click', pick);
+  $('#from-slip', el).addEventListener('click', pick);
+  slipFile.addEventListener('change', () => { if (slipFile.files.length) payslipImport([...slipFile.files], { staffId: p.id }); });
+  $$('[data-slip-get]', el).forEach(b => b.addEventListener('click', () => downloadPayslip(b.dataset.slipGet, b)));
+}
+
+const fileType = f => f ? (f.type || (/\.pdf$/i.test(f.name) ? 'application/pdf' : '')).replace(/^image\/jpg$/, 'image/jpeg') : '';
+const okFileType = t => ['application/pdf', 'image/png', 'image/jpeg'].includes(t);
+
+/* -------------------------------------- payslips: read, check and save */
+
+// What can be copied from a payslip into someone's details: [key, label, where]
+const SLIP_FIELDS = [
+  ['national_id', 'Rijksregisternummer', 'profile'], ['birth_date', 'Geboortedatum', 'profile'], ['iban', 'IBAN', 'profile'],
+  ['street', 'Straat en huisnummer', 'profile'], ['postcode', 'Postcode', 'profile'], ['city', 'Gemeente', 'profile'],
+  ['start_date', 'In dienst sinds', 'profile'], ['payroll_id', 'Werknemersnummer', 'payroll'], ['contract_type', 'Statuut', 'payroll'],
+  ['hourly_rate', 'Uurloon', 'rate'],
+];
+function slipValue(k, v) {
+  if (v == null || v === '') return '';
+  if (k === 'contract_type') return CONTRACTS[v] || v;
+  if (k === 'hourly_rate') return fmt.money(v);
+  return showValue(k, v);
+}
+function currentValue(k, person) {
+  if (!person) return null;
+  if (k === 'payroll_id' || k === 'contract_type' || k === 'hourly_rate') return person.person[k];
+  return person.profile[k];
+}
+
+async function payslipImport(files, { staffId = null, month = null } = {}) {
+  for (const f of files) {
+    if (!okFileType(fileType(f))) { toast(`${f.name}: upload een pdf-, png- of jpg-bestand.`, 'error'); return; }
+    if (f.size > 4 * 1024 * 1024) { toast(`${f.name} is groter dan 4 MB. Bewaar het als een kleinere pdf en probeer opnieuw.`, 'error'); return; }
+  }
+  modal.open(`<h2 id="modal-title">${files.length > 1 ? `${files.length} loonfiches lezen…` : 'Loonfiche lezen…'}</h2><p>Even geduld, de app zoekt wie, welke maand en welke bedragen erop staan.</p><div class="spinner" aria-hidden="true"></div>`);
+  let items;
+  try {
+    const staff = await loadStaff(true);
+    const fallback = month || toDateInput(addMonths(startOfMonth(now()), -1));
+    items = [];
+    for (const file of files) {
+      const info = await Loonfiche.read(file, staff);
+      items.push({ file, info, staffId: staffId || info.staff_id || '', month: info.month || fallback, person: null });
+    }
+    const people = {};
+    await Promise.all([...new Set(items.map(it => it.staffId).filter(Boolean))].map(async id => { people[id] = await rpc('mgr_get_staff', { p_id: id }); }));
+    items.forEach(it => { it.person = people[it.staffId] || null; });
+  } catch (e) {
+    modal.close();
+    if (e.code !== 'auth') toast(e.message, 'error');
+    return;
+  }
+  slipReview(items, { fixed: !!staffId });
+}
+
+function slipReview(items, { fixed }) {
+  const t = now();
+  const months = [];
+  for (let i = -18; i <= 1; i++) months.push(toDateInput(addMonths(startOfMonth(t), i)));
+  const itemHTML = (it, i) => {
+    const info = it.info, person = it.person;
+    if (!months.includes(it.month)) months.push(it.month);
+    const name = person ? person.person.name : '';
+    const replaces = person && person.payslips.some(x => x.month === it.month);
+    const found = SLIP_FIELDS.filter(([k]) => info[k] != null && info[k] !== '').map(([k, label]) => {
+      const cur = currentValue(k, person), same = cur != null && String(cur) === String(info[k]);
+      if (same) return '';
+      const empty = cur == null || cur === '';
+      return `<label class="check found-row"><input type="checkbox" data-take="${k}" ${person && empty ? 'checked' : ''} ${person ? '' : 'disabled'}>
+        <span><b>${label}</b> ${esc(slipValue(k, info[k]))} <span class="muted small">· ${empty ? 'nu leeg' : `nu ${esc(slipValue(k, cur))}`}</span></span></label>`;
+    }).join('');
+    return `<section class="slip-item" data-i="${i}">
+      <div class="slip-head"><strong>${esc(it.file.name)}</strong>
+        ${info.text_found ? `<span class="pill on">Gelezen${info.staff_id ? '' : ', naam niet gevonden'}</span>` : `<span class="pill warn">${/pdf/.test(fileType(it.file)) ? 'Geen tekst gevonden' : 'Foto'}: kies zelf</span>`}</div>
       <div class="form-grid">
-        <div class="field wide"><label for="pm-name">Naam</label><input id="pm-name" maxlength="60" value="${esc(p.name)}" required></div>
-        <div class="field"><label for="pm-pin">Nieuwe pincode</label><input id="pm-pin" class="pin-input" inputmode="numeric" pattern="[0-9]*" maxlength="8" placeholder="Leeg laten om te behouden"></div>
-        <div class="field"><label for="pm-rate">Uurloon (€)</label><input id="pm-rate" type="number" min="0" step="0.01" inputmode="decimal" value="${p.hourly_rate ?? ''}"></div>
-        <div class="field"><label for="pm-type">Statuut</label><select id="pm-type">${contractOptions(p.contract_type)}</select></div>
-        <div class="field"><label for="pm-pid">Werknemersnummer (Securex)</label><input id="pm-pid" maxlength="30" autocomplete="off" value="${esc(p.payroll_id || '')}"><span class="help">Staat op de loonfiche. Nodig voor het bestand voor Securex.</span></div>
-        <div class="field wide"><label for="pm-role">Rol</label><select id="pm-role"><option value="staff">Medewerker</option><option value="manager" ${p.role === 'manager' ? 'selected' : ''}>Verantwoordelijke</option></select></div>
-        <div class="field wide"><label class="check"><input type="checkbox" id="pm-active" ${p.active ? 'checked' : ''} ${self ? 'disabled' : ''}> Actief</label>
-          <span class="help">${self ? 'Je kan jezelf niet op inactief zetten.' : 'Inactieve mensen kunnen zich niet aanmelden en hun toekomstige shiften komen weer open te staan. Hun uren blijven bewaard.'}</span></div>
+        <div class="field"><label for="si-staff-${i}">Voor wie</label><select id="si-staff-${i}" data-f="staff" ${fixed ? 'disabled' : ''}>
+          <option value="">Kies een persoon</option>${(S.staff || []).filter(p => p.active || p.id === it.staffId).map(p => `<option value="${p.id}" ${p.id === it.staffId ? 'selected' : ''}>${esc(p.name)}</option>`).join('')}</select></div>
+        <div class="field"><label for="si-month-${i}">Maand</label><select id="si-month-${i}" data-f="month">${months.sort().reverse().map(m => `<option value="${m}" ${m === it.month ? 'selected' : ''}>${fmt.month(new Date(m + 'T00:00'))}</option>`).join('')}</select></div>
+        <div class="field"><label for="si-gross-${i}">Bruto</label><input id="si-gross-${i}" data-f="gross" inputmode="decimal" placeholder="Niet gevonden" value="${moneyInput(info.gross_pay)}"></div>
+        <div class="field"><label for="si-net-${i}">Netto, uitbetaald</label><input id="si-net-${i}" data-f="net" inputmode="decimal" placeholder="Niet gevonden" value="${moneyInput(info.net_pay)}"></div>
       </div>
-      <p class="form-error" id="pm-err"></p>
-      <div class="form-actions"><button type="button" data-close>Annuleren</button><button type="submit" class="primary">Opslaan</button></div>
-    </form>`, d => {
-    $('#pm-form', d).addEventListener('submit', async ev => {
-      ev.preventDefault();
-      const err = $('#pm-err', d);
-      const pin = $('#pm-pin', d).value.trim(), rate = $('#pm-rate', d).value;
-      if (pin && !/^\d{4,8}$/.test(pin)) { err.textContent = 'De pincode moet 4 tot 8 cijfers hebben.'; return; }
-      const btn = $('button[type=submit]', d);
-      btn.disabled = true;
-      try {
-        await rpc('mgr_save_staff', {
-          p_id: p.id, p_name: $('#pm-name', d).value, p_pin: pin || null, p_role: $('#pm-role', d).value,
-          p_hourly_rate: rate === '' ? null : Number(rate), p_active: self ? true : $('#pm-active', d).checked,
-        });
-        await rpc('mgr_save_staff_payroll', { p_id: p.id, p_contract_type: $('#pm-type', d).value || null, p_payroll_id: $('#pm-pid', d).value.trim() });
-        modal.close();
-        toast(pin ? `Opgeslagen. Nieuwe pincode: ${pin}` : 'Opgeslagen.');
-        if (self) { await refreshMe(); renderShell(); } else renderView();
-      } catch (e) { err.textContent = e.message; btn.disabled = false; }
-    });
+      ${replaces ? `<p class="hint warn" style="margin-top:10px">${esc(name)} heeft al een loonfiche voor ${fmt.month(new Date(it.month + 'T00:00'))}. Die wordt vervangen.</p>` : ''}
+      ${found ? `<div class="found"><p class="section-label">Gevonden op de loonfiche${person ? '' : ' (kies eerst voor wie)'}</p>${found}
+        ${info.other_ibans ? `<p class="muted small">Er staan nog andere rekeningnummers op (${info.other_ibans.map(fmtIban).join(', ')}), wellicht van de werkgever.</p>` : ''}</div>` : ''}
+    </section>`;
+  };
+  const d = modal.open(`
+    <h2 id="modal-title">${items.length > 1 ? `${items.length} loonfiches nakijken` : 'Loonfiche nakijken'}</h2>
+    <p>Kijk na of het klopt. De loonfiche wordt bewaard bij de juiste persoon en maand, die ze dan downloadt bij Mijn uren. Aangevinkte gegevens worden overgenomen in het profiel.</p>
+    <div id="slip-items">${items.map(itemHTML).join('')}</div>
+    <p class="form-error" id="si-err"></p>
+    <div class="form-actions"><button type="button" data-close>Annuleren</button><button type="button" class="primary" id="si-save">${items.length > 1 ? 'Alles opslaan' : 'Opslaan'}</button></div>`, null, { wide: true });
+  const wrap = $('#slip-items', d);
+  const redraw = i => { const sec = $(`.slip-item[data-i="${i}"]`, wrap); sec.outerHTML = itemHTML(items[i], i); };
+  wrap.addEventListener('change', async ev => {
+    const sec = ev.target.closest('.slip-item'), i = Number(sec.dataset.i), it = items[i], f = ev.target.dataset.f;
+    if (f === 'staff') {
+      it.staffId = ev.target.value;
+      it.person = it.staffId ? await rpc('mgr_get_staff', { p_id: it.staffId }).catch(() => null) : null;
+      redraw(i);
+    } else if (f === 'month') { it.month = ev.target.value; redraw(i); }
+  });
+  wrap.addEventListener('input', ev => {
+    const sec = ev.target.closest('.slip-item'), it = items[Number(sec.dataset.i)];
+    if (ev.target.dataset.f === 'gross') it.gross = ev.target.value;
+    if (ev.target.dataset.f === 'net') it.net = ev.target.value;
+  });
+  const save = $('#si-save', d);
+  save.addEventListener('click', async () => {
+    const err = $('#si-err', d); err.textContent = '';
+    const plan = [];
+    for (const [i, it] of items.entries()) {
+      if (it.done) continue;
+      const sec = $(`.slip-item[data-i="${i}"]`, wrap);
+      if (!it.staffId || !it.person) { err.textContent = `Kies voor wie ${it.file.name} is.`; return; }
+      const gross = parseMoney($('[data-f=gross]', sec).value), net = parseMoney($('[data-f=net]', sec).value);
+      if (Number.isNaN(gross) || Number.isNaN(net)) { err.textContent = `Controleer de bedragen bij ${it.file.name}, bv. 1.234,56.`; return; }
+      plan.push({ it, i, gross, net, take: $$('[data-take]:checked', sec).map(x => x.dataset.take) });
+    }
+    save.disabled = true; save.textContent = 'Bezig…';
+    let done = 0;
+    try {
+      for (const { it, i, gross, net, take } of plan) {
+        const up = await rpc('mgr_upload_payslip', { p_staff_id: it.staffId, p_month: it.month, p_file_name: it.file.name, p_content_type: fileType(it.file), p_data: await readAsBase64(it.file) });
+        if (gross != null || net != null) await rpc('mgr_set_payslip_amounts', { p_id: up.id, p_gross: gross, p_net: net });
+        const prof = {};
+        for (const k of take) if (SLIP_FIELDS.find(f => f[0] === k)[2] === 'profile') prof[k] = it.info[k];
+        if (Object.keys(prof).length) await rpc('mgr_save_profile', { p_id: it.staffId, p_profile: prof });
+        const pp = it.person.person;
+        if (take.includes('payroll_id') || take.includes('contract_type')) {
+          await rpc('mgr_save_staff_payroll', { p_id: it.staffId, p_contract_type: take.includes('contract_type') ? it.info.contract_type : pp.contract_type, p_payroll_id: take.includes('payroll_id') ? it.info.payroll_id : (pp.payroll_id || '') });
+        }
+        if (take.includes('hourly_rate')) {
+          await rpc('mgr_save_staff', { p_id: it.staffId, p_name: pp.name, p_pin: null, p_role: pp.role, p_hourly_rate: it.info.hourly_rate, p_active: pp.active });
+        }
+        it.done = true; done++;
+        const sec = $(`.slip-item[data-i="${i}"]`, wrap);
+        sec.classList.add('is-done');
+        $('.slip-head', sec).insertAdjacentHTML('beforeend', '<span class="pill on">Opgeslagen</span>');
+      }
+    } catch (e) {
+      err.textContent = `${done ? `${plural(done, 'loonfiche', 'loonfiches')} opgeslagen, daarna ging het mis: ` : ''}${e.message}`;
+      save.disabled = false; save.textContent = 'Opnieuw proberen';
+      return;
+    }
+    modal.close();
+    const names = [...new Set(items.map(x => x.person.person.name))];
+    toast(`${plural(items.length, 'loonfiche', 'loonfiches')} opgeslagen voor ${names.join(', ')}.`);
+    await loadStaff(true);
+    renderView();
   });
 }
 

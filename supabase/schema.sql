@@ -20,7 +20,9 @@ create table public.settings (
   grace_minutes     int  not null default 5  check (grace_minutes between 0 and 120),
   currency          text not null default '€',
   timezone          text, -- set from the manager's device; standard shifts use it
-  wage_codes        jsonb not null default '{}'::jsonb -- Securex wage codes per contract type and kind of hours
+  wage_codes        jsonb not null default '{}'::jsonb, -- Securex wage codes per contract type and kind of hours
+  require_shift     boolean not null default true, -- staff can only check in during one of their shifts
+  clock_in_early_minutes int not null default 15 check (clock_in_early_minutes between 0 and 120)
 );
 insert into public.settings (id) values (1);
 
@@ -35,7 +37,20 @@ create table public.staff (
   locked_until    timestamptz,
   contract_type   text check (contract_type in ('student', 'flexi', 'extra', 'vast')),
   payroll_id      text check (length(payroll_id) <= 30), -- employee number at the social secretariat
-  created_at      timestamptz not null default now()
+  created_at      timestamptz not null default now(),
+  -- profile: the person fills it in, a manager can too; start_date only a manager
+  avatar          jsonb, -- the cartoon the person built (web/avatar.js); null shows initials
+  phone           text check (length(phone) <= 30),
+  email           text check (length(email) <= 120),
+  birth_date      date,
+  national_id     text check (national_id ~ '^[0-9]{11}$'), -- rijksregisternummer, digits only
+  iban            text check (length(iban) <= 34),
+  street          text check (length(street) <= 120),
+  postcode        text check (length(postcode) <= 10),
+  city            text check (length(city) <= 80),
+  emergency_name  text check (length(emergency_name) <= 80),
+  emergency_phone text check (length(emergency_phone) <= 30),
+  start_date      date -- in service since
 );
 create unique index staff_name_key on public.staff (lower(name));
 
@@ -335,10 +350,12 @@ declare v public.staff;
 begin
   v := app_private.current_staff(p_token);
   return json_build_object(
-    'me', json_build_object('id', v.id, 'name', v.name, 'role', v.role),
+    'me', json_build_object('id', v.id, 'name', v.name, 'role', v.role, 'avatar', v.avatar,
+                            'xp', app_private.xp_json(v.id)),
     'settings', (select json_build_object(
         'business_name', business_name, 'drop_cutoff_hours', drop_cutoff_hours,
         'grace_minutes', grace_minutes, 'currency', currency, 'timezone', timezone,
+        'require_shift', require_shift, 'clock_in_early_minutes', clock_in_early_minutes,
         'wage_codes', case when v.role = 'manager' then wage_codes end)
       from public.settings where id = 1),
     'open_entry', (select json_build_object('id', e.id, 'clock_in', e.clock_in, 'shift', app_private.shift_json(e.shift_id))
@@ -355,13 +372,38 @@ end $$;
 
 -- -------------------------------------------------------- check in / out
 
+-- Unless the rule is off, staff (not managers) can only check in during one of
+-- their shifts, or a few minutes before it starts.
 create function public.clock_in(p_token text) returns json
 language plpgsql security definer set search_path = public, extensions as $$
-declare v public.staff; v_id uuid;
+declare v public.staff; v_id uuid; v_shift uuid; st public.settings; nx public.shifts;
 begin
   v := app_private.current_staff(p_token);
+  if exists (select 1 from public.time_entries where staff_id = v.id and clock_out is null) then
+    raise exception using message = 'You''re already checked in.', errcode = 'P0001';
+  end if;
+  select * into st from public.settings where id = 1;
+  v_shift := app_private.match_shift(v.id, now());
+  if st.require_shift and v.role <> 'manager' then
+    select id into v_shift from public.shifts
+     where staff_id = v.id and cancelled_at is null and ends_at > now()
+       and starts_at <= now() + make_interval(mins => st.clock_in_early_minutes)
+     order by starts_at limit 1;
+    if v_shift is null then
+      select * into nx from public.shifts
+       where staff_id = v.id and cancelled_at is null and starts_at > now()
+         and starts_at < now() + interval '18 hours'
+       order by starts_at limit 1;
+      if found then
+        raise exception using errcode = 'P0001', message = format('Your shift starts at %s. You can check in from %s.',
+          to_char(nx.starts_at at time zone coalesce(st.timezone, 'UTC'), 'HH24:MI'),
+          to_char((nx.starts_at - make_interval(mins => st.clock_in_early_minutes)) at time zone coalesce(st.timezone, 'UTC'), 'HH24:MI'));
+      end if;
+      raise exception using message = 'You''re not on the schedule right now. Pick up a shift first, or ask your manager.', errcode = 'P0001';
+    end if;
+  end if;
   insert into public.time_entries (staff_id, shift_id, clock_in)
-  values (v.id, app_private.match_shift(v.id, now()), now())
+  values (v.id, v_shift, now())
   returning id into v_id;
   return json_build_object('ok', true, 'id', v_id);
 exception when unique_violation then
@@ -562,7 +604,12 @@ begin
   return coalesce((select json_agg(json_build_object(
       'id', id, 'name', name, 'role', role, 'hourly_rate', hourly_rate, 'active', active,
       'locked', coalesce(locked_until > now(), false), 'created_at', created_at,
-      'contract_type', contract_type, 'payroll_id', payroll_id)
+      'contract_type', contract_type, 'payroll_id', payroll_id,
+      'avatar', avatar, 'xp', app_private.xp_json(id), 'start_date', start_date, 'national_id', national_id,
+      'missing', array_remove(array[
+        case when national_id is null then 'national_id' end, case when iban is null then 'iban' end,
+        case when birth_date is null then 'birth_date' end, case when street is null or city is null then 'address' end,
+        case when phone is null then 'phone' end], null))
       order by active desc, lower(name))
     from public.staff), '[]'::json);
 end $$;
@@ -1013,7 +1060,9 @@ create table public.payslips (
   data         bytea,
   uploaded_by  uuid references public.staff (id),
   created_at   timestamptz not null default now(),
-  archived_at  timestamptz -- replaced or removed; the file itself is cleared
+  archived_at  timestamptz, -- replaced or removed; the file itself is cleared
+  gross_pay    numeric(10, 2), -- read from the payslip when it is uploaded
+  net_pay      numeric(10, 2)
 );
 create unique index payslips_one_per_month on public.payslips (staff_id, month) where archived_at is null;
 create index payslips_staff_idx on public.payslips (staff_id, month);
@@ -1033,20 +1082,7 @@ begin
   if p_month is null then
     raise exception using message = 'Pick a month.', errcode = 'P0001';
   end if;
-  if p_content_type is null or p_content_type not in ('application/pdf', 'image/png', 'image/jpeg') then
-    raise exception using message = 'Upload a PDF, PNG or JPG file.', errcode = 'P0001';
-  end if;
-  begin
-    v_bytes := decode(p_data, 'base64');
-  exception when others then
-    raise exception using message = 'That file couldn''t be read. Try again.', errcode = 'P0001';
-  end;
-  if v_bytes is null or length(v_bytes) = 0 then
-    raise exception using message = 'That file is empty.', errcode = 'P0001';
-  end if;
-  if length(v_bytes) > 4 * 1024 * 1024 then
-    raise exception using message = 'That file is over 4 MB. Save it as a smaller PDF and try again.', errcode = 'P0001';
-  end if;
+  v_bytes := app_private.check_file(p_content_type, p_data);
   update public.payslips set archived_at = now(), data = null
    where staff_id = p_staff_id and month = date_trunc('month', p_month)::date and archived_at is null;
   insert into public.payslips (staff_id, month, file_name, content_type, size_bytes, data, uploaded_by)
@@ -1073,7 +1109,7 @@ begin
   v := app_private.current_manager(p_token);
   return coalesce((select json_agg(json_build_object(
       'id', p.id, 'staff_id', p.staff_id, 'file_name', p.file_name, 'size_bytes', p.size_bytes,
-      'created_at', p.created_at))
+      'created_at', p.created_at, 'gross_pay', p.gross_pay, 'net_pay', p.net_pay))
     from public.payslips p
    where p.month = date_trunc('month', p_month)::date and p.archived_at is null), '[]'::json);
 end $$;
@@ -1085,7 +1121,7 @@ begin
   v := app_private.current_staff(p_token);
   return coalesce((select json_agg(json_build_object(
       'id', p.id, 'month', p.month, 'file_name', p.file_name, 'size_bytes', p.size_bytes,
-      'created_at', p.created_at) order by p.month desc)
+      'created_at', p.created_at, 'gross_pay', p.gross_pay, 'net_pay', p.net_pay) order by p.month desc)
     from public.payslips p where p.staff_id = v.id and p.archived_at is null), '[]'::json);
 end $$;
 
@@ -1191,5 +1227,351 @@ begin
   end if;
   insert into public.payroll_exports (month, rows, minutes, created_by)
   values (date_trunc('month', p_month)::date, greatest(coalesce(p_rows, 0), 0), greatest(coalesce(p_minutes, 0), 0), v.id);
+  return json_build_object('ok', true);
+end $$;
+
+-- ---------------------------------------------- profiles, contracts, levels
+
+-- Employment contracts the manager uploads; the person can download their own.
+create table public.contracts (
+  id           uuid primary key default gen_random_uuid(),
+  staff_id     uuid not null references public.staff (id),
+  title        text not null,
+  starts_on    date,
+  ends_on      date, -- null = open-ended
+  file_name    text not null,
+  content_type text not null,
+  size_bytes   int  not null,
+  data         bytea,
+  uploaded_by  uuid references public.staff (id),
+  created_at   timestamptz not null default now(),
+  archived_at  timestamptz, -- removed; the file itself is cleared
+  check (ends_on is null or starts_on is null or ends_on >= starts_on)
+);
+create index contracts_staff_idx on public.contracts (staff_id);
+create index contracts_uploaded_by_idx on public.contracts (uploaded_by);
+alter table public.contracts enable row level security;
+revoke all on public.contracts from anon, authenticated;
+
+-- An uploaded PDF or picture, checked and decoded.
+create function app_private.check_file(p_content_type text, p_data text) returns bytea
+language plpgsql immutable set search_path = public as $$
+declare v_bytes bytea;
+begin
+  if p_content_type is null or p_content_type not in ('application/pdf', 'image/png', 'image/jpeg') then
+    raise exception using message = 'Upload a PDF, PNG or JPG file.', errcode = 'P0001';
+  end if;
+  begin
+    v_bytes := decode(p_data, 'base64');
+  exception when others then
+    raise exception using message = 'That file couldn''t be read. Try again.', errcode = 'P0001';
+  end;
+  if v_bytes is null or length(v_bytes) = 0 then
+    raise exception using message = 'That file is empty.', errcode = 'P0001';
+  end if;
+  if length(v_bytes) > 4 * 1024 * 1024 then
+    raise exception using message = 'That file is over 4 MB. Save it as a smaller PDF and try again.', errcode = 'P0001';
+  end if;
+  return v_bytes;
+end $$;
+
+-- Belgian national register number (also BIS numbers): 9 digits and a mod-97 check,
+-- with a 2 in front for people born from 2000 on.
+create function app_private.valid_national_id(p text) returns boolean
+language sql immutable set search_path = public as $$
+  select coalesce(p ~ '^[0-9]{11}$' and (
+    97 - (left(p, 9)::bigint % 97) = right(p, 2)::int
+    or 97 - (('2' || left(p, 9))::bigint % 97) = right(p, 2)::int), false)
+$$;
+
+create function app_private.valid_iban(p text) returns boolean
+language plpgsql immutable set search_path = public as $$
+declare s text := substr(p, 5) || left(p, 4); r int := 0; c text;
+begin
+  for i in 1..length(s) loop
+    c := substr(s, i, 1);
+    r := ((r::text || case when c ~ '[0-9]' then c else (ascii(c) - 55)::text end)::bigint % 97)::int;
+  end loop;
+  return r = 1;
+end $$;
+
+-- Saves the keys present in p; keys left out keep their value. start_date only from a manager.
+create function app_private.save_profile(p_staff uuid, p jsonb, p_manager boolean) returns void
+language plpgsql set search_path = public as $$
+declare
+  v_email text := nullif(lower(app_private.clean_text(p ->> 'email', 120)), '');
+  v_nid   text := nullif(regexp_replace(coalesce(p ->> 'national_id', ''), '\D', '', 'g'), '');
+  v_iban  text := nullif(upper(regexp_replace(coalesce(p ->> 'iban', ''), '\s', '', 'g')), '');
+  v_birth date; v_start date;
+begin
+  if jsonb_typeof(p) is distinct from 'object' then
+    raise exception using message = 'These details couldn''t be saved.', errcode = 'P0001';
+  end if;
+  if v_email is not null and v_email !~ '^[^@\s]+@[^@\s]+\.[^@\s]+$' then
+    raise exception using message = 'Check the email address.', errcode = 'P0001';
+  end if;
+  if v_nid is not null and not app_private.valid_national_id(v_nid) then
+    raise exception using message = 'Check the national register number (11 digits).', errcode = 'P0001';
+  end if;
+  if v_iban is not null and (v_iban !~ '^[A-Z]{2}[0-9]{2}[A-Z0-9]{8,30}$' or not app_private.valid_iban(v_iban)) then
+    raise exception using message = 'Check the IBAN account number.', errcode = 'P0001';
+  end if;
+  begin
+    v_birth := nullif(p ->> 'birth_date', '')::date;
+    v_start := nullif(p ->> 'start_date', '')::date;
+  exception when others then
+    raise exception using message = 'Check the dates.', errcode = 'P0001';
+  end;
+  if v_birth is not null and (v_birth < date '1900-01-01' or v_birth > current_date) then
+    raise exception using message = 'Check the date of birth.', errcode = 'P0001';
+  end if;
+  update public.staff set
+    phone           = case when p ? 'phone' then nullif(app_private.clean_text(p ->> 'phone', 30), '') else phone end,
+    email           = case when p ? 'email' then v_email else email end,
+    birth_date      = case when p ? 'birth_date' then v_birth else birth_date end,
+    national_id     = case when p ? 'national_id' then v_nid else national_id end,
+    iban            = case when p ? 'iban' then v_iban else iban end,
+    street          = case when p ? 'street' then nullif(app_private.clean_text(p ->> 'street', 120), '') else street end,
+    postcode        = case when p ? 'postcode' then nullif(app_private.clean_text(p ->> 'postcode', 10), '') else postcode end,
+    city            = case when p ? 'city' then nullif(app_private.clean_text(p ->> 'city', 80), '') else city end,
+    emergency_name  = case when p ? 'emergency_name' then nullif(app_private.clean_text(p ->> 'emergency_name', 80), '') else emergency_name end,
+    emergency_phone = case when p ? 'emergency_phone' then nullif(app_private.clean_text(p ->> 'emergency_phone', 30), '') else emergency_phone end,
+    start_date      = case when p_manager and p ? 'start_date' then v_start else start_date end
+   where id = p_staff;
+  if not found then
+    raise exception using message = 'That person wasn''t found.', errcode = 'P0001';
+  end if;
+end $$;
+
+create function app_private.profile_json(s public.staff) returns json
+language sql stable set search_path = public as $$
+  select json_build_object(
+    'phone', s.phone, 'email', s.email, 'birth_date', s.birth_date, 'national_id', s.national_id,
+    'iban', s.iban, 'street', s.street, 'postcode', s.postcode, 'city', s.city,
+    'emergency_name', s.emergency_name, 'emergency_phone', s.emergency_phone, 'start_date', s.start_date)
+$$;
+
+create function app_private.contracts_json(p_staff uuid) returns json
+language sql stable set search_path = public as $$
+  select coalesce(json_agg(json_build_object(
+      'id', c.id, 'title', c.title, 'starts_on', c.starts_on, 'ends_on', c.ends_on,
+      'file_name', c.file_name, 'size_bytes', c.size_bytes, 'created_at', c.created_at)
+      order by c.starts_on desc nulls last, c.created_at desc), '[]'::json)
+    from public.contracts c where c.staff_id = p_staff and c.archived_at is null
+$$;
+
+-- Levels: level L needs 25 * (L - 1) * (L + 2) XP, so 100, 250, 450, 700, ...
+create function app_private.level_for(p_xp int) returns int
+language sql immutable set search_path = public as $$
+  select greatest(1, floor((sqrt(9 + 4 * greatest(coalesce(p_xp, 0), 0) / 25.0) - 1) / 2))::int
+$$;
+
+-- XP: 10 per hour worked, +5 for starting a shift on time, +5 for staying until it ends.
+create function app_private.xp_json(p_staff uuid) returns json
+language sql stable set search_path = public as $$
+  with g as (select make_interval(mins => grace_minutes) as grace from public.settings where id = 1),
+  e as (
+    select extract(epoch from (e.clock_out - e.clock_in)) / 60 as mins,
+           coalesce(e.clock_in <= sh.starts_at + g.grace, false) as on_time,
+           coalesce(e.clock_out >= sh.ends_at - g.grace, false) as stayed
+      from public.time_entries e
+      left join public.shifts sh on sh.id = e.shift_id
+      cross join g
+     where e.staff_id = p_staff and e.deleted_at is null and e.clock_out is not null),
+  x as (
+    select coalesce(floor(sum(mins) / 6), 0)::int
+             + 5 * (count(*) filter (where on_time))::int + 5 * (count(*) filter (where stayed))::int as xp,
+           coalesce(round(sum(mins)), 0)::int as minutes, count(*)::int as entries,
+           (count(*) filter (where on_time))::int as on_time, (count(*) filter (where stayed))::int as stayed
+      from e)
+  select json_build_object('xp', xp, 'level', app_private.level_for(xp), 'minutes', minutes,
+                           'entries', entries, 'on_time', on_time, 'stayed', stayed)
+    from x
+$$;
+
+-- Checks an avatar before it is saved. Items above the person's level are refused,
+-- unless they already wear them. Keep the levels in sync with UNLOCKS in web/avatar.js.
+create function app_private.clean_avatar(p_avatar jsonb, p_level int, p_current jsonb) returns jsonb
+language plpgsql immutable set search_path = public as $$
+declare k text; val jsonb; v_need int;
+  v_locks constant jsonb := '{"hat": {"cap": 2, "bandana": 5, "chef": 8, "crown": 10},
+    "shoes": {"bunny": 3, "monster": 7}, "outer": {"puffer": 4}, "glasses": {"sun": 6},
+    "top": {"chef": 8}, "hairColor": {"pink": 9, "blue": 9, "lilac": 9}}';
+begin
+  if p_avatar is null or jsonb_typeof(p_avatar) = 'null' then
+    return null;
+  end if;
+  if jsonb_typeof(p_avatar) <> 'object' or length(p_avatar::text) > 2000 then
+    raise exception using message = 'That avatar couldn''t be saved.', errcode = 'P0001';
+  end if;
+  for k, val in select key, value from jsonb_each(p_avatar) loop
+    if length(k) > 20 or jsonb_typeof(val) not in ('string', 'boolean', 'number') or length(val::text) > 24 then
+      raise exception using message = 'That avatar couldn''t be saved.', errcode = 'P0001';
+    end if;
+    v_need := (v_locks -> k ->> (val #>> '{}'))::int;
+    if v_need is not null and coalesce(p_level, 1) < v_need
+       and (p_current is null or p_current -> k is distinct from val) then
+      raise exception using errcode = 'P0001', message = format('That item unlocks at level %s.', v_need);
+    end if;
+  end loop;
+  return p_avatar;
+end $$;
+
+revoke all on all functions in schema app_private from public, anon, authenticated;
+
+create function public.my_profile(p_token text) returns json
+language plpgsql stable security definer set search_path = public, extensions as $$
+declare v public.staff;
+begin
+  v := app_private.current_staff(p_token);
+  return json_build_object(
+    'profile', app_private.profile_json(v),
+    'work', json_build_object('role', v.role, 'hourly_rate', v.hourly_rate, 'contract_type', v.contract_type,
+                              'payroll_id', v.payroll_id, 'start_date', v.start_date, 'created_at', v.created_at),
+    'avatar', v.avatar,
+    'xp', app_private.xp_json(v.id),
+    'contracts', app_private.contracts_json(v.id));
+end $$;
+
+create function public.save_my_profile(p_token text, p_profile jsonb) returns json
+language plpgsql security definer set search_path = public, extensions as $$
+declare v public.staff;
+begin
+  v := app_private.current_staff(p_token);
+  perform app_private.save_profile(v.id, p_profile, false);
+  return json_build_object('ok', true);
+end $$;
+
+create function public.save_my_avatar(p_token text, p_avatar jsonb) returns json
+language plpgsql security definer set search_path = public, extensions as $$
+declare v public.staff;
+begin
+  v := app_private.current_staff(p_token);
+  update public.staff
+     set avatar = app_private.clean_avatar(p_avatar, (app_private.xp_json(v.id) ->> 'level')::int, v.avatar)
+   where id = v.id;
+  return json_build_object('ok', true);
+end $$;
+
+create function public.change_my_pin(p_token text, p_old text, p_new text) returns json
+language plpgsql security definer set search_path = public, extensions as $$
+declare v public.staff;
+begin
+  v := app_private.current_staff(p_token);
+  if v.pin_hash <> extensions.crypt(coalesce(p_old, ''), v.pin_hash) then
+    raise exception using message = 'Your current PIN isn''t right.', errcode = 'P0001';
+  end if;
+  perform app_private.check_pin(p_new);
+  update public.staff set pin_hash = extensions.crypt(p_new, extensions.gen_salt('bf', 8)) where id = v.id;
+  -- sign out the person's other devices
+  update public.sessions set expires_at = now()
+   where staff_id = v.id and token_hash <> app_private.hash_token(coalesce(p_token, ''));
+  return json_build_object('ok', true);
+end $$;
+
+create function public.get_contract(p_token text, p_id uuid) returns json
+language plpgsql stable security definer set search_path = public, extensions as $$
+declare v public.staff; c public.contracts;
+begin
+  v := app_private.current_staff(p_token);
+  select * into c from public.contracts
+   where id = p_id and archived_at is null and (staff_id = v.id or v.role = 'manager');
+  if not found then
+    raise exception using message = 'That contract isn''t available.', errcode = 'P0001';
+  end if;
+  return json_build_object('file_name', c.file_name, 'content_type', c.content_type,
+                           'data', encode(c.data, 'base64'));
+end $$;
+
+create function public.mgr_get_staff(p_token text, p_id uuid) returns json
+language plpgsql stable security definer set search_path = public, extensions as $$
+declare v public.staff; s public.staff;
+begin
+  v := app_private.current_manager(p_token);
+  select * into s from public.staff where id = p_id;
+  if not found then
+    raise exception using message = 'That person wasn''t found.', errcode = 'P0001';
+  end if;
+  return json_build_object(
+    'person', json_build_object('id', s.id, 'name', s.name, 'role', s.role, 'hourly_rate', s.hourly_rate,
+      'active', s.active, 'locked', coalesce(s.locked_until > now(), false), 'contract_type', s.contract_type,
+      'payroll_id', s.payroll_id, 'created_at', s.created_at, 'avatar', s.avatar),
+    'profile', app_private.profile_json(s),
+    'xp', app_private.xp_json(s.id),
+    'contracts', app_private.contracts_json(s.id),
+    'payslips', coalesce((select json_agg(json_build_object(
+        'id', p.id, 'month', p.month, 'file_name', p.file_name, 'size_bytes', p.size_bytes,
+        'gross_pay', p.gross_pay, 'net_pay', p.net_pay, 'created_at', p.created_at) order by p.month desc)
+      from public.payslips p where p.staff_id = s.id and p.archived_at is null), '[]'::json));
+end $$;
+
+create function public.mgr_save_profile(p_token text, p_id uuid, p_profile jsonb) returns json
+language plpgsql security definer set search_path = public, extensions as $$
+declare v public.staff;
+begin
+  v := app_private.current_manager(p_token);
+  perform app_private.save_profile(p_id, p_profile, true);
+  return json_build_object('ok', true);
+end $$;
+
+create function public.mgr_upload_contract(p_token text, p_staff_id uuid, p_title text, p_starts_on date,
+                                           p_ends_on date, p_file_name text, p_content_type text,
+                                           p_data text) returns json
+language plpgsql security definer set search_path = public, extensions as $$
+declare v public.staff; v_bytes bytea; v_id uuid;
+begin
+  v := app_private.current_manager(p_token);
+  if not exists (select 1 from public.staff where id = p_staff_id) then
+    raise exception using message = 'Pick a team member.', errcode = 'P0001';
+  end if;
+  if p_ends_on < p_starts_on then
+    raise exception using message = 'The end date must be after the start date.', errcode = 'P0001';
+  end if;
+  v_bytes := app_private.check_file(p_content_type, p_data);
+  insert into public.contracts (staff_id, title, starts_on, ends_on, file_name, content_type, size_bytes, data, uploaded_by)
+  values (p_staff_id, coalesce(nullif(app_private.clean_text(p_title, 80), ''), 'Contract'), p_starts_on, p_ends_on,
+          coalesce(nullif(app_private.clean_text(p_file_name, 120), ''), 'contract.pdf'),
+          p_content_type, length(v_bytes), v_bytes, v.id)
+  returning id into v_id;
+  return json_build_object('ok', true, 'id', v_id);
+end $$;
+
+create function public.mgr_remove_contract(p_token text, p_id uuid) returns json
+language plpgsql security definer set search_path = public, extensions as $$
+declare v public.staff;
+begin
+  v := app_private.current_manager(p_token);
+  update public.contracts set archived_at = now(), data = null where id = p_id and archived_at is null;
+  return json_build_object('ok', true);
+end $$;
+
+-- Gross and net pay as read from the payslip, so the person sees what was paid.
+create function public.mgr_set_payslip_amounts(p_token text, p_id uuid, p_gross numeric, p_net numeric) returns json
+language plpgsql security definer set search_path = public, extensions as $$
+declare v public.staff;
+begin
+  v := app_private.current_manager(p_token);
+  if p_gross not between 0 and 100000 or p_net not between 0 and 100000 then
+    raise exception using message = 'Check the amounts.', errcode = 'P0001';
+  end if;
+  update public.payslips set gross_pay = round(p_gross, 2), net_pay = round(p_net, 2)
+   where id = p_id and archived_at is null;
+  if not found then
+    raise exception using message = 'That payslip isn''t available.', errcode = 'P0001';
+  end if;
+  return json_build_object('ok', true);
+end $$;
+
+create function public.mgr_save_clock_rules(p_token text, p_require_shift boolean, p_early_minutes int) returns json
+language plpgsql security definer set search_path = public, extensions as $$
+declare v public.staff;
+begin
+  v := app_private.current_manager(p_token);
+  if p_early_minutes is null or p_early_minutes not between 0 and 120 then
+    raise exception using message = 'Early check-in must be between 0 and 120 minutes.', errcode = 'P0001';
+  end if;
+  update public.settings
+     set require_shift = coalesce(p_require_shift, true), clock_in_early_minutes = p_early_minutes
+   where id = 1;
   return json_build_object('ok', true);
 end $$;
