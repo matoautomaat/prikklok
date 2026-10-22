@@ -1184,7 +1184,14 @@ create table public.payslips (
   archived_at  timestamptz, -- replaced or removed; the file itself is cleared
   gross_pay    numeric(10, 2), -- read from the payslip when it is uploaded
   net_pay      numeric(10, 2),
-  source_ref   text -- eg 'officient:45262' when fetched from Officient
+  source_ref   text, -- eg 'officient:45262' when fetched from Officient
+  -- The month's figures, from all its calculations (payslip_calcs). The net is
+  -- everything paid for the month, also on an earlier calculation.
+  days_worked  numeric(6, 1),
+  hours_worked numeric(7, 2),
+  hours_leave  numeric(7, 2), -- paid but not worked: public holidays, guaranteed pay when ill
+  ecocheques   numeric(10, 2),
+  read_at      timestamptz -- when the file was read for those figures
 );
 create unique index payslips_source_ref_key on public.payslips (source_ref) where source_ref is not null;
 create unique index payslips_one_per_month on public.payslips (staff_id, month) where archived_at is null;
@@ -1192,6 +1199,37 @@ create index payslips_staff_idx on public.payslips (staff_id, month);
 create index payslips_uploaded_by_idx on public.payslips (uploaded_by);
 alter table public.payslips enable row level security;
 revoke all on public.payslips from anon, authenticated;
+
+-- Every calculation read from a payslip PDF. A month can have more than one:
+-- a recalculation that replaces an earlier one ("Overdracht vorige betaling"),
+-- a correction afterwards (only the differences), or ecocheques. The month's
+-- figures on the payslip come from all of them. A document that is not the
+-- month's payslip itself keeps its file here.
+create table public.payslip_calcs (
+  id               uuid primary key default gen_random_uuid(),
+  staff_id         uuid not null references public.staff (id),
+  month            date not null check (extract(day from month) = 1),
+  payslip_id       uuid references public.payslips (id), -- read from that payslip's own file
+  source_ref       text, -- the Officient document, when it is not on the payslip
+  file_name        text,
+  size_bytes       int,
+  data             bytea,
+  kind             text not null, -- as on the payslip: 'Bezoldiging', 'Ecocheque'; 'Onbekend' when unreadable
+  calculated_at    timestamp, -- "Laatste berekening"
+  days_worked      numeric(6, 1),
+  hours_worked     numeric(7, 2),
+  hours_leave      numeric(7, 2),
+  gross_pay        numeric(10, 2),
+  net_paid         numeric(10, 2), -- "Netto te betalen" on this calculation
+  previous_payment numeric(10, 2), -- paid on an earlier calculation, which this one replaces
+  ecocheques       numeric(10, 2),
+  created_at       timestamptz not null default now()
+);
+create unique index payslip_calcs_source_ref_key on public.payslip_calcs (source_ref) where source_ref is not null;
+create unique index payslip_calcs_payslip_key on public.payslip_calcs (payslip_id) where payslip_id is not null;
+create index payslip_calcs_staff_idx on public.payslip_calcs (staff_id, month);
+alter table public.payslip_calcs enable row level security;
+revoke all on public.payslip_calcs from anon, authenticated;
 
 create function public.mgr_upload_payslip(p_token text, p_staff_id uuid, p_month date, p_file_name text,
                                           p_content_type text, p_data text) returns json
@@ -1251,16 +1289,68 @@ end $$;
 -- The file itself: for the person it belongs to, or a manager.
 create function public.get_payslip(p_token text, p_id uuid) returns json
 language plpgsql stable security definer set search_path = public, extensions as $$
-declare v public.staff; p public.payslips;
+declare v public.staff; p public.payslips; c public.payslip_calcs;
 begin
   v := app_private.current_staff(p_token);
   select * into p from public.payslips
    where id = p_id and archived_at is null and (staff_id = v.id or v.role = 'manager');
+  if found then
+    return json_build_object('file_name', p.file_name, 'content_type', p.content_type,
+                             'data', encode(p.data, 'base64'));
+  end if;
+  -- another document of a month: a recalculation, a correction, ecocheques
+  select * into c from public.payslip_calcs
+   where id = p_id and data is not null and (staff_id = v.id or v.role = 'manager');
   if not found then
     raise exception using message = 'That payslip isn''t available.', errcode = 'P0001';
   end if;
-  return json_build_object('file_name', p.file_name, 'content_type', p.content_type,
-                           'data', encode(p.data, 'base64'));
+  return json_build_object('file_name', coalesce(c.file_name, 'loonbrief.pdf'), 'content_type', 'application/pdf',
+                           'data', encode(c.data, 'base64'));
+end $$;
+
+-- Per month, newest first: what the payslip says (hours, gross, net and its
+-- documents) and the hours clocked in the app.
+create function app_private.pay_months_json(p_staff uuid) returns json
+language sql stable set search_path = public as $$
+  with clocked as (
+    select date_trunc('month', e.clock_in at time zone (select coalesce(timezone, 'UTC') from public.settings where id = 1))::date as month,
+           round(sum(extract(epoch from (e.clock_out - e.clock_in))) / 60) as minutes
+      from public.time_entries e
+     where e.staff_id = p_staff and e.deleted_at is null and e.clock_out is not null
+     group by 1),
+  slips as (select * from public.payslips where staff_id = p_staff and archived_at is null),
+  months as (select month from clocked union select month from slips)
+  select coalesce(json_agg(json_build_object(
+      'month', m.month,
+      'clocked_minutes', c.minutes,
+      'payslip', case when s.id is not null then json_build_object(
+          'id', s.id, 'file_name', s.file_name, 'size_bytes', s.size_bytes, 'read', s.read_at is not null,
+          'days_worked', s.days_worked, 'hours_worked', s.hours_worked, 'hours_leave', s.hours_leave,
+          'gross_pay', s.gross_pay, 'net_pay', s.net_pay, 'ecocheques', s.ecocheques) end,
+      'documents', (select coalesce(json_agg(json_build_object(
+                        'id', coalesce(pc.payslip_id, pc.id), 'kind', pc.kind, 'calculated_at', pc.calculated_at,
+                        'replaces', coalesce(pc.previous_payment, 0) <> 0, 'payslip', pc.payslip_id is not null)
+                      order by pc.calculated_at nulls first, pc.created_at), '[]'::json)
+                      from public.payslip_calcs pc
+                     where pc.staff_id = p_staff and pc.month = m.month and (pc.data is not null or pc.payslip_id = s.id)))
+    order by m.month desc), '[]'::json)
+    from months m left join clocked c on c.month = m.month left join slips s on s.month = m.month
+$$;
+
+create function public.my_pay_months(p_token text) returns json
+language plpgsql stable security definer set search_path = public, extensions as $$
+declare v public.staff;
+begin
+  v := app_private.current_staff(p_token);
+  return app_private.pay_months_json(v.id);
+end $$;
+
+create function public.mgr_pay_months(p_token text, p_staff_id uuid) returns json
+language plpgsql stable security definer set search_path = public, extensions as $$
+declare v public.staff;
+begin
+  v := app_private.current_manager(p_token);
+  return app_private.pay_months_json(p_staff_id);
 end $$;
 
 -- Hours and estimated pay per month, for every month with check-ins.
@@ -2045,47 +2135,200 @@ begin
                            'new_link', s.officient_id is distinct from v_oid);
 end $$;
 
--- Before downloading: 'exists' when fetched before, 'already' when that month
--- has a payslip uploaded by hand (now marked as the same one), 'exists' too
--- when the month already has one from another Officient file (a second copy),
--- else null.
+-- Before downloading: 'exists' when this Officient document is in the app
+-- already, as a month's payslip or as one of its other documents.
 create function app_private.officient_payslip_known(p_ref text, p_staff uuid, p_month date) returns text
 language plpgsql set search_path = public as $$
 begin
-  if exists (select 1 from public.payslips where source_ref = p_ref) then
-    return 'exists';
-  end if;
-  update public.payslips set source_ref = p_ref
-   where staff_id = p_staff and month = date_trunc('month', p_month)::date and archived_at is null and source_ref is null;
-  if found then
-    return 'already';
-  end if;
-  if exists (select 1 from public.payslips
-              where staff_id = p_staff and month = date_trunc('month', p_month)::date and archived_at is null) then
+  if exists (select 1 from public.payslips where source_ref = p_ref)
+     or exists (select 1 from public.payslip_calcs where source_ref = p_ref) then
     return 'exists';
   end if;
   return null;
 end $$;
 
--- A payslip PDF fetched from Officient. One uploaded by hand for the same
--- month stays; it is only marked as the same document.
+-- For a caller that did not read the file: as officient_add_doc.
 create function app_private.officient_add_payslip(p_staff uuid, p_month date, p_file_name text, p_data text, p_ref text) returns text
 language plpgsql set search_path = public, extensions as $$
-declare v_bytes bytea;
 begin
-  if exists (select 1 from public.payslips where source_ref = p_ref) then
+  return app_private.officient_add_doc(p_staff, p_month, p_file_name, p_data, p_ref, null);
+end $$;
+
+-- A number from what was read off a payslip; null when missing or out of range.
+create function app_private.json_num(p jsonb, p_key text) returns numeric
+language plpgsql immutable set search_path = public as $$
+declare v numeric;
+begin
+  v := (p ->> p_key)::numeric;
+  return case when abs(v) < 99999 then v end;
+exception when others then
+  return null;
+end $$;
+
+-- Stores what was read from one payslip document (p_info, from payslip.js in
+-- the Edge Function). p_data only for a document that is not the payslip itself.
+create function app_private.payslip_calc_add(p_staff uuid, p_month date, p_payslip_id uuid, p_ref text,
+                                             p_file_name text, p_data bytea, p_info jsonb) returns uuid
+language plpgsql set search_path = public as $$
+declare v_id uuid; v_at timestamp;
+begin
+  begin v_at := nullif(p_info ->> 'calculated_at', '')::timestamp; exception when others then v_at := null; end;
+  insert into public.payslip_calcs (staff_id, month, payslip_id, source_ref, file_name, size_bytes, data, kind, calculated_at,
+                                    days_worked, hours_worked, hours_leave, gross_pay, net_paid, previous_payment, ecocheques)
+  values (p_staff, p_month, p_payslip_id, p_ref, p_file_name, length(p_data), p_data,
+          coalesce(nullif(app_private.clean_text(p_info ->> 'kind', 40), ''), 'Onbekend'), v_at,
+          app_private.json_num(p_info, 'days_worked'), app_private.json_num(p_info, 'hours_worked'),
+          app_private.json_num(p_info, 'hours_leave'), app_private.json_num(p_info, 'gross_pay'),
+          app_private.json_num(p_info, 'net_paid'), app_private.json_num(p_info, 'previous_payment'),
+          app_private.json_num(p_info, 'ecocheques'))
+  returning id into v_id;
+  return v_id;
+end $$;
+
+-- The calculation already in the app with the same person, month, kind and
+-- calculation time: the same document, fetched or uploaded twice.
+create function app_private.payslip_calc_same(p_staff uuid, p_month date, p_info jsonb) returns uuid
+language plpgsql stable set search_path = public as $$
+declare v_at timestamp;
+begin
+  begin v_at := nullif(p_info ->> 'calculated_at', '')::timestamp; exception when others then return null; end;
+  if v_at is null then
+    return null;
+  end if;
+  return (select id from public.payslip_calcs
+           where staff_id = p_staff and month = p_month and calculated_at = v_at
+             and kind = coalesce(nullif(app_private.clean_text(p_info ->> 'kind', 40), ''), 'Onbekend')
+           order by payslip_id is null desc limit 1);
+end $$;
+
+-- The month's figures on its payslip, from its calculations in the order they
+-- were made. A recalculation that deducts an earlier payment covers the whole
+-- month and replaces what came before; a correction adds its differences.
+create function app_private.payslip_month_totals(p_staff uuid, p_month date) returns void
+language plpgsql set search_path = public as $$
+declare c record; v_wage boolean := false; v_days numeric := 0; v_hours numeric := 0; v_leave numeric := 0;
+        v_gross numeric := 0; v_net numeric := 0; v_eco numeric;
+begin
+  for c in select pc.* from public.payslip_calcs pc
+            where pc.staff_id = p_staff and pc.month = p_month
+              and (pc.payslip_id is null or exists (select 1 from public.payslips p where p.id = pc.payslip_id and p.archived_at is null))
+            order by pc.calculated_at nulls first, pc.created_at
+  loop
+    if c.kind = 'Bezoldiging' then
+      if coalesce(c.previous_payment, 0) <> 0 then
+        v_days := 0; v_hours := 0; v_leave := 0; v_gross := 0; v_net := c.previous_payment;
+      end if;
+      v_wage := true;
+      v_days := v_days + coalesce(c.days_worked, 0);
+      v_hours := v_hours + coalesce(c.hours_worked, 0);
+      v_leave := v_leave + coalesce(c.hours_leave, 0);
+      v_gross := v_gross + coalesce(c.gross_pay, 0);
+      v_net := v_net + coalesce(c.net_paid, 0);
+    elsif c.ecocheques is not null then
+      v_eco := coalesce(v_eco, 0) + c.ecocheques;
+    end if;
+  end loop;
+  update public.payslips
+     set days_worked = case when v_wage then v_days end,
+         hours_worked = case when v_wage then v_hours end,
+         hours_leave = case when v_wage then v_leave end,
+         gross_pay = case when v_wage then v_gross else gross_pay end,
+         net_pay = case when v_wage then v_net else net_pay end,
+         ecocheques = v_eco
+   where staff_id = p_staff and month = p_month and archived_at is null;
+end $$;
+
+-- A payslip document from Officient, with what was read from it (p_info; null
+-- when it could not be read). The first document of a month becomes the
+-- month's payslip; more for that month (a recalculation, a correction,
+-- ecocheques) are kept with it. The same calculation uploaded by hand is
+-- recognised and only marked as this document.
+create function app_private.officient_add_doc(p_staff uuid, p_month date, p_file_name text, p_data text, p_ref text, p_info jsonb)
+returns text language plpgsql set search_path = public, extensions as $$
+declare v_month date := date_trunc('month', p_month)::date; v_bytes bytea; v_name text; v_same uuid; c public.payslip_calcs; v_slip uuid;
+begin
+  if exists (select 1 from public.payslips where source_ref = p_ref)
+     or exists (select 1 from public.payslip_calcs where source_ref = p_ref) then
     return 'exists';
   end if;
-  if exists (select 1 from public.payslips where staff_id = p_staff and month = p_month and archived_at is null) then
-    update public.payslips set source_ref = p_ref
-     where staff_id = p_staff and month = p_month and archived_at is null and source_ref is null;
+  v_same := app_private.payslip_calc_same(p_staff, v_month, p_info);
+  if v_same is not null then
+    select * into c from public.payslip_calcs where id = v_same;
+    update public.payslips set source_ref = p_ref where id = c.payslip_id and source_ref is null;
+    if not found then
+      update public.payslip_calcs set source_ref = p_ref where id = c.id and source_ref is null;
+    end if;
     return 'already';
   end if;
   v_bytes := app_private.check_file('application/pdf', p_data);
-  insert into public.payslips (staff_id, month, file_name, content_type, size_bytes, data, source_ref)
-  values (p_staff, date_trunc('month', p_month)::date, coalesce(nullif(app_private.clean_text(p_file_name, 120), ''), 'loonbrief.pdf'),
-          'application/pdf', length(v_bytes), v_bytes, p_ref);
-  return 'added';
+  v_name := coalesce(nullif(app_private.clean_text(p_file_name, 120), ''), 'loonbrief.pdf');
+  if not exists (select 1 from public.payslips where staff_id = p_staff and month = v_month and archived_at is null) then
+    insert into public.payslips (staff_id, month, file_name, content_type, size_bytes, data, source_ref, read_at)
+    values (p_staff, v_month, v_name, 'application/pdf', length(v_bytes), v_bytes, p_ref, now())
+    returning id into v_slip;
+    if p_info is not null then
+      perform app_private.payslip_calc_add(p_staff, v_month, v_slip, null, null, null, p_info);
+    end if;
+    perform app_private.payslip_month_totals(p_staff, v_month);
+    return 'added';
+  end if;
+  perform app_private.payslip_calc_add(p_staff, v_month, null, p_ref, v_name, v_bytes, coalesce(p_info, '{}'::jsonb));
+  perform app_private.payslip_month_totals(p_staff, v_month);
+  return 'extra';
+end $$;
+
+-- Who may have payslip files read: a manager, or the nightly job.
+create function app_private.payslip_read_allowed(p_token text, p_cron text) returns boolean
+language plpgsql stable set search_path = public as $$
+begin
+  if p_cron is not null then
+    if p_cron is distinct from (select cron_secret from app_private.officient where id = 1) then
+      raise exception using message = 'Not allowed.', errcode = '28000';
+    end if;
+    return true;
+  end if;
+  perform app_private.current_manager(p_token);
+  return true;
+end $$;
+
+-- Payslips whose file has not been read yet, a few at a time.
+create function app_private.payslips_to_read(p_limit int) returns json
+language sql stable set search_path = public as $$
+  select coalesce(json_agg(json_build_object('id', p.id, 'data', encode(p.data, 'base64'))), '[]'::json)
+    from (select id, data from public.payslips
+           where archived_at is null and read_at is null and data is not null
+           order by month desc limit greatest(1, least(p_limit, 20))) p
+$$;
+
+-- What was read from a payslip's own file (p_info null when it could not be
+-- read). When Officient brought the same calculation as another document
+-- first, that one now belongs to this payslip.
+create function app_private.payslip_read(p_id uuid, p_info jsonb) returns text
+language plpgsql set search_path = public as $$
+declare p public.payslips; c public.payslip_calcs; v_same uuid;
+begin
+  select * into p from public.payslips where id = p_id and archived_at is null and read_at is null for update;
+  if not found then
+    return 'gone';
+  end if;
+  update public.payslips set read_at = now() where id = p_id;
+  if p_info is null then
+    return 'unreadable';
+  end if;
+  v_same := app_private.payslip_calc_same(p.staff_id, p.month, p_info);
+  if v_same is null then
+    perform app_private.payslip_calc_add(p.staff_id, p.month, p_id, null, null, null, p_info);
+  else
+    select * into c from public.payslip_calcs where id = v_same;
+    update public.payslip_calcs set payslip_id = p_id, data = null, file_name = null, size_bytes = null,
+                                    source_ref = case when p.source_ref is null then null else source_ref end
+     where id = c.id;
+    if p.source_ref is null and c.source_ref is not null then
+      update public.payslips set source_ref = c.source_ref where id = p_id;
+    end if;
+  end if;
+  perform app_private.payslip_month_totals(p.staff_id, p.month);
+  return 'read';
 end $$;
 
 revoke all on all functions in schema app_private from public, anon, authenticated;

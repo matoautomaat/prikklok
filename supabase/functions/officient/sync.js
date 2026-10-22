@@ -1,7 +1,8 @@
 // Reads Exact Officient (the HR platform behind Securex) for the Prikklok app:
-// people, their wage and contract hours, and payslip PDFs. Shared by the
-// Edge Function (index.ts) and the local tests, so it only needs fetch and a
-// db(text, params) that returns the first row's "r" column.
+// people, their wage and contract hours, and payslip PDFs, and reads hours and
+// pay off those payslips. Shared by the Edge Function (index.ts) and the local
+// tests, so it only needs fetch, a db(text, params) that returns the first
+// row's "r" column, and readPayslip(bytes) from payslip.js.
 
 export const OFFICIENT_API = 'https://api.officient.io/1.0';
 // Officient marks payslips with the document type SalarySlip; files without a
@@ -9,8 +10,12 @@ export const OFFICIENT_API = 'https://api.officient.io/1.0';
 const PAYSLIP_TYPE = /salary ?slip|pay ?slip|loonbrie|loonfiche|fiche de paie|bulletin de paie/i;
 const PAYSLIP_NAME = /loonbrie|loonfiche|payslip|pay slip|fiche de paie|bulletin de paie/i;
 const MAX_DOWNLOADS = 60; // per run; the next night picks up the rest
+// Reading PDFs is the heavy part: an Edge Function gets 2 seconds of CPU per
+// request, so one run reads for about this long and leaves the rest for the next.
+const READ_BUDGET_MS = 900;
 
-export function makeOfficient({ db: query, fetch, api = OFFICIENT_API, wait = ms => new Promise(r => setTimeout(r, ms)) }) {
+export function makeOfficient({ db: query, fetch, readPayslip, api = OFFICIENT_API, wait = ms => new Promise(r => setTimeout(r, ms)),
+                                budget = READ_BUDGET_MS }) {
   // json from the database may come back as text, depending on the driver
   const db = async (text, params) => {
     const r = await query(text, params);
@@ -60,9 +65,30 @@ export function makeOfficient({ db: query, fetch, api = OFFICIENT_API, wait = ms
     return out;
   }
 
-  async function sync(access) {
+  // What a payslip says, or null when it can't be read. pdf.js may take over
+  // the bytes it is given, so it gets a copy.
+  async function read(job, bytes) {
+    const t = performance.now();
+    try { return await readPayslip(bytes.slice()); } catch { return null; } finally { job.spent += performance.now() - t; }
+  }
+
+  // Payslips not read yet (uploaded by hand, or from before the app read them).
+  async function readWaiting(job, report) {
+    for (;;) {
+      const batch = await db('select app_private.payslips_to_read($1) as r', [4]);
+      if (!Array.isArray(batch) || !batch.length) return;
+      for (const p of batch) {
+        if (job.spent >= budget) { report.more = true; return; }
+        const info = await read(job, fromBase64(p.data));
+        const res = await db('select app_private.payslip_read($1::uuid, $2::text::jsonb) as r', [p.id, info ? JSON.stringify(info) : null]);
+        if (res === 'read') report.read++;
+      }
+    }
+  }
+
+  async function sync(access, job) {
     const report = { at: new Date().toISOString(), people: 0, matched: 0, linked: 0, updated: [], unmatched: [],
-                     payslips: [], already: 0, no_month: 0, document_types: {}, more: false, skipped: 0, fields: {} };
+                     payslips: [], already: 0, no_month: 0, read: 0, document_types: {}, more: false, skipped: 0, fields: {} };
     let downloads = 0;
     // current records before archived ones, so a person's earlier employment
     // never takes the link or the details from the current one
@@ -93,32 +119,46 @@ export function makeOfficient({ db: query, fetch, api = OFFICIENT_API, wait = ms
         if (!slip || !/\.pdf$/i.test(d.filename || '')) continue;
         const ref = `officient:${d.id}`, month = monthOf(d);
         if (!month) { report.no_month++; continue; }
-        const known = await db('select app_private.officient_payslip_known($1, $2::uuid, $3::date) as r', [ref, r.staff_id, month]);
-        if (known === 'already') report.already++;
-        if (known) continue;
-        if (downloads >= MAX_DOWNLOADS) { report.more = true; continue; }
+        if (await db('select app_private.officient_payslip_known($1, $2::uuid, $3::date) as r', [ref, r.staff_id, month])) continue;
+        if (downloads >= MAX_DOWNLOADS || job.spent >= budget) { report.more = true; continue; }
         downloads++;
         const dl = await get(access, `/documents/${d.id}/download`);
         if (!dl || !dl.download_url) continue;
         const file = await fetch(dl.download_url);
         if (!file.ok) continue;
-        const data = toBase64(new Uint8Array(await file.arrayBuffer()));
-        const res = await db('select app_private.officient_add_payslip($1::uuid, $2::date, $3, $4, $5) as r',
-          [r.staff_id, month, d.filename, data, ref]);
-        if (res === 'added') report.payslips.push({ name: r.name, month, file: d.filename });
+        const bytes = new Uint8Array(await file.arrayBuffer());
+        const info = await read(job, bytes);
+        // the period printed on the payslip wins over the file name
+        const at = info?.month || month;
+        const res = await db('select app_private.officient_add_doc($1::uuid, $2::date, $3, $4, $5, $6::text::jsonb) as r',
+          [r.staff_id, at, d.filename, toBase64(bytes), ref, info ? JSON.stringify(info) : null]);
+        if (res === 'added' || res === 'extra') report.payslips.push({ name: r.name, month: at, file: d.filename });
         else if (res === 'already') report.already++;
       }
     }
+    await readWaiting(job, report);
     return report;
   }
 
   // action 'connect': right after the manager signed in at Officient (code, state);
-  // action 'sync': a manager pressing "Nu ophalen", or the nightly job (cron).
+  // action 'sync': a manager pressing "Nu ophalen", or the nightly job (cron);
+  // action 'read': read payslips uploaded by hand, right after the upload.
   async function run({ action, token: appToken, code, state, cron }) {
+    const job = { spent: 0 };
+    if (action === 'read') {
+      await db('select app_private.payslip_read_allowed($1, $2) as r', [cron ? null : appToken || '', cron || null]);
+      const report = { read: 0, more: false };
+      await readWaiting(job, report);
+      return { ok: true, ...report };
+    }
     const connect = action === 'connect';
     const cfg = await db('select app_private.officient_begin($1, $2, $3) as r',
       [cron ? null : appToken || '', cron || null, connect ? state || '' : null]);
-    if (cfg.skip) return { skipped: true };
+    if (cfg.skip) {
+      const report = { read: 0, more: false };
+      await readWaiting(job, report);
+      return { skipped: true, ...report };
+    }
     try {
       let t;
       if (connect) {
@@ -132,7 +172,7 @@ export function makeOfficient({ db: query, fetch, api = OFFICIENT_API, wait = ms
           await db('select app_private.officient_save_token($1, false) as r', [t.refresh_token]);
         }
       }
-      const report = await sync(t.access_token);
+      const report = await sync(t.access_token, job);
       await db('select app_private.officient_finish($1::text::jsonb, null) as r', [JSON.stringify(report)]);
       return { ok: true, report };
     } catch (e) {
@@ -161,6 +201,13 @@ export function monthOf(doc) {
     if (i >= 0) return `${year}-${String(i + 1).padStart(2, '0')}-01`;
   }
   return null;
+}
+
+function fromBase64(s) {
+  const bin = atob(s || '');
+  const out = new Uint8Array(bin.length);
+  for (let i = 0; i < bin.length; i++) out[i] = bin.charCodeAt(i);
+  return out;
 }
 
 function toBase64(bytes) {

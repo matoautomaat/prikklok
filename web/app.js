@@ -1625,6 +1625,110 @@ const fmtSize = n => n >= 1048576 ? `${num(n / 1048576, 1)} MB` : `${Math.max(1,
 const downloadPayslip = (id, btn) => downloadFile('get_payslip', id, btn);
 const downloadContract = (id, btn) => downloadFile('get_contract', id, btn);
 
+// Hours as on a payslip: 56 u, 32,5 u.
+const uren = h => `${Number(h).toLocaleString(LOCALE, { maximumFractionDigits: 2 })} u`;
+const hasFigures = p => p && (p.hours_worked != null || p.gross_pay != null || p.net_pay != null);
+
+// The month's documents: its payslip, and a recalculation, a correction or
+// ecocheques that came with it.
+function payDocs(pm) {
+  const docs = pm.documents.length ? pm.documents : pm.payslip ? [{ id: pm.payslip.id, kind: 'Bezoldiging', payslip: true }] : [];
+  if (pm.payslip && !docs.some(d => d.payslip)) docs.unshift({ id: pm.payslip.id, kind: 'Bezoldiging', payslip: true });
+  const label = d => d.kind === 'Ecocheque' ? 'Ecocheques'
+    : docs.length > 1 && d.calculated_at ? `Loonbrief ${fmt.short(d.calculated_at)}` : 'Loonbrief';
+  return docs.map(d => `<button class="sm" data-payslip="${d.id}" title="Downloaden">${esc(label(d))}</button>`).join('');
+}
+
+// What the month's payslip says, for the person themself on Mijn uren.
+function payslipCard(pm) {
+  if (!pm || !pm.payslip) return '';
+  const p = pm.payslip, name = fmt.monthName(new Date(pm.month + 'T00:00'));
+  if (!hasFigures(p)) return `
+    <section class="card pay-card">
+      <div class="card-head"><h2>Je loonbrief van ${name}</h2><div class="toolbar">${payDocs(pm)}</div></div>
+    </section>`;
+  const leave = Number(p.hours_leave);
+  return `
+    <section class="card pay-card">
+      <div class="card-head"><h2>Volgens je loonbrief van ${name}</h2><div class="toolbar">${payDocs(pm)}</div></div>
+      <div class="stats">
+        ${p.hours_worked != null ? `<div class="stat good"><span class="v">${uren(p.hours_worked)}</span><span class="k">Gewerkt${Number(p.days_worked) ? ` · ${plural(Number(p.days_worked), 'dag', 'dagen')}` : ''}</span></div>` : ''}
+        <div class="stat"><span class="v">${fmt.money(p.gross_pay || 0)}</span><span class="k">Bruto verdiend</span></div>
+        <div class="stat"><span class="v">${fmt.money(p.net_pay || 0)}</span><span class="k">Netto uitbetaald</span></div>
+        ${leave ? `<div class="stat"><span class="v">${uren(leave)}</span><span class="k">Betaald, niet gewerkt: feestdag of ziekte</span></div>` : ''}
+        ${p.ecocheques != null ? `<div class="stat"><span class="v">${fmt.money(p.ecocheques)}</span><span class="k">Ecocheques</span></div>` : ''}
+      </div>
+      ${pm.documents.length > 1 ? '<p class="muted small" style="margin-top:10px">Deze maand werd meer dan eens berekend. De cijfers tellen alles samen: wat eerder al betaald werd, staat bij het netto.</p>' : ''}
+    </section>`;
+}
+
+// Per month: hours and pay from the payslips next to the hours clocked in the
+// app, with a total per year: a table, and on a phone a list with the net
+// first. open: the month shown above (Mijn uren).
+function payMonthsTable(months, { open = null, clickable = false } = {}) {
+  const list = months.filter(x => x.payslip || x.clocked_minutes);
+  if (!list.length) return '';
+  const dash = '<span class="muted">—</span>';
+  const clockedH = mins => uren(Math.round(mins / 6) / 10);
+  const rows = [], items = [];
+  const years = new Map();
+  for (const x of list) years.set(x.month.slice(0, 4), [...(years.get(x.month.slice(0, 4)) || []), x]);
+  for (const [year, ms] of years) {
+    for (const x of ms) {
+      const p = hasFigures(x.payslip) ? x.payslip : null;
+      const v = {
+        name: fmt.month(new Date(x.month + 'T00:00')), docs: x.payslip ? `<div class="pay-docs">${payDocs(x)}</div>` : '',
+        hours: p && p.hours_worked != null ? uren(p.hours_worked) : null, gross: p ? fmt.money(p.gross_pay || 0) : null,
+        net: p ? fmt.money(p.net_pay || 0) : null, clocked: x.clocked_minutes ? clockedH(x.clocked_minutes) : null,
+      };
+      const attrs = `class="${clickable ? 'clickable' : ''} ${x.month === open ? 'open' : ''}" ${clickable ? `data-pay-month="${x.month}" tabindex="0"` : ''}`;
+      rows.push(`
+        <tr ${attrs}>
+          <td><strong>${v.name}</strong>${v.docs}</td>
+          <td class="num">${v.hours || dash}</td><td class="num">${v.gross || dash}</td>
+          <td class="num">${v.net || dash}</td><td class="num">${v.clocked || dash}</td>
+        </tr>`);
+      const sub = [v.hours && `${v.hours} gewerkt`, v.gross && `bruto ${v.gross}`, v.clocked && `geklokt ${v.clocked}`].filter(Boolean);
+      items.push(`
+        <div ${attrs.replace('class="', 'class="pay-item ')}>
+          <div class="pay-item-head"><strong>${v.name}</strong>${v.net ? `<span class="pay-net">${v.net}</span>` : ''}</div>
+          ${sub.length ? `<div class="pay-item-sub">${sub.join(' · ')}</div>` : ''}${v.docs}
+        </div>`);
+    }
+    const sum = k => ms.reduce((a, x) => a + (hasFigures(x.payslip) ? Number(x.payslip[k] || 0) : 0), 0);
+    const clocked = ms.reduce((a, x) => a + Number(x.clocked_minutes || 0), 0);
+    rows.push(`
+        <tr class="pay-total"><td>Totaal ${year}</td><td class="num">${uren(sum('hours_worked'))}</td>
+          <td class="num">${fmt.money(sum('gross_pay'))}</td><td class="num">${fmt.money(sum('net_pay'))}</td>
+          <td class="num">${clocked ? clockedH(clocked) : dash}</td></tr>`);
+    items.push(`
+        <div class="pay-item pay-total">
+          <div class="pay-item-head"><strong>Totaal ${year}</strong><span class="pay-net">${fmt.money(sum('net_pay'))}</span></div>
+          <div class="pay-item-sub">${uren(sum('hours_worked'))} gewerkt · bruto ${fmt.money(sum('gross_pay'))}${clocked ? ` · geklokt ${clockedH(clocked)}` : ''}</div>
+        </div>`);
+  }
+  return `
+    <div class="table-wrap only-wide-block"><table class="pay-table">
+      <thead><tr><th>Maand</th><th class="num">Gewerkt</th><th class="num">Bruto</th><th class="num">Netto</th><th class="num">Geklokt</th></tr></thead>
+      <tbody>${rows.join('')}</tbody>
+    </table></div>
+    <div class="pay-list only-phone-block">${items.join('')}</div>`;
+}
+
+function bindPayMonths(el) {
+  $$('[data-payslip]', el).forEach(b => b.addEventListener('click', ev => { ev.stopPropagation(); downloadPayslip(b.dataset.payslip, b); }));
+  $$('[data-pay-month]', el).forEach(tr => {
+    const go = () => { S.month = new Date(tr.dataset.payMonth + 'T00:00'); renderView(); window.scrollTo(0, 0); };
+    tr.addEventListener('click', go);
+    tr.addEventListener('keydown', e => { if (e.target === tr && (e.key === 'Enter' || e.key === ' ')) { e.preventDefault(); go(); } });
+  });
+}
+
+// Payslips uploaded by hand are read on the server; the app asks for it right after.
+async function readPayslipsNow() {
+  try { await officientCall({ action: 'read' }); } catch { /* the nightly run reads them too */ }
+}
+
 function readAsBase64(file) {
   return new Promise((resolve, reject) => {
     const fr = new FileReader();
@@ -1658,10 +1762,11 @@ function stamps(x) {
 async function viewHours(el, current) {
   S.month = S.month || startOfMonth(now());
   const m = S.month;
-  const [data, slips] = await Promise.all([
+  const [data, months] = await Promise.all([
     rpc('my_hours', { p_from: m.toISOString(), p_to: addMonths(m, 1).toISOString() }),
-    rpc('my_payslips'),
+    rpc('my_pay_months'),
   ]);
+  const pm = months.find(x => x.month === toDateInput(m));
   if (!current()) return;
   const grace = S.settings.grace_minutes;
   const rate = data.hourly_rate != null ? Number(data.hourly_rate) : null;
@@ -1674,14 +1779,13 @@ async function viewHours(el, current) {
       <div><h1>Mijn uren</h1><p>Je urenkaart. Klopt er iets niet? Tik op <strong>Uren aanpassen</strong> en je verantwoordelijke keurt het goed.</p></div>
       ${periodBar(fmt.month(m), sameDay(m, startOfMonth(now())) ? 'Deze maand' : '', 'mo-prev', 'mo-next')}
     </div>
-    <div class="stats">
-      <div class="stat good"><span class="v">${fmt.dur(mins)}</span><span class="k">Gewerkt · ${fmt.hours(mins)} uur</span></div>
+    ${!data.entries.length && hasFigures(pm && pm.payslip) ? '' : `<div class="stats">
+      <div class="stat good"><span class="v">${fmt.dur(mins)}</span><span class="k">Geklokt · ${fmt.hours(mins)} uur</span></div>
       <div class="stat"><span class="v">${rate != null ? fmt.money(mins / 60 * rate) : '—'}</span><span class="k">${rate != null ? `Verdiend (bruto) · ${fmt.money(rate)}/u` : 'Je verdiensten verschijnen zodra je verantwoordelijke je uurloon instelt'}</span></div>
       <div class="stat"><span class="v">${done.length}</span><span class="k">Gewerkte shiften</span></div>
       <div class="stat ${pendingReqs.length ? 'alert' : ''}"><span class="v">${pendingReqs.length}</span><span class="k">Aanpassingen in behandeling</span></div>
-    </div>
-    ${(() => { const sl = slips.find(x => x.month === toDateInput(m)); return sl && sl.net_pay != null
-      ? `<p class="hint info">Volgens je loonfiche van ${fmt.monthName(m)} kreeg je <strong>${fmt.money(sl.net_pay)}</strong> netto uitbetaald${sl.gross_pay != null ? ` (${fmt.money(sl.gross_pay)} bruto)` : ''}.</p>` : ''; })()}
+    </div>`}
+    ${payslipCard(pm)}
     <section class="card">
       <div class="card-head"><h2>Urenkaart</h2><button class="sm" id="add-missing">+ Vergeten uren toevoegen</button></div>
       ${data.entries.length ? `<div class="rows">${data.entries.map(x => `
@@ -1701,15 +1805,10 @@ async function viewHours(el, current) {
         : `<div class="empty"><strong>Geen uren in ${fmt.month(m)}.</strong>Als je inklokt bij Klok, verschijnt het hier.</div>`}
     </section>
     <section class="card">
-      <h2>Loonfiches</h2>
-      ${slips.length ? `<div class="rows">${slips.map(p => `
-        <div class="row">
-          <div class="row-main"><span class="row-title">${fmt.month(new Date(p.month + 'T00:00'))}</span>
-            <span class="row-sub">${p.net_pay != null ? `<strong>Netto ${fmt.money(p.net_pay)}</strong>${p.gross_pay != null ? ` · bruto ${fmt.money(p.gross_pay)}` : ''} · ` : ''}${esc(p.file_name)} · ${fmtSize(p.size_bytes)}</span></div>
-          <div class="row-actions"><button class="sm primary" data-payslip="${p.id}">Downloaden</button></div>
-        </div>`).join('')}</div>`
-        : '<p class="empty">Je loonfiches verschijnen hier zodra je verantwoordelijke ze uploadt.</p>'}
-      <p class="muted small" style="margin-top:10px">Het verdiende bedrag hierboven is een schatting, bruto. Je loonfiche toont wat je echt betaald krijgt.</p>
+      <h2>Per maand</h2>
+      <p class="muted small" style="margin-top:6px">Wat je loonbrieven zeggen: de uren die je betaald kreeg, bruto en netto. Daarnaast de uren die je in de app klokte. Tik op een maand om ze te openen.</p>
+      ${payMonthsTable(months, { open: toDateInput(m), clickable: true }) || '<p class="empty">Je loonbrieven verschijnen hier zodra ze er zijn.</p>'}
+      <p class="muted small" style="margin-top:10px">Het verdiende bedrag bovenaan is een schatting uit je geklokte uren. Je loonbrief toont wat je echt betaald krijgt.</p>
     </section>
     ${pendingReqs.length || decided.length ? `<section class="card">
       <h2>Je aanvragen</h2>
@@ -1728,7 +1827,7 @@ async function viewHours(el, current) {
   $('#mo-prev', el).addEventListener('click', () => { S.month = addMonths(S.month, -1); renderView(); });
   $('#mo-next', el).addEventListener('click', () => { S.month = addMonths(S.month, 1); renderView(); });
   $('#add-missing', el).addEventListener('click', () => timeFixModal(null));
-  $$('[data-payslip]', el).forEach(b => b.addEventListener('click', () => downloadPayslip(b.dataset.payslip, b)));
+  bindPayMonths(el);
   $$('[data-fix]', el).forEach(b => b.addEventListener('click', () => timeFixModal(data.entries.find(x => x.id === b.dataset.fix))));
   $$('[data-cancel]', el).forEach(b => b.addEventListener('click', () => busy(b, async () => {
     await rpc('cancel_time_edit', { p_edit_id: b.dataset.cancel });
@@ -2650,7 +2749,8 @@ function familyMember(el, r) {
 
 async function viewMember(el, current) {
   const id = S.memberId;
-  const [r, templates] = await Promise.all([rpc('mgr_get_staff', { p_id: id }), rpc('mgr_templates'), loadStaff()]);
+  const [r, templates, months] = await Promise.all([rpc('mgr_get_staff', { p_id: id }), rpc('mgr_templates'),
+    rpc('mgr_pay_months', { p_staff_id: id }), loadStaff()]);
   if (!current()) return;
   const p = r.person, pr = r.profile, xp = r.xp, self = p.id === S.me.id, first = p.name.split(' ')[0];
   const mine = templates.filter(tp => tp.staff_id === p.id);
@@ -2737,13 +2837,9 @@ async function viewMember(el, current) {
         </details>
       </section>
       <section class="card">
-        <div class="card-head"><h2>Loonfiches</h2><button class="sm primary" id="slip-up">Loonfiche uploaden</button></div>
-        ${r.payslips.length ? `<div class="rows">${r.payslips.map(x => `
-          <div class="row"><div class="row-main"><span class="row-title">${fmt.month(new Date(x.month + 'T00:00'))}</span>
-            <span class="row-sub">${x.net_pay != null ? `Netto ${fmt.money(x.net_pay)}${x.gross_pay != null ? ` · bruto ${fmt.money(x.gross_pay)}` : ''} · ` : ''}${esc(x.file_name)}</span></div>
-            <div class="row-actions"><button class="sm" data-slip-get="${x.id}">Downloaden</button></div></div>`).join('')}</div>`
-          : '<p class="empty">Nog geen loonfiches.</p>'}
-        <p class="muted small" style="margin-top:10px">De app leest de maand en de bedragen uit de loonfiche en vult ontbrekende gegevens aan. Jij kijkt het na voor het bewaard wordt.</p>
+        <div class="card-head"><h2>Loonbrieven per maand</h2><button class="sm primary" id="slip-up">Loonfiche uploaden</button></div>
+        ${payMonthsTable(months) || '<p class="empty">Nog geen loonfiches.</p>'}
+        <p class="muted small" style="margin-top:10px">Gewerkt, bruto en netto komen uit de loonbrieven; geklokt uit de app. ${esc(first)} ziet hetzelfde bij Mijn uren.</p>
       </section>
     </div>
     <input type="file" id="slip-file" accept="application/pdf,image/png,image/jpeg" hidden>`;
@@ -2832,7 +2928,7 @@ async function viewMember(el, current) {
   $('#slip-up', el).addEventListener('click', pick);
   $('#from-slip', el).addEventListener('click', pick);
   slipFile.addEventListener('change', () => { if (slipFile.files.length) payslipImport([...slipFile.files], { staffId: p.id }); });
-  $$('[data-slip-get]', el).forEach(b => b.addEventListener('click', () => downloadPayslip(b.dataset.slipGet, b)));
+  bindPayMonths(el);
 }
 
 const fileType = f => f ? (f.type || (/\.pdf$/i.test(f.name) ? 'application/pdf' : '')).replace(/^image\/jpg$/, 'image/jpeg') : '';
@@ -2893,7 +2989,7 @@ function officientReport(r) {
   if (!r || typeof r !== 'object') return '';
   const types = Object.entries(r.document_types || {});
   const slips = new Map();
-  for (const x of r.payslips) slips.set(x.name, [...(slips.get(x.name) || []), x.month]);
+  for (const x of r.payslips) slips.set(x.name, [...new Set([...(slips.get(x.name) || []), x.month])]);
   return `
     <ul class="plain-list off-report">
       <li><strong>${r.matched}</strong> van de ${plural(r.people, 'persoon', 'mensen')} in Officient gevonden in de app${r.linked ? `, waarvan ${r.linked} nieuw gekoppeld` : ''}.</li>
@@ -2901,6 +2997,7 @@ function officientReport(r) {
       ${slips.size ? `<li>Nieuwe loonbrieven: ${[...slips].map(([name, months]) => `${esc(name)} <span class="muted">(${months.sort().map(m => esc(fmt.month(new Date(m + 'T00:00')))).join(', ')})</span>`).join('; ')}.</li>` : '<li>Geen nieuwe loonbrieven.</li>'}
       ${r.already ? `<li>${plural(r.already, 'loonbrief stond', 'loonbrieven stonden')} er al (zelf geüpload).</li>` : ''}
       ${r.no_month ? `<li>${plural(r.no_month, 'loonbrief', 'loonbrieven')} zonder maand in de bestandsnaam overgeslagen.</li>` : ''}
+      ${r.read ? `<li>${plural(r.read, 'loonbrief', 'loonbrieven')} gelezen: de uren en bedragen staan nu bij elke maand.</li>` : ''}
       ${r.more ? '<li>Er zijn nog meer loonbrieven; die komen bij de volgende ophaling.</li>' : ''}
       ${r.unmatched.length ? `<li class="off-unmatched">In Officient, maar niet in de app: <strong>${r.unmatched.map(esc).join(', ')}</strong>. Voeg ze toe bij <em>Persoon toevoegen</em> met dezelfde naam; de volgende ophaling vult hun gegevens aan.</li>` : ''}
       <li class="muted">Documenten in Officient: ${types.length ? types.map(([k, n]) => `${esc(OFFICIENT_DOC_TYPES[k] || k)} (${n})`).join(', ') : 'geen'}.</li>
@@ -3409,7 +3506,7 @@ function slipReview(items, { fixed }) {
     modal.close();
     const names = [...new Set(items.map(x => x.person.person.name))];
     toast(`${plural(items.length, 'loonfiche', 'loonfiches')} opgeslagen voor ${names.join(', ')}.`);
-    await loadStaff(true);
+    await Promise.all([loadStaff(true), readPayslipsNow()]);
     renderView();
   });
 }
