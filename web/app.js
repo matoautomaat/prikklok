@@ -58,6 +58,7 @@ const SERVER_NL = {
   'Pick a team member.': 'Kies een medewerker.',
   'Pick an active team member.': 'Kies een actieve medewerker.',
   'Pick at least one day.': 'Kies minstens één dag.',
+  'Say briefly why you give this shift back.': 'Zeg kort waarom je deze shift teruggeeft.',
   'Someone else already picked up this shift.': 'Iemand anders heeft deze shift al opgenomen.',
   'Someone on the team already has that name. Try adding a last initial.': 'Iemand in het team heeft die naam al. Voeg bijvoorbeeld de eerste letter van de achternaam toe.',
   "Start and end can't be the same time.": 'Begin en einde kunnen niet hetzelfde uur zijn.',
@@ -169,7 +170,9 @@ const HM = { hour: '2-digit', minute: '2-digit', hourCycle: 'h23' };
 const now = () => new Date(Date.now() + S.offset);
 const startOfDay = d => { const x = new Date(d); x.setHours(0, 0, 0, 0); return x; };
 const addDays = (d, n) => { const x = new Date(d); x.setDate(x.getDate() + n); return x; };
-const startOfWeek = d => { const x = startOfDay(d); return addDays(x, -x.getDay()); };
+// Weeks start on Monday, as in Belgium.
+const weekdayIndex = d => (new Date(d).getDay() + 6) % 7;
+const startOfWeek = d => { const x = startOfDay(d); return addDays(x, -weekdayIndex(x)); };
 const startOfMonth = d => { const x = startOfDay(d); x.setDate(1); return x; };
 const addMonths = (d, n) => { const x = startOfMonth(d); x.setMonth(x.getMonth() + n); return x; };
 const sameDay = (a, b) => startOfDay(a).getTime() === startOfDay(b).getTime();
@@ -408,7 +411,42 @@ const ICONS = {
   ranking: '<svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"><path d="M8 21h8M12 17v4M7 4h10v5a5 5 0 0 1-10 0z"/><path d="M7 6H4a3 3 0 0 0 3 4M17 6h3a3 3 0 0 1-3 4"/></svg>',
   more: '<svg viewBox="0 0 24 24" fill="currentColor"><circle cx="5" cy="12" r="2"/><circle cx="12" cy="12" r="2"/><circle cx="19" cy="12" r="2"/></svg>',
   signout: '<svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"><path d="M14 4h4a2 2 0 0 1 2 2v12a2 2 0 0 1-2 2h-4M10 16l-4-4 4-4M6 12h10"/></svg>',
+  sun: '<svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round"><circle cx="12" cy="12" r="4"/><path d="M12 2v2M12 20v2M4.9 4.9l1.4 1.4M17.7 17.7l1.4 1.4M2 12h2M20 12h2M4.9 19.1l1.4-1.4M17.7 6.3l1.4-1.4"/></svg>',
+  moon: '<svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"><path d="M20 14.5A8 8 0 0 1 9.5 4a8 8 0 1 0 10.5 10.5z"/></svg>',
 };
+
+/* --------------------------------------------------------------- theme */
+
+// Light is the default. theme.js sets it before the page draws; this keeps
+// it in step when someone changes it, and follows the phone in "auto".
+const THEME_KEY = 'prikklok.theme';
+const THEMES = [['light', 'Licht'], ['dark', 'Donker'], ['auto', 'Zoals mijn toestel']];
+const darkQuery = window.matchMedia ? window.matchMedia('(prefers-color-scheme: dark)') : null;
+function themePref() {
+  try { return localStorage.getItem(THEME_KEY) || 'light'; } catch (e) { return 'light'; }
+}
+const isDark = () => document.documentElement.getAttribute('data-theme') === 'dark';
+function applyTheme() {
+  const pref = themePref();
+  const dark = pref === 'dark' || (pref === 'auto' && !!darkQuery && darkQuery.matches);
+  document.documentElement.setAttribute('data-theme', dark ? 'dark' : 'light');
+  const meta = document.querySelector('meta[name="theme-color"]');
+  if (meta) meta.setAttribute('content', dark ? '#4A0D12' : '#6E141A');
+  $$('[data-theme-btn]').forEach(b => {
+    b.innerHTML = dark ? ICONS.sun : ICONS.moon;
+    b.setAttribute('aria-label', dark ? 'Licht thema' : 'Donker thema');
+    b.title = dark ? 'Licht thema' : 'Donker thema';
+  });
+  $$('[data-theme-pick]').forEach(b => {
+    const on = b.dataset.themePick === pref;
+    b.classList.toggle('is-on', on); b.setAttribute('aria-pressed', on);
+  });
+}
+function setTheme(pref) {
+  try { localStorage.setItem(THEME_KEY, pref); } catch (e) { /* private mode: only for now */ }
+  applyTheme();
+}
+if (darkQuery && darkQuery.addEventListener) darkQuery.addEventListener('change', () => { if (themePref() === 'auto') applyTheme(); });
 
 function tabsFor() {
   return isManager()
@@ -646,7 +684,7 @@ function renderShell() {
           </div>
         </div>
         <a class="logo-link" href="#" aria-label="${esc(S.settings.business_name)}, naar het begin">${logoHTML('logo')}</a>
-        <div class="topbar-end"><button class="ghost sm" id="signout">Afmelden</button></div>
+        <div class="topbar-end"><button type="button" class="icon ghost theme-btn" data-theme-btn></button><button class="ghost sm" id="signout">Afmelden</button></div>
       </div>
       <nav class="tabs" aria-label="Onderdelen"><div class="tabs-inner">
         ${tabs.map(([k, l]) => `<button class="tab" data-tab="${k}">${l}${badge(k)}</button>`).join('')}
@@ -658,6 +696,8 @@ function renderShell() {
       ${more.length ? `<button id="bnav-more" data-more="${more.map(t => t[0]).join(' ')}" aria-haspopup="dialog">${ICONS.more}<span>Meer</span></button>` : ''}
     </nav>`;
   $('#signout').addEventListener('click', askSignOut);
+  $('[data-theme-btn]').addEventListener('click', () => setTheme(isDark() ? 'light' : 'dark'));
+  applyTheme();
   $$('[data-tab]').forEach(b => b.addEventListener('click', () => { location.hash = b.dataset.tab; }));
   const mb = $('#bnav-more');
   if (mb) mb.addEventListener('click', openMore);
@@ -915,6 +955,7 @@ async function viewClock(el, current) {
 
 const DAY_NAMES = ['zondag', 'maandag', 'dinsdag', 'woensdag', 'donderdag', 'vrijdag', 'zaterdag'];
 const DAY_SHORT = ['zo', 'ma', 'di', 'wo', 'do', 'vr', 'za'];
+const WEEK_ORDER = [1, 2, 3, 4, 5, 6, 0];
 
 function periodBar(label, hint, prevId, nextId) {
   return `<div class="periodbar">
@@ -986,7 +1027,7 @@ function calendarHTML(shifts, month, { manager = false } = {}) {
   const byDay = Array.from({ length: days }, (_, i) => dayEntries(shifts.filter(s => sameDay(s.starts_at, addDays(first, i)))));
   const addBtn = d => manager ? `<button type="button" class="cal-add" data-add-day="${toDateInput(d)}" aria-label="Shift toevoegen op ${fmt.dayLong(d)}">+</button>` : '';
   const cells = [];
-  for (let i = 0; i < first.getDay(); i++) cells.push('<div class="cal-cell is-blank"></div>');
+  for (let i = 0; i < weekdayIndex(first); i++) cells.push('<div class="cal-cell is-blank"></div>');
   byDay.forEach((list, i) => {
     const d = addDays(first, i);
     cells.push(`<div class="cal-cell${sameDay(d, t) ? ' is-today' : ''}${d < startOfDay(t) ? ' is-before' : ''}${list.length ? ' has-shifts' : ''}" data-day="${toDateInput(d)}">
@@ -999,7 +1040,7 @@ function calendarHTML(shifts, month, { manager = false } = {}) {
     <div class="cal-wrap">
       <h2 class="cal-title">${esc(fmt.month(first))}</h2>
       <div class="cal-grid">
-        ${DAY_NAMES.map(n => `<div class="cal-head"><span class="only-wide">${n}</span><span class="only-phone" aria-hidden="true">${n.slice(0, 2)}</span></div>`).join('')}
+        ${WEEK_ORDER.map(i => DAY_NAMES[i]).map(n => `<div class="cal-head"><span class="only-wide">${n}</span><span class="only-phone" aria-hidden="true">${n.slice(0, 2)}</span></div>`).join('')}
         ${cells.join('')}
       </div>
       <div class="cal-legend only-phone">
@@ -1078,26 +1119,47 @@ async function claimShift(s) {
   }).catch(() => {});
 }
 
+const DROP_REASONS = ['Ziek', 'School of examen', 'Familie', 'Andere afspraak'];
+
 function ownShift(s) {
   const cut = S.settings.drop_cutoff_hours;
   const canDrop = new Date(s.starts_at) - now() > cut * 3600000;
   modal.open(`
     <h2 id="modal-title">Jouw shift</h2>
     <p>${shiftWhen(s)}</p>
-    ${canDrop ? '<p class="muted small">Kan je niet? Geef hem terug, dan staat hij weer open voor iemand anders.</p>'
-      : `<p class="hint info">Hij begint binnen ${cut} uur, dus je kan hem hier niet meer teruggeven. Vraag het aan je verantwoordelijke.</p>`}
-    <div class="form-actions">
-      <button type="button" data-close>Sluiten</button>
-      ${canDrop ? '<button type="button" class="danger solid" id="drop-it">Shift teruggeven</button>' : ''}
-    </div>`, d => {
-    const b = $('#drop-it', d);
-    if (b) b.addEventListener('click', () => busy(b, async () => {
-      await rpc('release_shift', { p_shift_id: s.id });
-      modal.close();
-      await refreshMe();
-      toast('Shift teruggegeven. Hij staat weer open voor anderen.');
-      renderView();
-    }).catch(() => {}));
+    ${canDrop ? `<p class="muted small">Kan je niet? Geef hem terug, dan staat hij weer open voor iemand anders. Je verantwoordelijke ziet waarom.</p>
+      <form id="drop-form" novalidate>
+        <div class="field"><label for="drop-reason">Waarom geef je hem terug?</label>
+          <div class="chips reason-chips" role="group" aria-label="Snel kiezen">${DROP_REASONS.map(r => `<button type="button" class="chip" data-reason="${esc(r)}">${esc(r)}</button>`).join('')}</div>
+          <textarea id="drop-reason" rows="2" maxlength="300" placeholder="bv. Ik heb een examen die dag."></textarea></div>
+        <p class="form-error" id="drop-err"></p>
+        <div class="form-actions">
+          <button type="button" data-close>Sluiten</button>
+          <button type="submit" class="danger solid" id="drop-it">Shift teruggeven</button>
+        </div>
+      </form>`
+      : `<p class="hint info">Hij begint binnen ${cut} uur, dus je kan hem hier niet meer teruggeven. Vraag het aan je verantwoordelijke.</p>
+      <div class="form-actions"><button type="button" data-close>Sluiten</button></div>`}`, d => {
+    const f = $('#drop-form', d);
+    if (!f) return;
+    const box = $('#drop-reason', d), err = $('#drop-err', d), b = $('#drop-it', d);
+    $$('[data-reason]', d).forEach(c => c.addEventListener('click', () => {
+      $$('[data-reason]', d).forEach(x => { x.classList.toggle('is-on', x === c); x.setAttribute('aria-pressed', x === c); });
+      box.value = c.dataset.reason; err.textContent = ''; box.focus();
+    }));
+    box.addEventListener('input', () => { err.textContent = ''; });
+    f.addEventListener('submit', ev => {
+      ev.preventDefault();
+      const reason = box.value.trim();
+      if (reason.length < 3) { err.textContent = 'Zeg kort waarom je deze shift teruggeeft.'; box.focus(); return; }
+      busy(b, async () => {
+        await rpc('give_back_shift', { p_shift_id: s.id, p_reason: reason });
+        modal.close();
+        await refreshMe();
+        toast('Shift teruggegeven. Hij staat weer open voor anderen.');
+        renderView();
+      }).catch(() => {});
+    });
   });
 }
 
@@ -1226,7 +1288,7 @@ function templateModal(tp) {
     <form id="tp-form" novalidate>
       <div class="form-grid">
         <div class="field wide"><label for="tp-label">Naam</label><input id="tp-label" maxlength="60" value="${esc(tp ? tp.label : '')}" placeholder="bv. Avond"></div>
-        <div class="field wide"><label>Dagen</label><div class="days">${[0, 1, 2, 3, 4, 5, 6].map(i => `
+        <div class="field wide"><label>Dagen</label><div class="days">${WEEK_ORDER.map(i => `
           <label><input type="checkbox" name="tpday" value="${i}" ${days.includes(i) ? 'checked' : ''}><span>${DAY_SHORT[i]}</span></label>`).join('')}</div></div>
         <div class="field"><label for="tp-start">Begint</label>${timeField('tp-start', tp ? tp.start_time : '17:30')}</div>
         <div class="field"><label for="tp-end">Eindigt</label>${timeField('tp-end', tp ? tp.end_time : '22:30')}</div>
@@ -1274,6 +1336,7 @@ function editShift(s) {
   modal.open(`
     <h2 id="modal-title">${esc(fmt.dayLong(a))}</h2>
     <p>${s.label ? `${esc(s.label)} · ` : ''}${s.staff_id ? `${esc(s.staff_name)} werkt deze shift.` : 'Nog niemand heeft deze shift opgenomen.'}</p>
+    ${s.released ? `<p class="hint info">${esc(s.released.name)} gaf deze shift terug op ${esc(fmt.when(s.released.at))}: “${esc(s.released.reason)}”</p>` : ''}
     <form id="es-form" novalidate>
       <div class="form-grid">
         <div class="field wide"><label for="es-staff">Wie werkt</label><select id="es-staff">${staffOptions(s.staff_id, { openLabel: 'Open – het personeel kan hem opnemen' })}
@@ -1845,12 +1908,18 @@ async function viewProfile(el, current) {
             <div class="field"><label for="pin-new2">Herhaal de nieuwe</label><input id="pin-new2" class="pin-input" type="password" inputmode="numeric" pattern="[0-9]*" maxlength="8" autocomplete="new-password"></div>
           </div><p class="form-error" id="pin-err"></p><div class="form-actions"><button type="submit" class="primary">Pincode wijzigen</button></div></form>
         </section>
+        <section class="card"><h2>Weergave</h2>
+          <p class="muted small" style="margin-top:6px">Alleen op dit toestel.</p>
+          <div class="chips" role="group" aria-label="Thema" style="margin-top:12px">${THEMES.map(([k, l]) => `<button type="button" class="chip" data-theme-pick="${k}">${l}</button>`).join('')}</div>
+        </section>
         <button type="button" class="signout-wide" id="pf-signout">${ICONS.signout}<span>Afmelden</span></button>
       </div>
     </div>`;
   $('#edit-avatar', el).addEventListener('click', () => openAvatarEditor());
   $('#edit-avatar-pic', el).addEventListener('click', () => openAvatarEditor());
   $('#pf-signout', el).addEventListener('click', askSignOut);
+  $$('[data-theme-pick]', el).forEach(b => b.addEventListener('click', () => setTheme(b.dataset.themePick)));
+  applyTheme();
   $$('[data-contract]', el).forEach(b => b.addEventListener('click', () => downloadContract(b.dataset.contract, b)));
   const pf = $('#pf-form', el);
   pf.addEventListener('submit', async ev => {
@@ -1992,6 +2061,16 @@ async function viewToday(el, current) {
             </div>`;
           }).join('')}</div>` : '<p class="empty">Vandaag geen shiften gepland. <button class="link" data-go="schedule">Voeg er toe</button></p>'}
         </section>
+        ${ov.released && ov.released.length ? `<section class="card">
+          <div class="card-head"><h2>Teruggegeven shiften</h2><span class="muted small">Laatste 14 dagen</span></div>
+          <div class="rows">${ov.released.map(r => `<div class="row">
+            <div class="person">${picFor(r.staff_id, r.name)}
+              <div class="row-main"><span class="row-title">${esc(r.name)}</span>
+              <span class="row-sub">${esc(fmt.dayLong(r.starts_at))} · <span class="time">${fmt.range(r.starts_at, r.ends_at)}</span></span>
+              <span class="row-sub">“${esc(r.reason)}” · teruggegeven ${esc(fmt.when(r.at))}</span></div></div>
+            <span class="pill ${r.taken_by ? 'on' : 'warn'}">${r.taken_by ? `Nu: ${esc(r.taken_by)}` : 'Nog open'}</span>
+          </div>`).join('')}</div>
+        </section>` : ''}
       </div>
       ${punchCard({ compact: true })}
     </div>`;

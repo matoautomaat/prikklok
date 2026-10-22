@@ -121,6 +121,20 @@ create index time_entries_in_idx on public.time_entries (clock_in);
 create index time_entries_shift_idx on public.time_entries (shift_id);
 create unique index time_entries_one_open on public.time_entries (staff_id) where clock_out is null;
 
+-- Who gave a shift back, and why. The shift itself simply becomes open again.
+create table public.shift_releases (
+  id         uuid primary key default gen_random_uuid(),
+  shift_id   uuid not null references public.shifts (id),
+  staff_id   uuid not null references public.staff (id),
+  reason     text not null,
+  created_at timestamptz not null default now()
+);
+create index shift_releases_shift_idx on public.shift_releases (shift_id, created_at);
+create index shift_releases_staff_idx on public.shift_releases (staff_id);
+create index shift_releases_created_idx on public.shift_releases (created_at);
+alter table public.shift_releases enable row level security;
+revoke all on public.shift_releases from anon, authenticated;
+
 -- A staff member's request to fix their own times. Nothing changes in
 -- time_entries until a manager approves it.
 create table public.time_edits (
@@ -444,7 +458,11 @@ begin
   return coalesce((select json_agg(json_build_object(
       'id', sh.id, 'starts_at', sh.starts_at, 'ends_at', sh.ends_at, 'label', sh.label, 'notes', sh.notes,
       'staff_id', sh.staff_id, 'staff_name', st.name, 'staff_avatar', st.avatar, 'mine', coalesce(sh.staff_id = v.id, false),
-      'standard', sh.template_id is not null)
+      'standard', sh.template_id is not null,
+      'released', case when v.role = 'manager' then (
+        select json_build_object('name', rs.name, 'reason', r.reason, 'at', r.created_at)
+          from public.shift_releases r join public.staff rs on rs.id = r.staff_id
+         where r.shift_id = sh.id order by r.created_at desc limit 1) end)
       order by sh.starts_at, st.name nulls last, sh.template_slot)
     from public.shifts sh left join public.staff st on st.id = sh.staff_id
    where sh.cancelled_at is null and sh.starts_at < p_to and sh.ends_at > p_from), '[]'::json);
@@ -477,11 +495,24 @@ begin
   return json_build_object('ok', true);
 end $$;
 
+-- Kept for app versions from before reasons: giving a shift back now goes
+-- through give_back_shift.
 create function public.release_shift(p_token text, p_shift_id uuid) returns json
 language plpgsql security definer set search_path = public, extensions as $$
-declare v public.staff; s public.shifts; v_cut int;
+begin
+  perform app_private.current_staff(p_token);
+  raise exception using message = 'Say briefly why you give this shift back.', errcode = 'P0001';
+end $$;
+
+-- Gives one of your shifts back, with a reason the managers see.
+create function public.give_back_shift(p_token text, p_shift_id uuid, p_reason text) returns json
+language plpgsql security definer set search_path = public, extensions as $$
+declare v public.staff; s public.shifts; v_cut int; v_reason text := app_private.clean_text(p_reason, 300);
 begin
   v := app_private.current_staff(p_token);
+  if length(v_reason) < 3 then
+    raise exception using message = 'Say briefly why you give this shift back.', errcode = 'P0001';
+  end if;
   select * into s from public.shifts
    where id = p_shift_id and staff_id = v.id and cancelled_at is null for update;
   if not found then
@@ -492,6 +523,7 @@ begin
     raise exception using errcode = 'P0001', message = format(
       'Shifts can''t be dropped less than %s hours before they start. Ask your manager.', v_cut);
   end if;
+  insert into public.shift_releases (shift_id, staff_id, reason) values (s.id, v.id, v_reason);
   update public.shifts set staff_id = null where id = p_shift_id;
   return json_build_object('ok', true);
 end $$;
@@ -597,7 +629,17 @@ begin
     'pending_requests', (select count(*) from public.time_edits where status = 'pending'),
     'open_shifts_week', (select count(*) from public.shifts
        where staff_id is null and cancelled_at is null
-         and starts_at > now() and starts_at < now() + interval '7 days'));
+         and starts_at > now() and starts_at < now() + interval '7 days'),
+    'released', coalesce((select json_agg(x order by x.at desc) from (
+        select r.id, r.reason, r.created_at as at, st.id as staff_id, st.name, sh.starts_at, sh.ends_at, sh.label,
+               tk.name as taken_by
+          from public.shift_releases r
+          join public.staff st on st.id = r.staff_id
+          join public.shifts sh on sh.id = r.shift_id
+          left join public.staff tk on tk.id = sh.staff_id
+         where r.created_at > now() - interval '14 days' and sh.ends_at > now() and sh.cancelled_at is null
+         order by r.created_at desc
+         limit 10) x), '[]'::json));
 end $$;
 
 create function public.mgr_staff_list(p_token text) returns json

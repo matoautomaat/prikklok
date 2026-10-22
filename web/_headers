@@ -18,6 +18,8 @@
   Cache-Control: no-cache
 /loonfiche.js
   Cache-Control: no-cache
+/theme.js
+  Cache-Control: no-cache
 /vendor/pdfjs/pdf.min.mjs
   Content-Type: text/javascript; charset=utf-8
   Cache-Control: public, max-age=604800
