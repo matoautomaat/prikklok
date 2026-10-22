@@ -107,6 +107,8 @@ const StudentContract = (() => {
     text('Tussen de ondergetekenden:', { f: bold, after: 6 });
     text(`de werkgever: ${info.employer || '…'}`); rightOnLine('enerzijds');
     text(`adres: ${info.employer_address || '…'}`);
+    if (info.vat) text(`ondernemingsnummer: ${info.vat}`);
+    if (info.phone) text(`telefoon: ${info.phone}`);
     text(`vertegenwoordigd door: ${info.representative || '…'}`, { after: 8 });
     text(`en de student: ${st.name}`); rightOnLine('anderzijds');
     text(`geboren op: ${dmy(st.birth_date)}`);

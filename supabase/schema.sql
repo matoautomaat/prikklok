@@ -57,6 +57,9 @@ create table public.staff (
   view_only       boolean not null default false,
   pay_method      text check (pay_method in ('cash', 'registered')), -- paid in cash, or registered on the payroll
   officient_id    int unique, -- the same person in Exact Officient, once linked
+  -- details changed in the app that Officient doesn't have yet ('phone', 'email', 'birth_date', 'national_id',
+  -- 'iban', 'address'): the nightly sync keeps the app's value until the manager sends them
+  officient_pending text[] not null default '{}',
   contract_minutes jsonb -- contract hours per weekday from Officient, eg {"monday": 240, ...}
 );
 create unique index staff_name_key on public.staff (lower(name));
@@ -1525,6 +1528,7 @@ declare
   v_nid   text := nullif(regexp_replace(coalesce(p ->> 'national_id', ''), '\D', '', 'g'), '');
   v_iban  text := nullif(upper(regexp_replace(coalesce(p ->> 'iban', ''), '\s', '', 'g')), '');
   v_birth date; v_start date;
+  old public.staff;
 begin
   if jsonb_typeof(p) is distinct from 'object' then
     raise exception using message = 'These details couldn''t be saved.', errcode = 'P0001';
@@ -1547,6 +1551,7 @@ begin
   if v_birth is not null and (v_birth < date '1900-01-01' or v_birth > current_date) then
     raise exception using message = 'Check the date of birth.', errcode = 'P0001';
   end if;
+  select * into old from public.staff where id = p_staff;
   update public.staff set
     phone           = case when p ? 'phone' then nullif(app_private.clean_text(p ->> 'phone', 30), '') else phone end,
     email           = case when p ? 'email' then v_email else email end,
@@ -1563,6 +1568,17 @@ begin
   if not found then
     raise exception using message = 'That person wasn''t found.', errcode = 'P0001';
   end if;
+  -- someone in Officient: what changed here waits for the manager to send it there
+  update public.staff s
+     set officient_pending = array(select distinct f from unnest(s.officient_pending || array[
+           case when s.phone is distinct from old.phone then 'phone' end,
+           case when s.email is distinct from old.email then 'email' end,
+           case when s.birth_date is distinct from old.birth_date then 'birth_date' end,
+           case when s.national_id is distinct from old.national_id then 'national_id' end,
+           case when s.iban is distinct from old.iban then 'iban' end,
+           case when row(s.street, s.postcode, s.city) is distinct from row(old.street, old.postcode, old.city) then 'address' end]) f
+         where f is not null order by 1)
+   where s.id = p_staff and s.officient_id is not null;
 end $$;
 
 create function app_private.profile_json(s public.staff) returns json
@@ -1719,7 +1735,9 @@ begin
     'person', json_build_object('id', s.id, 'name', s.name, 'role', app_private.role_of(s), 'hourly_rate', s.hourly_rate,
       'active', s.active, 'locked', coalesce(s.locked_until > now(), false), 'contract_type', s.contract_type,
       'payroll_id', s.payroll_id, 'created_at', s.created_at, 'avatar', s.avatar, 'xp_bonus', s.xp_bonus,
-      'pay_method', s.pay_method, 'officient_id', s.officient_id, 'contract_minutes', s.contract_minutes),
+      'pay_method', s.pay_method, 'officient_id', s.officient_id, 'contract_minutes', s.contract_minutes,
+      'officient_pending', s.officient_pending,
+      'officient_connected', (select o.refresh_token is not null from app_private.officient o where o.id = 1)),
     'profile', app_private.profile_json(s),
     'xp', app_private.xp_json(s.id),
     'contracts', app_private.contracts_json(s.id),
@@ -1948,7 +1966,11 @@ begin
     'connected', o.refresh_token is not null, 'connected_at', o.connected_at,
     'syncing', coalesce(o.sync_started_at > now() - interval '5 minutes', false),
     'last_sync_at', o.last_sync_at, 'last_report', o.last_report, 'last_error', o.last_error,
-    'host', o.host, 'linked', (select count(*) from public.staff where officient_id is not null));
+    'host', o.host, 'linked', (select count(*) from public.staff where officient_id is not null),
+    'pending', coalesce((select json_agg(json_build_object('id', st.id, 'name', st.name, 'fields', st.officient_pending) order by lower(st.name))
+                           from public.staff st where st.officient_id is not null and st.officient_pending <> '{}'), '[]'::json),
+    'unlinked', coalesce((select json_agg(json_build_object('id', st.id, 'name', st.name) order by lower(st.name))
+                            from public.staff st where st.officient_id is null and st.active and not st.view_only), '[]'::json));
 end $$;
 
 -- The client ID and secret of the app the manager made under Developers in Officient.
@@ -2075,6 +2097,10 @@ declare
   v_nid   text := nullif(regexp_replace(coalesce(p ->> 'national_number', ''), '\D', '', 'g'), '');
   v_iban  text := nullif(upper(regexp_replace(coalesce(p ->> 'bank_account_iban', ''), '\s', '', 'g')), '');
   v_mail  text := nullif(lower(btrim(coalesce(nullif(p ->> 'personal_email', ''), p ->> 'email', ''))), '');
+  v_phone text := nullif(app_private.clean_text(p ->> 'phone', 30), '');
+  v_street text := nullif(app_private.clean_text(concat_ws(' ', p -> 'address' ->> 'line_1', nullif(p -> 'address' ->> 'line_2', '')), 120), '');
+  v_zip   text := nullif(app_private.clean_text(p -> 'address' ->> 'zipcode', 10), '');
+  v_city  text := nullif(app_private.clean_text(p -> 'address' ->> 'city', 80), '');
   w       jsonb := p -> 'wage';
   v_type  text := w ->> 'type';
   v_rate  numeric;
@@ -2110,16 +2136,27 @@ begin
   if v_nid is not null and not app_private.valid_national_id(v_nid) then v_nid := null; end if;
   if v_iban is not null and (v_iban !~ '^[A-Z]{2}[0-9]{2}[A-Z0-9]{8,30}$' or not app_private.valid_iban(v_iban)) then v_iban := null; end if;
   if v_mail is not null and v_mail !~ '^[^@\s]+@[^@\s]+\.[^@\s]+$' then v_mail := null; end if;
+  -- details changed in the app and not sent yet keep the app's value; the
+  -- ones Officient now has the same are no longer waiting
   update public.staff set
     officient_id    = v_oid,
-    national_id     = coalesce(v_nid, national_id),
-    birth_date      = coalesce(v_birth, birth_date),
-    iban            = coalesce(v_iban, iban),
-    street          = coalesce(nullif(app_private.clean_text(concat_ws(' ', p -> 'address' ->> 'line_1', nullif(p -> 'address' ->> 'line_2', '')), 120), ''), street),
-    postcode        = coalesce(nullif(app_private.clean_text(p -> 'address' ->> 'zipcode', 10), ''), postcode),
-    city            = coalesce(nullif(app_private.clean_text(p -> 'address' ->> 'city', 80), ''), city),
+    national_id     = case when 'national_id' = any(officient_pending) then national_id else coalesce(v_nid, national_id) end,
+    birth_date      = case when 'birth_date' = any(officient_pending) then birth_date else coalesce(v_birth, birth_date) end,
+    iban            = case when 'iban' = any(officient_pending) then iban else coalesce(v_iban, iban) end,
+    street          = case when 'address' = any(officient_pending) then street else coalesce(v_street, street) end,
+    postcode        = case when 'address' = any(officient_pending) then postcode else coalesce(v_zip, postcode) end,
+    city            = case when 'address' = any(officient_pending) then city else coalesce(v_city, city) end,
+    officient_pending = array(select f from unnest(officient_pending) f where case f
+                          when 'national_id' then v_nid is distinct from national_id
+                          when 'birth_date' then v_birth is distinct from birth_date
+                          when 'iban' then v_iban is distinct from iban
+                          when 'address' then row(lower(v_street), lower(v_zip), lower(v_city)) is distinct from row(lower(street), lower(postcode), lower(city))
+                          when 'phone' then regexp_replace(regexp_replace(coalesce(v_phone, ''), '\D', '', 'g'), '^(00)?32', '0')
+                                            is distinct from regexp_replace(regexp_replace(coalesce(phone, ''), '\D', '', 'g'), '^(00)?32', '0')
+                          when 'email' then v_mail is distinct from email
+                          else true end),
     start_date      = coalesce(v_start, start_date),
-    phone           = coalesce(phone, nullif(app_private.clean_text(p ->> 'phone', 30), '')),
+    phone           = coalesce(phone, v_phone),
     email           = coalesce(email, left(v_mail, 120)),
     emergency_name  = coalesce(emergency_name, nullif(app_private.clean_text(p -> 'emergency_contact' ->> 'name', 80), '')),
     emergency_phone = coalesce(emergency_phone, nullif(app_private.clean_text(p -> 'emergency_contact' ->> 'phone', 30), '')),
@@ -2345,8 +2382,9 @@ end $$;
 
 -- When students and part-timers can work, per month: per day the open
 -- services they can take (by the label of the standard shift, eg Middag,
--- Avond) and a note, eg "vanaf 18u". Handed in from the app; the manager
--- plans with it.
+-- Avond) and a note, eg "vanaf 18u". The app no longer asks for it (students
+-- pick their own shifts); the table and its functions stay, unused, as the
+-- live database has them.
 create table public.availability (
   staff_id     uuid not null references public.staff (id),
   month        date not null check (extract(day from month) = 1),
@@ -2679,8 +2717,8 @@ begin
   v := app_private.current_manager(p_token);
   update public.settings
      set contract_info = (select coalesce(jsonb_object_agg(k, app_private.clean_text(p_info ->> k, case when k = 'inspection' then 400 else 160 end)), '{}'::jsonb)
-                            from unnest(array['employer', 'employer_address', 'representative', 'work_address', 'notify', 'first_aid',
-                                              'first_aid_kit', 'prevention', 'prevention_phone', 'inspection', 'committee', 'place']) k
+                            from unnest(array['employer', 'employer_address', 'vat', 'phone', 'representative', 'work_address', 'notify',
+                                              'first_aid', 'first_aid_kit', 'prevention', 'prevention_phone', 'inspection', 'committee', 'place']) k
                            where app_private.clean_text(p_info ->> k, 400) <> '')
    where id = 1;
   return json_build_object('ok', true, 'info', (select contract_info from public.settings where id = 1));
@@ -2715,6 +2753,46 @@ begin
          signature_requested_at = case when p_signature then now() else signature_requested_at end,
          officient_hours_at = case when p_hours then now() else officient_hours_at end
    where id = p_id;
+  return found;
+end $$;
+
+
+-- People into Officient ------------------------------------------------------
+-- With personal.info:write and basics:write the manager sends details changed
+-- in the app to Officient, or adds someone to Officient (Edge Function officient).
+
+-- For the Edge Function: a person's details as the app has them, after the manager check.
+create function app_private.person_for_officient(p_token text, p_staff uuid) returns json
+language plpgsql set search_path = public, extensions as $$
+declare v public.staff; s public.staff;
+begin
+  v := app_private.current_manager(p_token);
+  select * into s from public.staff where id = p_staff and not view_only;
+  if not found then
+    raise exception using message = 'That person wasn''t found.', errcode = 'P0001';
+  end if;
+  return json_build_object('staff_id', s.id, 'officient_id', s.officient_id, 'name', s.name, 'phone', s.phone, 'email', s.email,
+                           'birth_date', s.birth_date, 'national_id', s.national_id, 'iban', s.iban,
+                           'street', s.street, 'postcode', s.postcode, 'city', s.city, 'pending', s.officient_pending);
+end $$;
+
+-- For the Edge Function: these details are in Officient now.
+create function app_private.person_officient_done(p_staff uuid, p_keys text[]) returns boolean
+language plpgsql set search_path = public as $$
+begin
+  update public.staff set officient_pending = array(select f from unnest(officient_pending) f where not f = any(coalesce(p_keys, '{}')))
+   where id = p_staff;
+  return found;
+end $$;
+
+-- For the Edge Function: the person Officient just added for someone in the app.
+create function app_private.person_officient_link(p_staff uuid, p_oid int) returns boolean
+language plpgsql set search_path = public as $$
+begin
+  if exists (select 1 from public.staff where officient_id = p_oid and id <> p_staff) then
+    raise exception using message = 'Someone else in the app is linked with that person in Officient.', errcode = 'P0001';
+  end if;
+  update public.staff set officient_id = p_oid, officient_pending = '{}' where id = p_staff and officient_id is null;
   return found;
 end $$;
 

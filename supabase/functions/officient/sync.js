@@ -12,6 +12,9 @@ const PAYSLIP_NAME = /loonbrie|loonfiche|payslip|pay slip|fiche de paie|bulletin
 const MAX_DOWNLOADS = 60; // per run; the next night picks up the rest
 const NO_CALENDAR = 'Officient gives no access to the calendar yet. Add calendar:read and calendar:write to the Prikklok app in Officient, then connect again.';
 const NO_CONTRACTS = 'Officient gives no access to contracts yet. Add contracts.write to the Prikklok app in Officient, then connect again.';
+const NO_PEOPLE = 'Officient gives no access to change people yet. Add personal.info:write and basics:write to the Prikklok app in Officient, then connect again.';
+// the details the app can send to Officient, as the app names them
+const PERSON_FIELDS = ['phone', 'email', 'birth_date', 'national_id', 'iban', 'address'];
 // Reading PDFs is the heavy part: an Edge Function gets 2 seconds of CPU per
 // request, so one run reads for about this long and leaves the rest for the next.
 const READ_BUDGET_MS = 900;
@@ -372,18 +375,102 @@ export function makeOfficient({ db: query, fetch, readPayslip, api = OFFICIENT_A
     return out;
   }
 
+  // A person's details in the app next to Officient's, per detail, compared
+  // the way each is written (spaces, +32, upper or lower case don't count).
+  function personDiff(c, o) {
+    const digits = v => String(v || '').replace(/\D/g, '');
+    const a = o.address || {};
+    const line = (street, zip, city) => [street, [zip, city].filter(Boolean).join(' ')].filter(Boolean).join(', ');
+    const rows = [
+      ['phone', c.phone, o.phone, v => digits(v).replace(/^(00)?32/, '0')],
+      ['email', c.email, o.personal_email || o.email, v => String(v || '').trim().toLowerCase()],
+      ['birth_date', c.birth_date, o.birthdate, v => String(v || '').slice(0, 10)],
+      ['national_id', c.national_id, o.national_number, digits],
+      ['iban', c.iban, o.bank_account_iban, v => String(v || '').replace(/\s/g, '').toUpperCase()],
+      ['address', line(c.street, c.postcode, c.city), line([a.line_1, a.line_2].filter(Boolean).join(' '), a.zipcode, a.city),
+       v => String(v || '').toLowerCase().replace(/[\s,]+/g, ' ').trim()],
+    ];
+    return rows.map(([key, app, off, norm]) => ({ key, app: app || null, officient: off || null, differs: norm(app) !== norm(off),
+                                                   pending: (c.pending || []).includes(key) }));
+  }
+
+  // What Officient's "edit person" takes for the chosen details.
+  function personPatch(c, o, keys) {
+    const body = {};
+    if (keys.includes('phone') && c.phone) body.phone = c.phone;
+    if (keys.includes('email') && c.email) body[o.email ? 'personal_email' : 'email'] = c.email;
+    if (keys.includes('birth_date') && c.birth_date) body.birthdate = c.birth_date.split('-').reverse().join('/');
+    if (keys.includes('national_id') && c.national_id) {
+      const n = c.national_id;
+      body.national_number = `${n.slice(0, 2)}.${n.slice(2, 4)}.${n.slice(4, 6)}-${n.slice(6, 9)}.${n.slice(9)}`;
+    }
+    if (keys.includes('iban') && c.iban) body.bank_account_iban = c.iban.replace(/(.{4})(?=.)/g, '$1 ');
+    if (keys.includes('address') && c.street) {
+      Object.assign(body, { address_line_1: c.street, address_line_2: '', address_zipcode: c.postcode || '', address_city: c.city || '' });
+      if (!(o.address && o.address.country_code)) body.address_country_code = 'BE';
+    }
+    return body;
+  }
+
+  // Someone's details: with dry, the app's next to Officient's; otherwise the
+  // chosen ones (keys) go to Officient. What matches no longer waits.
+  async function person(access, appToken, staffId, dry, keys) {
+    const c = await db('select app_private.person_for_officient($1, $2::uuid) as r', [appToken, staffId]);
+    if (!c.officient_id) throw new Error("This person isn't linked with Officient yet.");
+    const o = await get(access, `/people/${c.officient_id}/detail`);
+    if (!o) throw new Error('Officient no longer has this person.');
+    const fields = personDiff(c, o);
+    if (dry) return { name: c.name, officient_name: o.name || null, fields };
+    const chosen = (Array.isArray(keys) ? keys : []).filter(k => PERSON_FIELDS.includes(k) && fields.find(f => f.key === k && f.app));
+    const body = personPatch(c, o, chosen);
+    if (Object.keys(body).length) {
+      const r = await send(access, 'PATCH', `/people/${c.officient_id}/detail`, body, NO_PEOPLE);
+      if (r.error) throw new Error(`Officient refused: ${r.error}`);
+    }
+    await db('select app_private.person_officient_done($1::uuid, $2::text[]) as r', [staffId, [...chosen, ...fields.filter(f => !f.differs).map(f => f.key)]]);
+    return { sent: chosen };
+  }
+
+  // Someone in the app who isn't in Officient yet: added there (name, e-mail,
+  // phone), linked, and given the rest of their details.
+  async function personAdd(access, appToken, staffId, name) {
+    const c = await db('select app_private.person_for_officient($1, $2::uuid) as r', [appToken, staffId]);
+    if (c.officient_id) throw new Error('This person is already in Officient.');
+    const full = String(name || '').trim().slice(0, 120) || c.name;
+    const r = await send(access, 'POST', '/people/add', { name: full, email: c.email || '', personal_email: '', phone: c.phone || '' }, NO_PEOPLE);
+    if (r.error) throw new Error(`Officient refused: ${r.error}`);
+    const id = Number(r.data && r.data.id);
+    if (!id) throw new Error('Officient did not add the person.');
+    await db('select app_private.person_officient_link($1::uuid, $2) as r', [staffId, id]);
+    const rest = ['birth_date', 'national_id', 'iban', 'address'].filter(k => k === 'address' ? c.street : c[k]);
+    let error = null;
+    if (rest.length) {
+      const p = await send(access, 'PATCH', `/people/${id}/detail`, personPatch(c, {}, rest), NO_PEOPLE);
+      // refused: those details wait, so they can be sent later
+      if (p.error) {
+        error = p.error;
+        await db('update public.staff set officient_pending = $2::text[] where id = $1::uuid returning true as r', [staffId, rest]);
+      }
+    }
+    return { officient_id: id, name: full, error };
+  }
+
   // action 'connect': right after the manager signed in at Officient (code, state);
   // action 'sync': a manager pressing "Nu ophalen", or the nightly job (cron);
   // action 'read': read payslips uploaded by hand, right after the upload;
   // action 'calendar': Officient's calendar for a month (month: YYYY-MM);
   // action 'hours': make it count a month's clocked hours (month, people; dry: only the plan);
   // action 'contract': a student contract into Officient (contract: its id; sign: e-mail it to sign);
-  // action 'contract_hours': its planned hours into Officient's calendar (contract; dry: only the plan).
-  async function run({ action, token: appToken, code, state, cron, month, people, dry, contract, sign }) {
+  // action 'contract_hours': its planned hours into Officient's calendar (contract; dry: only the plan);
+  // action 'person': someone's details next to Officient's (dry), or the chosen ones (fields) into Officient;
+  // action 'person_add': someone into Officient (staff; name: their full name there).
+  async function run({ action, token: appToken, code, state, cron, month, people, dry, contract, sign, staff, fields, name }) {
     const job = { spent: 0 };
-    if (['calendar', 'hours', 'contract', 'contract_hours'].includes(action)) {
+    if (['calendar', 'hours', 'contract', 'contract_hours', 'person', 'person_add'].includes(action)) {
       if (action.startsWith('contract')) {
         if (!/^[0-9a-f-]{36}$/.test(contract || '')) throw new Error('Pick a contract.');
+      } else if (action.startsWith('person')) {
+        if (!/^[0-9a-f-]{36}$/.test(staff || '')) throw new Error('Pick a team member.');
       } else if (!/^\d{4}-(0[1-9]|1[0-2])$/.test(month || '')) throw new Error('Pick a month.');
       if (action === 'hours' && !(Array.isArray(people) && people.length)) throw new Error('Pick who to send.');
       const cfg = await db('select app_private.officient_begin($1, null, null) as r', [appToken || '']);
@@ -395,9 +482,12 @@ export function makeOfficient({ db: query, fetch, readPayslip, api = OFFICIENT_A
         return { ok: true, ...(action === 'calendar' ? await calendar(t.access_token, month)
           : action === 'hours' ? await pushHours(t.access_token, month, people, appToken, !!dry)
           : action === 'contract' ? await sendContract(t.access_token, appToken, contract, !!sign)
-          : await contractHours(t.access_token, appToken, contract, !!dry)) };
+          : action === 'contract_hours' ? await contractHours(t.access_token, appToken, contract, !!dry)
+          : action === 'person' ? await person(t.access_token, appToken, staff, !!dry, fields)
+          : await personAdd(t.access_token, appToken, staff, name)) };
       } catch (e) {
-        throw /answered 40[13]/.test(e.message) ? new Error(NO_CALENDAR) : e;
+        if (!/answered 40[13]/.test(e.message)) throw e;
+        throw new Error(action === 'contract' ? NO_CONTRACTS : action.startsWith('person') ? NO_PEOPLE : NO_CALENDAR);
       } finally {
         await db('update app_private.officient set sync_started_at = null where id = 1 returning true as r', []);
       }

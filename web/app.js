@@ -64,15 +64,18 @@ const SERVER_NL = {
   'People needed must be between 1 and 20.': 'Het aantal personen moet tussen 1 en 20 liggen.',
   'Pick a date range up to a year long.': 'Kies een periode van maximaal een jaar.',
   'Pick a month.': 'Kies een maand.',
-  'Pick a month in the next three months.': 'Kies een maand in de komende drie maanden.',
   'Pick who to send.': 'Duid aan voor wie je de uren stuurt.',
   'Pick a contract.': 'Kies een contract.',
+  'Officient gives no access to change people yet. Add personal.info:write and basics:write to the Prikklok app in Officient, then connect again.': 'Officient laat de app nog geen mensen aanpassen. Voeg personal.info:write en basics:write toe aan de Prikklok-app in Officient en koppel opnieuw.',
+  'This person is already in Officient.': 'Deze persoon staat al in Officient.',
+  'Officient no longer has this person.': 'Officient heeft deze persoon niet meer.',
+  'Officient did not add the person.': 'Officient voegde de persoon niet toe.',
+  'Someone else in the app is linked with that person in Officient.': 'Iemand anders in de app is al gekoppeld met die persoon in Officient.',
   'Pick a shorter period.': 'Kies een kortere periode.',
   "This person isn't linked with Officient yet.": 'Deze persoon is nog niet gekoppeld met Officient. Haal de gegevens op bij Team → Exact Officient.',
   'Officient gives no access to contracts yet. Add contracts.write to the Prikklok app in Officient, then connect again.': 'Officient geeft nog geen toegang tot de contracten. Voeg contracts.write toe aan de Prikklok-app in Officient en koppel opnieuw.',
   'Officient did not take the contract.': 'Officient nam het contract niet aan.',
   'Officient has no absence type "Gewettigde Afwezigheid" (Securex code GA) this year.': 'Officient heeft dit jaar geen afwezigheid "Gewettigde Afwezigheid" (Securex-code GA). Kijk de soorten na in Officient.',
-  'That month has passed.': 'Die maand is al voorbij.',
   'Pick a role.': 'Kies een rol.',
   'Pick a shorter date range.': 'Kies een kortere periode.',
   'Pick a team member.': 'Kies een medewerker.',
@@ -754,7 +757,7 @@ function updateBadges() {
 const VIEWS = {
   clock: viewClock, shifts: viewShifts, hours: viewHours, profile: viewProfile, ranking: viewRanking,
   today: viewToday, schedule: viewSchedule, monthly: viewMonthly, requests: viewRequests, team: viewTeam, member: viewMember,
-  family: viewFamily, famstaff: viewFamilyStaff, availability: viewAvailability, contracts: viewContracts,
+  family: viewFamily, famstaff: viewFamilyStaff, contracts: viewContracts,
 };
 
 // #profile works for everyone (managers reach it through their picture);
@@ -765,17 +768,13 @@ function route() {
   const tabs = tabsFor().map(t => t[0]);
   let v = location.hash.replace('#', ''), tab = v;
   const member = v.match(/^team\/([0-9a-f-]{36})$/);
-  const availMonth = v.match(/^availability\/(\d{4}-\d{2})$/);
-  if (availMonth) v = tab = 'availability';
   const ctMonth = v.match(/^contracts(?:\/(\d{4}-\d{2}))?$/);
   if (ctMonth && isManager()) { v = 'contracts'; tab = 'schedule'; }
   if (member && isManager()) { S.memberId = member[1]; v = 'member'; tab = 'team'; }
   else if ((v === 'family' || v === 'famstaff') && isManager()) tab = 'team';
-  else if (v === 'availability' && tabs.includes('shifts')) tab = 'shifts';
   else if (v === 'contracts' && isManager()) tab = 'schedule';
   else if (!tabs.includes(v)) { v = tabs[0]; tab = v; }
   if (S.view !== v) S.month = null;
-  if (availMonth && v === 'availability') S.month = new Date(availMonth[1] + '-01T00:00');
   if (ctMonth && ctMonth[1] && v === 'contracts') S.month = new Date(ctMonth[1] + '-01T00:00');
   S.view = v;
   $$('[data-tab]').forEach(b => b.setAttribute('aria-current', b.dataset.tab === tab ? 'page' : 'false'));
@@ -1238,10 +1237,7 @@ function ownShift(s) {
 async function viewShifts(el, current) {
   S.month = S.month || startOfMonth(now());
   const m = S.month;
-  const [shifts, avail] = await Promise.all([
-    rpc('list_shifts', { p_from: m.toISOString(), p_to: addMonths(m, 1).toISOString() }),
-    rpc('my_availability', { p_month: toDateInput(nextMonth()) }),
-  ]);
+  const shifts = await rpc('list_shifts', { p_from: m.toISOString(), p_to: addMonths(m, 1).toISOString() });
   if (!current()) return;
   const t = now();
   const open = shifts.filter(s => !s.staff_id && new Date(s.ends_at) > t);
@@ -1258,166 +1254,13 @@ async function viewShifts(el, current) {
       <div class="stat"><span class="v">${mine.length}</span><span class="k">Jouw shiften</span></div>
       <div class="stat"><span class="v">${fmt.dur(mineMins)}</span><span class="k">Gepland voor jou</span></div>
     </div>
-    ${availabilityCard(avail)}
     <section class="card cal-card">${calendarHTML(shifts, m)}</section>
     ${horizonNote(m)}`;
   bindMonthNav(el);
   bindCalendar(el, shifts, false);
-  $('#av-open', el).addEventListener('click', () => { S.month = nextMonth(); location.hash = 'availability'; });
-}
-
-/* -------------------------------------------------------- availability */
-
-const availLink = m => `${location.origin}${location.pathname}#availability/${toDateInput(m).slice(0, 7)}`;
-const availMessage = m => `Hoi! Wil je in de app doorgeven wanneer je in ${fmt.monthName(m)} kan werken? ${availLink(m)}`;
-// A Belgian number as WhatsApp wants it: 0471 12 34 56 -> 32471123456.
-function waNumber(phone) {
-  let d = String(phone || '').replace(/[^\d+]/g, '');
-  if (d.startsWith('+')) d = d.slice(1); else if (d.startsWith('00')) d = d.slice(2); else if (d.startsWith('0')) d = '32' + d.slice(1);
-  return /^\d{8,15}$/.test(d) ? d : null;
-}
-
-// Planning: who handed in when they can work this month, and per day who can.
-function availabilityPanel(av, shifts, m) {
-  const expected = av.people.filter(p => !p.fixed && p.role !== 'manager');
-  if (!expected.length) return '';
-  const done = expected.filter(p => p.submitted_at), missing = expected.filter(p => !p.submitted_at);
-  const planned = new Map();
-  for (const x of shifts) if (x.staff_id) {
-    const d = toDateInput(new Date(x.starts_at));
-    if (!planned.has(d)) planned.set(d, new Set());
-    planned.get(d).add(x.staff_id);
-  }
-  const dayHTML = date => `
-    <div class="av-day"><span class="av-date">${esc(fmt.day(new Date(date + 'T00:00')))}</span>
-      ${av.slots[date].map(sl => {
-        const who = done.filter(p => p.days[date] && p.days[date].s.includes(sl.label));
-        return `<div class="av-slot"><span class="av-label">${esc(sl.label)}</span>${who.length ? who.map(p =>
-          `<span class="av-name${planned.has(date) && planned.get(date).has(p.staff_id) ? ' is-planned' : ''}">${esc(p.name)}${p.days[date].n ? ` <em>${esc(p.days[date].n)}</em>` : ''}</span>`).join('')
-          : '<span class="muted">niemand</span>'}</div>`;
-      }).join('')}
-    </div>`;
-  const notes = done.filter(p => p.note);
-  return `
-    <section class="card avail-mgr" id="avail-panel">
-      <div class="card-head"><h2>Beschikbaarheid</h2><span class="pill ${missing.length ? 'warn' : 'on'}">${done.length} van ${expected.length} doorgegeven</span></div>
-      <p class="muted small" style="margin-top:6px">Studenten en deeltijdsen geven in de app door wanneer ze kunnen werken. Bij het toewijzen van een shift staan wie kan bovenaan.</p>
-      ${missing.length ? `<div class="av-missing"><span class="small">Nog niet doorgegeven:</span>${missing.map(p => {
-        const wa = waNumber(p.phone);
-        return `<span class="av-person">${esc(p.name)}${wa ? ` <a class="sm-link" href="https://wa.me/${wa}?text=${encodeURIComponent(availMessage(m))}" target="_blank" rel="noopener">WhatsApp</a>` : ''}</span>`;
-      }).join('')}</div>` : ''}
-      <div class="form-actions" style="justify-content:flex-start"><button class="sm" id="av-copy">Herinnering kopiëren</button>
-        ${done.length ? `<button class="sm" id="av-toggle">${S.availOpen ? 'Verbergen' : 'Per dag bekijken'}</button>` : ''}</div>
-      <div class="av-grid" id="av-grid" ${S.availOpen && done.length ? '' : 'hidden'}>
-        ${notes.length ? `<p class="small"><strong>Opmerkingen:</strong> ${notes.map(p => `${esc(p.name)}: “${esc(p.note)}”`).join(' · ')}</p>` : ''}
-        <div class="av-days">${Object.keys(av.slots).sort().map(dayHTML).join('')}</div>
-        <p class="muted small">Vet: staat die dag al op de planning.</p>
-      </div>
-    </section>`;
-}
-
-function bindAvailabilityPanel(el, av, m) {
-  const copy = $('#av-copy', el);
-  if (copy) copy.addEventListener('click', async () => {
-    try { await navigator.clipboard.writeText(availMessage(m)); toast('Bericht gekopieerd. Plak het in WhatsApp of een sms.'); }
-    catch { await modal.confirm({ title: 'Herinnering', body: esc(availMessage(m)), ok: 'Sluiten' }); }
-  });
-  const toggle = $('#av-toggle', el);
-  if (toggle) toggle.addEventListener('click', () => {
-    S.availOpen = !S.availOpen;
-    $('#av-grid', el).hidden = !S.availOpen;
-    toggle.textContent = S.availOpen ? 'Verbergen' : 'Per dag bekijken';
-  });
 }
 
 const nextMonth = () => addMonths(startOfMonth(now()), 1);
-const availDays = a => Object.values(a.days).filter(d => d.s && d.s.length).length;
-
-// On Shiften: hand in when you can work next month.
-function availabilityCard(a) {
-  const name = fmt.monthName(new Date(a.month + 'T00:00'));
-  return `
-    <section class="card avail-card">
-      <div class="card-head"><h2>Wanneer kan je werken in ${name}?</h2>
-        ${a.submitted_at ? `<span class="pill on">Doorgegeven op ${fmt.short(a.submitted_at)}</span>` : '<span class="pill warn">Nog niet doorgegeven</span>'}</div>
-      <p class="muted small" style="margin-top:6px">${a.submitted_at
-        ? `Je gaf ${plural(availDays(a), 'dag', 'dagen')} door. Iets veranderd? Pas het aan; je verantwoordelijke ziet het meteen.`
-        : 'Duid aan op welke dagen je de middag of de avond kan werken. Daarmee maakt je verantwoordelijke de planning.'}</p>
-      <div class="form-actions"><button class="${a.submitted_at ? '' : 'primary'}" id="av-open">${a.submitted_at ? 'Aanpassen' : 'Beschikbaarheid doorgeven'}</button></div>
-    </section>`;
-}
-
-async function viewAvailability(el, current) {
-  const first = startOfMonth(now()), last = addMonths(first, 3);
-  if (!S.month || S.month < first || S.month > last) S.month = nextMonth();
-  const m = S.month;
-  const a = await rpc('my_availability', { p_month: toDateInput(m) });
-  if (!current()) return;
-  const days = JSON.parse(JSON.stringify(a.days));
-  const dates = Object.keys(a.slots).sort();
-  const weekdays = [1, 2, 3, 4, 5, 6, 0].filter(wd => dates.some(d => new Date(d + 'T00:00').getDay() === wd));
-  const labelsOn = wd => [...new Set(dates.filter(d => new Date(d + 'T00:00').getDay() === wd).flatMap(d => a.slots[d].map(x => x.label)))];
-  const has = (date, label) => !!(days[date] && days[date].s.includes(label));
-  const dayRow = date => `
-    <div class="avail-day" data-date="${date}">
-      <span class="avail-date">${esc(fmt.day(new Date(date + 'T00:00')))}</span>
-      <span class="avail-slots">${a.slots[date].map(sl => `<button type="button" class="chip${has(date, sl.label) ? ' is-on' : ''}" data-slot="${esc(sl.label)}" aria-pressed="${has(date, sl.label)}">${esc(sl.label)}${sl.start ? ` <span class="avail-time">${sl.start}–${sl.end}</span>` : ''}</button>`).join('')}</span>
-      <input class="avail-note" maxlength="120" placeholder="Opmerking, bv. vanaf 18u" value="${esc((days[date] && days[date].n) || '')}" aria-label="Opmerking voor ${esc(fmt.day(new Date(date + 'T00:00')))}">
-    </div>`;
-  el.innerHTML = `
-    <div class="view-head">
-      <div><button class="link back" id="back">‹ Shiften</button><h1>Beschikbaarheid</h1>
-        <p>Tik op <strong>Middag</strong> of <strong>Avond</strong> op elke dag dat je kan werken. Kan je maar een deel? Zet het erbij, bv. "vanaf 18u".</p></div>
-      ${periodBar(fmt.month(m), a.submitted_at ? `Doorgegeven op ${fmt.short(a.submitted_at)}` : 'Nog niet doorgegeven', 'mo-prev', 'mo-next')}
-    </div>
-    <section class="card">
-      ${dates.length ? `
-      <div class="avail-quick"><span class="muted small">Elke week hetzelfde? Tik hier om alle dagen van die weekdag aan of uit te zetten.</span>
-        <div class="avail-quick-rows">${weekdays.map(wd => `<div class="avail-quick-row"><span>Elke ${DAY_NAMES[wd]}</span>${labelsOn(wd).map(l => `<button type="button" class="chip sm" data-all-wd="${wd}" data-all-slot="${esc(l)}">${esc(l)}</button>`).join('')}</div>`).join('')}</div></div>
-      <div class="avail-days">${dates.map(dayRow).join('')}</div>` : '<p class="empty">Er zijn geen open shiften in deze maand.</p>'}
-      <div class="field" style="margin-top:14px"><label for="av-note">Opmerking voor de planning (optioneel)</label>
-        <textarea id="av-note" rows="2" maxlength="500" placeholder="bv. examens tot 15 januari">${esc(a.note)}</textarea></div>
-      <p class="form-error" id="av-err"></p>
-      <div class="form-actions" style="justify-content:space-between"><span class="muted small" id="av-count"></span>
-        <button class="primary" id="av-save">${a.submitted_at ? 'Opnieuw doorgeven' : 'Doorgeven'}</button></div>
-    </section>`;
-  const count = () => { $('#av-count', el).textContent = `${plural(Object.values(days).filter(d => d.s.length).length, 'dag', 'dagen')} aangeduid`; };
-  const set = (date, label, on) => {
-    const d = days[date] || (days[date] = { s: [], n: '' });
-    d.s = on ? [...new Set([...d.s, label])] : d.s.filter(x => x !== label);
-    const b = $(`.avail-day[data-date="${date}"] [data-slot="${CSS.escape(label)}"]`, el);
-    if (b) { b.classList.toggle('is-on', on); b.setAttribute('aria-pressed', on); }
-  };
-  count();
-  $('#back', el).addEventListener('click', () => { S.month = null; location.hash = 'shifts'; });
-  $('#mo-prev', el).disabled = m <= first;
-  $('#mo-next', el).disabled = m >= last;
-  $('#mo-prev', el).addEventListener('click', () => { S.month = addMonths(m, -1); renderView(); });
-  $('#mo-next', el).addEventListener('click', () => { S.month = addMonths(m, 1); renderView(); });
-  $$('.avail-day', el).forEach(row => {
-    const date = row.dataset.date;
-    $$('[data-slot]', row).forEach(b => b.addEventListener('click', () => { set(date, b.dataset.slot, !has(date, b.dataset.slot)); count(); }));
-    $('.avail-note', row).addEventListener('input', ev => { (days[date] || (days[date] = { s: [], n: '' })).n = ev.target.value; });
-  });
-  $$('[data-all-wd]', el).forEach(b => b.addEventListener('click', () => {
-    const wd = Number(b.dataset.allWd), label = b.dataset.allSlot;
-    const these = dates.filter(d => new Date(d + 'T00:00').getDay() === wd && a.slots[d].some(x => x.label === label));
-    const on = !these.every(d => has(d, label));
-    these.forEach(d => set(d, label, on));
-    count();
-  }));
-  const save = $('#av-save', el);
-  save.addEventListener('click', async () => {
-    const n = Object.values(days).filter(d => d.s.length).length;
-    if (!n && !(await modal.confirm({ title: `Niet beschikbaar in ${fmt.monthName(m)}?`, body: 'Je hebt geen enkele dag aangeduid. Je verantwoordelijke ziet dan dat je deze maand niet kan.', ok: 'Ja, doorgeven' }))) return;
-    busy(save, async () => {
-      await rpc('save_my_availability', { p_month: toDateInput(m), p_days: days, p_note: $('#av-note', el).value });
-      toast(`Doorgegeven voor ${fmt.monthName(m)}. Je kan het nog aanpassen.`);
-      S.month = null;
-      location.hash = 'shifts';
-    }).catch(e => { $('#av-err', el).textContent = e.message; });
-  });
-}
 
 async function loadStaff(force = false) {
   if (!S.staff || force) S.staff = await rpc('mgr_staff_list');
@@ -1425,46 +1268,21 @@ async function loadStaff(force = false) {
 }
 const workers = () => (S.staff || []).filter(p => p.role !== 'viewer');
 const activeStaff = () => workers().filter(p => p.active);
-// shift: when given, people are grouped by whether they said they can work it.
-function staffOptions(selected, { openLabel = 'Open', shift = null } = {}) {
-  const opt = (p, extra = '') => `<option value="${p.id}" ${p.id === selected ? 'selected' : ''}>${esc(p.name)}${extra}</option>`;
-  const people = activeStaff();
-  const can = shift && availabilityFor(shift);
-  if (!can) return `<option value="">${esc(openLabel)}</option>` + people.map(p => opt(p)).join('');
-  const groups = [['yes', 'Kan werken'], ['unknown', 'Gaf (nog) niets door'], ['no', 'Kan niet volgens de beschikbaarheid']];
-  return `<option value="">${esc(openLabel)}</option>` + groups.map(([k, label]) => {
-    const list = people.filter(p => can(p.id).state === k);
-    return list.length ? `<optgroup label="${label}">${list.map(p => { const c = can(p.id); return opt(p, c.note ? ` (${esc(c.note)})` : ''); }).join('')}</optgroup>` : '';
-  }).join('');
-}
-
-// For a shift in the month the planning shows: per person 'yes', 'no' or
-// 'unknown' (handed nothing in, or a fixed worker), with their note of that day.
-function availabilityFor(shift) {
-  const av = S.avail, a = new Date(shift.starts_at), date = toDateInput(a);
-  if (!av || av.month !== toDateInput(startOfMonth(a))) return null;
-  const slots = (av.slots[date] || []).filter(sl => sl.label === shift.label
-    || (sl.start && sl.start < toTimeInput(new Date(shift.ends_at)) && sl.end > toTimeInput(a)));
-  return id => {
-    const p = av.people.find(x => x.staff_id === id);
-    if (!p || !p.submitted_at) return { state: 'unknown' };
-    const d = p.days[date];
-    return { state: d && slots.some(sl => d.s.includes(sl.label)) ? 'yes' : 'no', note: d && d.n };
-  };
+function staffOptions(selected, { openLabel = 'Open' } = {}) {
+  return `<option value="">${esc(openLabel)}</option>` +
+    activeStaff().map(p => `<option value="${p.id}" ${p.id === selected ? 'selected' : ''}>${esc(p.name)}</option>`).join('');
 }
 const daysText = days => [...days].sort((a, b) => ((a + 6) % 7) - ((b + 6) % 7)).map(d => DAY_SHORT[d]).join(', ');
 
 async function viewSchedule(el, current) {
   S.month = S.month || startOfMonth(now());
   const m = S.month;
-  const [shifts, templates, avail] = await Promise.all([
+  const [shifts, templates] = await Promise.all([
     rpc('list_shifts', { p_from: m.toISOString(), p_to: addMonths(m, 1).toISOString() }),
     rpc('mgr_templates'),
-    rpc('mgr_availability', { p_month: toDateInput(m) }),
     loadStaff(),
   ]);
   if (!current()) return;
-  S.avail = avail;
   const t = now();
   const filled = shifts.filter(s => s.staff_id).length;
   const openAhead = shifts.filter(s => !s.staff_id && new Date(s.ends_at) > t).length;
@@ -1475,10 +1293,9 @@ async function viewSchedule(el, current) {
       ${periodBar(fmt.month(m), sameDay(m, startOfMonth(t)) ? 'Deze maand' : '', 'mo-prev', 'mo-next')}
     </div>
     ${monthChips()}
-    ${availabilityPanel(avail, shifts, m)}
     <section class="card cal-card">
       <div class="cal-toolbar"><span class="muted small">Gebruik + op een dag voor een extra shift.</span>
-        <span class="toolbar"><button class="sm" id="ct-open">Studentencontracten</button><button class="sm" id="print-plan">Afdrukken</button><button class="primary sm" id="add-shift">+ Shift toevoegen</button></span></div>
+        <span class="toolbar"><button class="sm" id="ct-open">Studentencontracten</button><button class="primary sm" id="add-shift">+ Shift toevoegen</button></span></div>
       ${calendarHTML(shifts, m, { manager: true })}
     </section>
     ${horizonNote(m)}
@@ -1498,10 +1315,7 @@ async function viewSchedule(el, current) {
     </section>`;
   bindMonthNav(el);
   bindCalendar(el, shifts, true);
-  bindAvailabilityPanel(el, avail, m);
   $('#ct-open', el).addEventListener('click', () => { location.hash = `contracts/${toDateInput(m).slice(0, 7)}`; });
-  $('#print-plan', el).addEventListener('click', () => printSchedule({ m, shifts,
-    fixed: byPerson(fixedTps).map(([name, list]) => ({ name, text: fixedText(list) })) }));
   $('#add-shift', el).addEventListener('click', () => addShiftModal(toDateInput(sameDay(m, startOfMonth(t)) ? t : m)));
   $('#add-template', el).addEventListener('click', () => templateModal(null));
   $$('[data-template]', el).forEach(b => b.addEventListener('click', () => templateModal(templates.find(x => x.id === b.dataset.template))));
@@ -1625,7 +1439,7 @@ function editShift(s) {
     ${s.released ? `<p class="hint info">${esc(s.released.name)} gaf deze shift terug op ${esc(fmt.when(s.released.at))}: “${esc(s.released.reason)}”</p>` : ''}
     <form id="es-form" novalidate>
       <div class="form-grid">
-        <div class="field wide"><label for="es-staff">Wie werkt</label><select id="es-staff">${staffOptions(s.staff_id, { openLabel: 'Open – het personeel kan hem opnemen', shift: s })}
+        <div class="field wide"><label for="es-staff">Wie werkt</label><select id="es-staff">${staffOptions(s.staff_id, { openLabel: 'Open – het personeel kan hem opnemen' })}
           ${s.staff_id && !activeStaff().some(p => p.id === s.staff_id) ? `<option value="${s.staff_id}" selected>${esc(s.staff_name)}</option>` : ''}</select></div>
         <div class="field wide"><label for="es-date">Datum</label>${dateField('es-date', a, addMonths(startOfMonth(a), -1), addDays(addMonths(startOfMonth(a), 2), -1))}</div>
         <div class="field"><label for="es-start">Begint</label>${timeField('es-start', toTimeInput(a))}</div>
@@ -1993,12 +1807,95 @@ function wageCodesModal() {
   });
 }
 
+/* ------------------------------------------------------ people into Officient */
+
+const PERSON_LABEL = { phone: 'telefoon', email: 'e-mail', birth_date: 'geboortedatum', national_id: 'rijksregisternummer', iban: 'rekeningnummer', address: 'adres' };
+const PERSON_ORDER = ['national_id', 'birth_date', 'address', 'iban', 'email', 'phone'];
+// A detail as people read it, from the app or from Officient.
+function personValue(key, v) {
+  if (!v) return '<span class="muted">–</span>';
+  if (key === 'birth_date') return esc(isoToDMY(String(v).slice(0, 10)));
+  if (key === 'national_id') { const d = String(v).replace(/\D/g, ''); return esc(d.length === 11 ? `${d.slice(0, 2)}.${d.slice(2, 4)}.${d.slice(4, 6)}-${d.slice(6, 9)}.${d.slice(9)}` : v); }
+  if (key === 'iban') return esc(String(v).replace(/\s/g, '').replace(/(.{4})(?=.)/g, '$1 '));
+  return esc(v);
+}
+
+// Someone's details next to Officient's; the ones ticked go to Officient.
+function personOfficientModal(p) {
+  modal.open(`
+    <h2 id="modal-title">${esc(p.name)} · Officient</h2>
+    <p>Officient is wat Securex gebruikt. Hier zie je de gegevens in de app naast die in Officient. Duid aan wat de app naar Officient stuurt.</p>
+    <div id="po-list"><p class="muted">Officient wordt gelezen…</p></div>
+    <p class="form-error" id="po-err"></p>
+    <div class="form-actions"><button type="button" data-close>Annuleren</button><button type="button" class="primary" id="po-go" disabled>Naar Officient sturen</button></div>`, async d => {
+    const out = $('#po-list', d), go = $('#po-go', d);
+    let r;
+    try { r = await officientCall({ action: 'person', staff: p.id, dry: true }); }
+    catch (e) { out.innerHTML = `<p class="hint bad">${esc(e.message)}</p>`; return; }
+    const fields = PERSON_ORDER.map(k => r.fields.find(f => f.key === k)).filter(Boolean);
+    // official details Officient already has stay unticked unless they were changed in the app
+    const tick = f => f.differs && f.app && (f.pending || !f.officient || f.key === 'phone' || f.key === 'email');
+    out.innerHTML = `${r.officient_name && r.officient_name !== p.name ? `<p class="muted small">In Officient: ${esc(r.officient_name)}</p>` : ''}
+      <div class="table-wrap"><table class="po-table">
+        <thead><tr><th></th><th>Gegeven</th><th>In de app</th><th>In Officient</th></tr></thead>
+        <tbody>${fields.map(f => `<tr class="${f.differs ? 'is-diff' : ''}">
+          <td>${f.differs && f.app ? `<input type="checkbox" data-po="${f.key}" ${tick(f) ? 'checked' : ''} aria-label="${PERSON_LABEL[f.key]} sturen">` : ''}</td>
+          <td>${PERSON_LABEL[f.key]}${f.pending ? ' <span class="pill warn">aangepast in de app</span>' : ''}</td>
+          <td>${personValue(f.key, f.app)}</td><td>${f.differs ? personValue(f.key, f.officient) : '<span class="muted">hetzelfde</span>'}</td></tr>`).join('')}</tbody>
+      </table></div>
+      ${fields.some(f => f.differs && f.app) ? '' : '<p class="hint info">Officient heeft dezelfde gegevens. Er is niets te sturen.</p>'}`;
+    go.disabled = !fields.some(f => f.differs && f.app);
+    go.addEventListener('click', () => {
+      const keys = $$('[data-po]', d).filter(x => x.checked).map(x => x.dataset.po);
+      if (!keys.length) { $('#po-err', d).textContent = 'Duid minstens één gegeven aan.'; return; }
+      busy(go, async () => {
+        await officientCall({ action: 'person', staff: p.id, fields: keys });
+        modal.close();
+        toast(`In Officient aangepast: ${keys.map(k => PERSON_LABEL[k]).join(', ')}.`);
+        renderView();
+      }).catch(e => { $('#po-err', d).textContent = e.message; });
+    });
+  }, { wide: true });
+}
+
+// Someone in the app who isn't in Officient yet: added there with their details.
+function personAddModal(p, pr) {
+  const has = { email: pr.email, phone: pr.phone, birth_date: pr.birth_date, national_id: pr.national_id, iban: pr.iban, address: pr.street };
+  const known = PERSON_ORDER.filter(k => has[k]), missing = PERSON_ORDER.filter(k => !has[k]);
+  modal.open(`
+    <h2 id="modal-title">${esc(p.name)} in Officient aanmaken</h2>
+    <form id="pa-form" novalidate>
+      <div class="field"><label for="pa-name">Volledige naam in Officient</label><input id="pa-name" maxlength="120" value="${esc(p.name)}">
+        <span class="help">Voornaam en achternaam, zoals op de identiteitskaart.</span></div>
+      <p style="margin-top:12px">${known.length ? `Gaat mee: ${known.map(k => PERSON_LABEL[k]).join(', ')}.` : 'Er staan nog geen gegevens in het profiel.'}
+        ${missing.length ? `<span class="muted">Nog niet in het profiel: ${missing.map(k => PERSON_LABEL[k]).join(', ')}.</span>` : ''}</p>
+      <p class="muted small">Officient maakt alleen de persoon aan. Het contract, het loon en de tewerkstelling (met de Dimona) doe je daarna in Officient.</p>
+      <p class="form-error" id="pa-err"></p>
+      <div class="form-actions"><button type="button" data-close>Annuleren</button><button type="submit" class="primary">In Officient aanmaken</button></div>
+    </form>`, d => {
+    $('#pa-form', d).addEventListener('submit', ev => {
+      ev.preventDefault();
+      const name = $('#pa-name', d).value.trim();
+      if (name.split(/\s+/).length < 2) { $('#pa-err', d).textContent = 'Vul de voornaam en de achternaam in.'; return; }
+      busy($('button[type=submit]', d), async () => {
+        const r = await officientCall({ action: 'person_add', staff: p.id, name });
+        modal.close();
+        if (r.error) toast(`${r.name} staat in Officient, maar de rest van de gegevens nam Officient niet aan: ${r.error}`, 'error');
+        else toast(`${r.name} staat nu in Officient, met de gegevens uit het profiel.`);
+        renderView();
+      }).catch(e => { $('#pa-err', d).textContent = e.message; });
+    });
+  });
+}
+
 /* ------------------------------------------------------------ student contracts */
 
 // The employer's details on every student contract, as Securex's model asks them.
 const CONTRACT_INFO = [
   ['employer', 'Werkgever (naam van de vennootschap)', 'bv. XIN SEN BV'],
   ['employer_address', 'Adres van de werkgever', 'straat, postcode en gemeente'],
+  ['vat', 'Ondernemingsnummer (btw)', 'bv. BE 0472.229.850'],
+  ['phone', 'Telefoon van de zaak', 'bv. 051 54 68 51'],
   ['representative', 'Vertegenwoordigd door', 'wie tekent voor de werkgever'],
   ['work_address', 'Plaats van het werk', 'adres van de zaak'],
   ['notify', 'Te verwittigen bij ziekte of ongeval', 'naam en telefoon'],
@@ -2037,7 +1934,8 @@ async function viewContracts(el, current) {
         <span class="row-sub">${p.planned_minutes ? `${fmt.hours2(p.planned_minutes)} u gepland op ${plural(p.planned_days, 'dag', 'dagen')}` : 'Nog niets gepland'}
           ${c ? ` · contract ${fmt.short(c.starts_on)} – ${fmt.short(c.ends_on)}${c.hours != null ? `, ${num(Number(c.hours))} u` : ''}` : ''}</span>
         ${p.missing.length ? `<span class="row-sub"><span class="pill warn">Ontbreekt: ${p.missing.map(k => CONTRACT_MISSING[k]).join(', ')}</span> <a href="#team/${p.staff_id}">Aanvullen</a></span>` : ''}
-        ${c ? `<span class="row-sub">${pills(c)}${!p.officient_id ? '<span class="muted small">Niet gekoppeld met Officient</span>' : ''}</span>` : ''}
+        ${c ? `<span class="row-sub">${pills(c)}</span>` : ''}
+        ${!p.officient_id ? `<span class="row-sub"><span class="muted small">Nog niet in Officient.</span> <a href="#team/${p.staff_id}">Aanmaken bij de persoon</a></span>` : ''}
       </div>
       <div class="row-actions">
         ${c ? `<button class="sm" data-ct-dl="${c.id}">Downloaden</button>` : ''}
@@ -3435,6 +3333,10 @@ async function viewMember(el, current) {
     <section class="card">
       <div class="card-head"><h2>Persoonlijke gegevens</h2><button class="sm" id="from-slip">Invullen vanuit een loonfiche</button></div>
       <p class="muted small" style="margin-top:6px">${esc(first)} kan deze gegevens ook zelf invullen bij Profiel. Alleen die persoon en de verantwoordelijken zien ze.</p>
+      ${p.officient_connected ? `<div class="off-person">${p.officient_id
+        ? `${p.officient_pending.length ? `<span class="pill warn">Nog niet in Officient: ${p.officient_pending.map(k => PERSON_LABEL[k]).join(', ')}</span>` : '<span class="muted small">Gekoppeld met Officient.</span>'}
+           <button type="button" class="sm" id="pf-off">Vergelijken met Officient…</button>`
+        : `<span class="muted small">Nog niet in Officient.</span> <button type="button" class="sm" id="pf-off-add">In Officient aanmaken…</button>`}</div>` : ''}
       <form id="pf-form" novalidate><div class="form-grid" style="margin-top:12px">${profileFields('mf', pr)}</div>
         <p class="form-error" id="pf-err"></p><div class="form-actions"><button type="submit" class="primary">Gegevens opslaan</button></div></form>
     </section>
@@ -3507,6 +3409,10 @@ async function viewMember(el, current) {
     }).catch(e => { err.textContent = e.message; });
   });
 
+  const pfOff = $('#pf-off', el), pfAdd = $('#pf-off-add', el);
+  if (pfOff) pfOff.addEventListener('click', () => personOfficientModal(p));
+  if (pfAdd) pfAdd.addEventListener('click', () => personAddModal(p, pr));
+
   // contracts
   const box = $('#ct-box', el), ctFile = $('#ct-file', el);
   let chosen = null;
@@ -3564,7 +3470,7 @@ const officientCall = body => rpc('officient', { token: S.token, ...body }, { au
 const OFFICIENT_RETURN = 'prikklok.officient';
 const OFFICIENT_STATE = 'prikklok.officient.state';
 const OFFICIENT_SCOPES = ['basics:read', 'personal.info:read', 'wages:read', 'weekly.schedules:read', 'contracts:read', 'documents.read',
-  'calendar:read', 'calendar:write', 'contracts.write'];
+  'calendar:read', 'calendar:write', 'contracts.write', 'personal.info:write', 'basics:write'];
 
 // Officient sends the manager back to the app with ?code=…&state=… (or an
 // error); keep it until the app has signed in, and clean up the address. If
@@ -3635,7 +3541,7 @@ function officientCard(o, link) {
     <form id="off-form" novalidate>
       <ol class="plain-list off-steps">
         <li>Meld je aan in Officient als beheerder. Klik rechtsboven op je avatar en dan op <a href="https://${esc(host)}/developer" target="_blank" rel="noopener">Developers</a>.</li>
-        <li>Maak een <strong>client app</strong>, bv. “Prikklok”. Geef deze rechten: <code>${OFFICIENT_SCOPES.join('</code>, <code>')}</code>. Alles is lezen, behalve <code>calendar:write</code> en <code>contracts.write</code>: daarmee zet de app de uren in de Officient-kalender en de studentencontracten bij de contracten, pas als jij dat doet.</li>
+        <li>Maak een <strong>client app</strong>, bv. “Prikklok”. Geef deze rechten: <code>${OFFICIENT_SCOPES.join('</code>, <code>')}</code>. De rechten die eindigen op <code>write</code> laten de app iets in Officient zetten: uren in de kalender, studentencontracten, gegevens van je personeel en nieuwe mensen. Dat gebeurt alleen als jij erop klikt.</li>
         <li>Vul als <strong>callback-URL</strong> in: <span class="copybox off-callback"><code id="off-cb">${esc(callback)}</code><button type="button" class="sm" id="off-copy">Kopiëren</button></span></li>
         <li>Kopieer de <strong>client ID</strong> en de <strong>client secret</strong> van die app hieronder.</li>
       </ol>
@@ -3661,6 +3567,9 @@ function officientCard(o, link) {
       ${o.last_sync_at ? `Laatst opgehaald: <strong>${esc(fmt.when(o.last_sync_at))}</strong>.` : 'Nog niet opgehaald.'}</p>
     ${o.last_error ? `<p class="hint bad">Het laatste ophalen lukte niet: ${esc(tr(o.last_error))}</p>` : ''}
     ${officientReport(o.last_report)}
+    ${(o.pending || []).length ? `<p class="hint warn">Gegevens aangepast in de app, nog niet in Officient: ${o.pending.map(x =>
+      `<a href="#team/${x.id}">${esc(x.name)}</a> (${x.fields.map(k => PERSON_LABEL[k]).join(', ')})`).join('; ')}. Open de persoon en klik op Vergelijken met Officient.</p>` : ''}
+    ${(o.unlinked || []).length ? `<p class="muted small">Niet in Officient: ${o.unlinked.map(x => `<a href="#team/${x.id}">${esc(x.name)}</a>`).join(', ')}. Wie er moet komen, maak je aan bij de persoon: In Officient aanmaken.</p>` : ''}
     <div class="form-actions" style="justify-content:space-between"><span class="toolbar"><button type="button" class="danger" id="off-disconnect">Ontkoppelen</button>
         <button type="button" id="off-connect" title="Na het aanpassen van de rechten van de app in Officient">Opnieuw koppelen</button></span>
       <button type="button" class="primary" id="off-sync" ${o.syncing ? 'disabled' : ''}>${o.syncing ? 'Bezig met ophalen…' : 'Nu ophalen'}</button></div>`;
@@ -3822,48 +3731,6 @@ const famSignOut = () => isViewer() ? `<button type="button" class="signout-wide
 
 const DAY_NAMES_ZH = ['星期日', '星期一', '星期二', '星期三', '星期四', '星期五', '星期六'];
 
-/* ------------------------------------------------------------ printing */
-
-// One A4 page with the month's schedule, for on the wall: a row per day, a
-// column per part of the day, open places in red. fixed: [{name, text}] for
-// the fixed workers, who are not in the calendar. t: (nl, zh) => text.
-function printSchedule({ m, shifts, fixed = [], t = nl => nl }) {
-  const zh = t('nl', 'zh') === 'zh';
-  const start = new Map();
-  for (const x of shifts) {
-    const part = shiftPart(x), h = new Date(x.starts_at).getHours() * 60 + new Date(x.starts_at).getMinutes();
-    start.set(part, Math.min(start.get(part) ?? h, h));
-  }
-  const parts = [...start.keys()].sort((a, b) => start.get(a) - start.get(b));
-  const partName = p => p === 'Middag' ? t('Middag', '午班') : p === 'Avond' ? t('Avond', '晚班') : p;
-  const dayName = d => zh ? `${d.getMonth() + 1}月${d.getDate()}日 ${DAY_NAMES_ZH[d.getDay()].replace('星期', '周')}` : fmt.day(d);
-  const cell = list => list.map(x => x.open
-    ? `<div class="print-open">${t('OPEN', '空缺')}${x.count > 1 ? ` ×${x.count}` : ''} <span>${fmt.range(x.starts_at, x.ends_at)}</span></div>`
-    : `<div>${esc(x.staff_name)} <span>${fmt.range(x.starts_at, x.ends_at)}</span></div>`).join('');
-  const rows = [];
-  for (let d = new Date(m); d < addMonths(m, 1); d = addDays(d, 1)) {
-    const today = dayEntries(shifts.filter(x => sameDay(x.starts_at, d)));
-    rows.push(`<tr class="${[0, 5, 6].includes(d.getDay()) ? 'print-weekend' : ''}"><th>${esc(dayName(d))}</th>${today.length
-      ? parts.map(p => `<td>${cell(today.filter(x => shiftPart(x) === p))}</td>`).join('')
-      : `<td class="print-closed" colspan="${Math.max(parts.length, 1)}">${t('Gesloten', '休息')}</td>`}</tr>`);
-  }
-  const area = document.createElement('div');
-  area.id = 'print-area';
-  area.setAttribute('lang', zh ? 'zh-CN' : 'nl');
-  area.innerHTML = `
-    <h1>${esc(t('Planning', '排班'))} ${esc(zh ? fam.month(m) : fmt.month(m))} · ${esc(S.settings.business_name)}</h1>
-    ${fixed.length ? `<p class="print-fixed"><strong>${t('Vaste werknemers', '固定员工')}:</strong> ${fixed.map(f => `${esc(f.name)}${f.text ? ` (${esc(f.text)})` : ''}`).join(' · ')}</p>` : ''}
-    <table class="print-table"><thead><tr><th>${t('Dag', '日期')}</th>${parts.map(p => `<th>${esc(partName(p))}</th>`).join('')}</tr></thead>
-      <tbody>${rows.join('')}</tbody></table>
-    <p class="print-foot">${t('Afgedrukt op', '打印于')} ${esc(fmt.short(now()))} ${esc(fmt.time(now()))}</p>`;
-  document.getElementById('print-area')?.remove();
-  document.body.append(area);
-  document.body.classList.add('printing');
-  const done = () => { document.body.classList.remove('printing'); area.remove(); window.removeEventListener('afterprint', done); };
-  window.addEventListener('afterprint', done);
-  window.print();
-}
-
 // A fixed worker's weekly hours in words: "elke dag behalve dinsdag · 11:30 – 14:30 en 17:00 – 22:30".
 function fixedText(list, t = nl => nl) {
   if (!list || !list.length) return '';
@@ -3997,13 +3864,10 @@ async function viewFamily(el, current) {
       <div class="stat"><span class="v">${shifts.filter(s => s.staff_id).length}</span><span class="k">${L('Shiften met iemand', '有人的班次')}</span></div>
       <div class="stat"><span class="v">${working}</span><span class="k">${L('Mensen die nog komen werken', '还要来上班的人')}</span></div>
     </div>
-    <section class="card cal-card">${famCalendarHTML(shifts, m, people, day)}
-      <div class="form-actions"><button type="button" class="sm" id="fam-print">${L('Afdrukken', '打印')}</button></div></section>
+    <section class="card cal-card">${famCalendarHTML(shifts, m, people, day)}</section>
     <section class="card fam-daypanel" id="fam-day" lang="${langAttr()}">${famDayHTML(shifts, day, people)}</section>
     ${famSignOut()}`;
   bindFamilyHead(el, m);
-  $('#fam-print', el).addEventListener('click', () => printSchedule({ m, shifts, t: L,
-    fixed: people.filter(p => p.active && p.fixed && p.fixed.length).map(p => ({ name: p.name, text: fixedText(p.fixed, L) })) }));
   // phones: a tap on a day shows it below the calendar
   $('.cal-grid', el).addEventListener('click', ev => {
     const cell = ev.target.closest('.cal-cell[data-day]');
