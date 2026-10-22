@@ -140,11 +140,65 @@ export function makeOfficient({ db: query, fetch, readPayslip, api = OFFICIENT_A
     return report;
   }
 
+  // What Officient's calendar holds for one month (YYYY-MM), per linked person
+  // and day: the scheduled time, time off and overtime. Read only: the app
+  // compares it with the hours clocked.
+  async function calendar(access, month) {
+    const [year, mon] = month.split('-').map(Number);
+    const out = { month, people: [], types: [] };
+    try {
+      for (const t of (await get(access, `/calendar/events/types/${year}`)) || []) {
+        out.types.push({ name: t.alias || t.name, interpretation: t.interpretation, active: !!Number(t.active),
+                         securex: (t.integrations || []).filter(i => /securex/i.test(i.app || '')).map(i => i.code).join(', ') });
+      }
+      const people = await db(`select coalesce(json_agg(json_build_object('staff_id', id, 'officient_id', officient_id)), '[]'::json) as r
+                                 from public.staff where officient_id is not null`, []);
+      for (const p of people) {
+        const cal = await get(access, `/calendar/${p.officient_id}/${year}/${mon}`);
+        const days = [];
+        for (const d of (cal && cal.time_off) || []) {
+          const scheduled = Number(d.scheduled_minutes) || 0;
+          let off = 0, extra = 0;
+          const names = [];
+          for (const e of d.events || []) {
+            if (e.status && e.status !== 'approved') continue;
+            const mins = e.duration_minutes === 'all_day' ? scheduled : Number(e.duration_minutes) || 0;
+            if (e.type === 'overtime') extra += mins;
+            else if (e.type === 'time_off' && !Number(e.working)) off += mins;
+            if (e.name) names.push(e.name);
+          }
+          if (scheduled || off || extra) days.push({ date: d.date, scheduled, off, extra, events: names });
+        }
+        out.people.push({ staff_id: p.staff_id, days });
+      }
+    } catch (e) {
+      if (/answered 40[13]/.test(e.message)) {
+        throw new Error('Officient gives no access to the calendar yet. Add calendar:read and calendar:write to the Prikklok app in Officient, then connect again.');
+      }
+      throw e;
+    }
+    return out;
+  }
+
   // action 'connect': right after the manager signed in at Officient (code, state);
   // action 'sync': a manager pressing "Nu ophalen", or the nightly job (cron);
-  // action 'read': read payslips uploaded by hand, right after the upload.
-  async function run({ action, token: appToken, code, state, cron }) {
+  // action 'read': read payslips uploaded by hand, right after the upload;
+  // action 'calendar': Officient's calendar for a month (month: YYYY-MM).
+  async function run({ action, token: appToken, code, state, cron, month }) {
     const job = { spent: 0 };
+    if (action === 'calendar') {
+      if (!/^\d{4}-(0[1-9]|1[0-2])$/.test(month || '')) throw new Error('Pick a month.');
+      const cfg = await db('select app_private.officient_begin($1, null, null) as r', [appToken || '']);
+      try {
+        const t = await token(cfg, { grant_type: 'refresh_token', refresh_token: cfg.refresh_token });
+        if (t.refresh_token && t.refresh_token !== cfg.refresh_token) {
+          await db('select app_private.officient_save_token($1, false) as r', [t.refresh_token]);
+        }
+        return { ok: true, ...(await calendar(t.access_token, month)) };
+      } finally {
+        await db('update app_private.officient set sync_started_at = null where id = 1 returning true as r', []);
+      }
+    }
     if (action === 'read') {
       await db('select app_private.payslip_read_allowed($1, $2) as r', [cron ? null : appToken || '', cron || null]);
       const report = { read: 0, more: false };

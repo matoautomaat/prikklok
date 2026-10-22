@@ -403,6 +403,13 @@ td.flag { color: var(--bad); font-weight: 600; }
 .pay-table td { vertical-align: top; }
 .pay-table tr.pay-total td { font-weight: 700; border-top: 2px solid var(--ink); border-bottom-width: 2px; }
 .pay-card .toolbar { flex-wrap: wrap; }
+.off-compare { margin-top: 18px; padding-top: 14px; border-top: 1px solid var(--line); }
+.off-compare h3 { margin: 0; font-size: 1rem; }
+.off-compare .table-wrap { margin-top: 10px; }
+.off-cal-table td { vertical-align: top; }
+.off-cal-table td.off-days { white-space: normal; min-width: 220px; }
+.off-cal-table details summary { cursor: pointer; }
+.off-cal-table details li { font-size: .86rem; padding: 2px 0; }
 .pay-list { gap: 0; margin-top: 8px; }
 .pay-item { padding: 12px 0; border-bottom: 1px solid var(--line); }
 .pay-item.clickable { cursor: pointer; -webkit-tap-highlight-color: transparent; }

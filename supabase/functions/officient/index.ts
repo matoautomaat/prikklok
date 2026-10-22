@@ -1,5 +1,6 @@
 // The app's link with Exact Officient, and the reader of payslip PDFs. Called
-// by the app (a manager: connect, "Nu ophalen", or after uploading payslips)
+// by the app (a manager: connect, "Nu ophalen", after uploading payslips, or
+// comparing a month with Officient's calendar)
 // and every night by pg_cron with its own secret. It does its own checks: the
 // app's session token, or the nightly secret.
 import postgres from 'npm:postgres@3.4.5';
@@ -29,8 +30,8 @@ Deno.serve(async (req: Request) => {
   try { body = await req.json(); } catch { return reply(400, { message: 'Send JSON.' }); }
   try {
     const out = await officient.run({
-      action: ['connect', 'read'].includes(body.action) ? body.action : 'sync',
-      token: body.token, code: body.code, state: body.state,
+      action: ['connect', 'read', 'calendar'].includes(body.action) ? body.action : 'sync',
+      token: body.token, code: body.code, state: body.state, month: body.month,
       cron: req.headers.get('x-cron-secret') || undefined,
     });
     return reply(200, out);

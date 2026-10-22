@@ -55,6 +55,8 @@ const SERVER_NL = {
   'Officient is busy. Try again later.': 'Officient is druk bezet. Probeer het later opnieuw.',
   "Officient isn't connected yet.": 'Officient is nog niet gekoppeld.',
   'Officient refused the connection. Connect again under Team.': 'Officient weigerde de koppeling. Koppel opnieuw bij Team.',
+  'Officient gives no access to the calendar yet. Add calendar:read and calendar:write to the Prikklok app in Officient, then connect again.':
+    'Officient geeft nog geen toegang tot de kalender. Voeg calendar:read en calendar:write toe aan de Prikklok-app in Officient (avatar → Developers) en klik dan bij Team → Exact Officient op Opnieuw koppelen.',
   'Officient sent no code back. Connect again.': 'Officient stuurde geen code terug. Koppel opnieuw.',
   "One entry can't be longer than 24 hours.": 'Eén registratie mag niet langer dan 24 uur zijn.',
   'Only managers can do that.': 'Alleen een verantwoordelijke kan dat doen.',
@@ -1561,12 +1563,68 @@ function securexCard(rep, m, monthInfo) {
         <button class="sm" id="sx-totals" ${rows.length ? '' : 'disabled'}>Totalen (CSV)</button>
         <button class="primary sm" id="sx-file" ${rows.length ? '' : 'disabled'}>Bestand voor Securex downloaden</button>
       </div>
+      <div class="off-compare">
+        <div class="card-head"><h3>Vergelijken met Officient</h3><button class="sm" id="off-cal">Vergelijken</button></div>
+        <p class="muted small">Officient geeft zijn kalender door aan Securex. Hier zie je wat Officient voor deze maand heeft staan, per persoon en per dag (het weekrooster, min afwezigheden, plus overuren), naast de geklokte uren. Er wordt niets veranderd, niet in de app en niet in Officient.</p>
+        <div id="off-cal-out"></div>
+      </div>
     </section>`,
   };
 }
 
+// Officient's calendar for the month next to the hours clocked, per person and day.
+const OFF_KINDS = { time_off: 'afwezig', overtime: 'extra uren' };
+function officientCompare(cal, rows) {
+  const name = id => ((S.staff || []).find(p => p.id === id) || rows.find(x => x.staff_id === id) || {}).name || '?';
+  const app = new Map();
+  for (const x of rows) {
+    const day = toDateInput(x.start), per = app.get(x.staff_id) || new Map();
+    per.set(day, (per.get(day) || 0) + x.minutes);
+    app.set(x.staff_id, per);
+  }
+  const linked = new Set(cal.people.map(p => p.staff_id));
+  const people = cal.people.map(p => {
+    const off = new Map(p.days.map(d => [d.date, d]));
+    const mine = app.get(p.staff_id) || new Map();
+    const days = [...new Set([...off.keys(), ...mine.keys()])].sort().map(date => {
+      const d = off.get(date);
+      return { date, app: mine.get(date) || 0, officient: d ? Math.max(0, d.scheduled - d.off + d.extra) : 0, events: d ? d.events : [] };
+    });
+    const sum = k => days.reduce((a, d) => a + d[k], 0);
+    return { id: p.staff_id, name: name(p.staff_id), days, app: sum('app'), officient: sum('officient'),
+             differ: days.filter(d => Math.abs(d.app - d.officient) >= 15) };
+  }).filter(p => p.app || p.officient).sort((a, b) => a.name.localeCompare(b.name, 'nl'));
+  const unlinked = [...app.keys()].filter(id => !linked.has(id)).map(name);
+  const h = mins => mins ? fmt.hours2(mins) : '<span class="muted">–</span>';
+  const dayName = date => fmt.day(new Date(date + 'T00:00'));
+  return `
+    ${people.length ? `<div class="table-wrap"><table class="off-cal-table">
+      <thead><tr><th>Naam</th><th class="num">Geklokt</th><th class="num">In Officient</th><th class="num">Verschil</th><th>Dagen die verschillen</th></tr></thead>
+      <tbody>${people.map(p => `<tr>
+        <td><strong>${esc(p.name)}</strong></td><td class="num">${h(p.app)}</td><td class="num">${h(p.officient)}</td>
+        <td class="num ${Math.abs(p.app - p.officient) >= 15 ? 'flag' : 'zero'}">${p.app === p.officient ? '0' : (p.app > p.officient ? '+' : '−') + fmt.hours2(Math.abs(p.app - p.officient))}</td>
+        <td class="off-days">${p.differ.length ? `<details><summary>${plural(p.differ.length, 'dag', 'dagen')}</summary><ul class="plain-list">${p.differ.map(d =>
+          `<li>${esc(dayName(d.date))}: geklokt ${fmt.hours2(d.app)} · Officient ${fmt.hours2(d.officient)}${d.events.length ? ` <span class="muted">(${esc(d.events.join(', '))})</span>` : ''}</li>`).join('')}</ul></details>`
+          : '<span class="muted">Geen</span>'}</td></tr>`).join('')}</tbody>
+    </table></div>
+    <p class="muted small" style="margin-top:8px">Uren in decimalen. "In Officient" is per dag het weekrooster, min afwezigheden, plus overuren.</p>`
+      : '<p class="empty">Geen uren in Officient of in de app voor deze maand.</p>'}
+    ${unlinked.length ? `<p class="hint warn">Geklokt, maar niet gekoppeld met Officient: ${unlinked.map(esc).join(', ')}.</p>` : ''}
+    ${cal.types.length ? `<p class="muted small">Soorten in je Officient-kalender: ${cal.types.filter(t => t.active).map(t =>
+      `${esc(t.name)} (${OFF_KINDS[t.interpretation] || esc(t.interpretation || '?')}${t.securex ? `, Securex-code ${esc(t.securex)}` : ''})`).join(', ')}.</p>` : ''}`;
+}
+
 function bindSecurex(el, m, sx) {
   const ym = `${m.getFullYear()}-${pad(m.getMonth() + 1)}`;
+  const cal = $('#off-cal', el);
+  cal.addEventListener('click', () => busy(cal, async () => {
+    const out = $('#off-cal-out', el);
+    try {
+      out.innerHTML = officientCompare(await officientCall({ action: 'calendar', month: ym }), sx.rows);
+    } catch (e) {
+      out.innerHTML = `<p class="hint bad">${esc(e.message)}</p>`;
+    }
+  }));
   $('#wage-codes', el).addEventListener('click', wageCodesModal);
   const totals = $('#sx-totals', el);
   totals.addEventListener('click', () => downloadCsv(`securex-totalen-${ym}.csv`, [
@@ -2942,7 +3000,8 @@ const okFileType = t => ['application/pdf', 'image/png', 'image/jpeg'].includes(
 const officientCall = body => rpc('officient', { token: S.token, ...body }, { auth: false, path: '/functions/v1/officient' });
 const OFFICIENT_RETURN = 'prikklok.officient';
 const OFFICIENT_STATE = 'prikklok.officient.state';
-const OFFICIENT_SCOPES = ['basics:read', 'personal.info:read', 'wages:read', 'weekly.schedules:read', 'contracts:read', 'documents.read'];
+const OFFICIENT_SCOPES = ['basics:read', 'personal.info:read', 'wages:read', 'weekly.schedules:read', 'contracts:read', 'documents.read',
+  'calendar:read', 'calendar:write'];
 
 // Officient sends the manager back to the app with ?code=…&state=… (or an
 // error); keep it until the app has signed in, and clean up the address. If
@@ -3013,7 +3072,7 @@ function officientCard(o, link) {
     <form id="off-form" novalidate>
       <ol class="plain-list off-steps">
         <li>Meld je aan in Officient als beheerder. Klik rechtsboven op je avatar en dan op <a href="https://${esc(host)}/developer" target="_blank" rel="noopener">Developers</a>.</li>
-        <li>Maak een <strong>client app</strong>, bv. “Prikklok”. Geef alleen <strong>leesrechten</strong>: <code>${OFFICIENT_SCOPES.join('</code>, <code>')}</code>.</li>
+        <li>Maak een <strong>client app</strong>, bv. “Prikklok”. Geef deze rechten: <code>${OFFICIENT_SCOPES.join('</code>, <code>')}</code>. Alles is lezen, behalve <code>calendar:write</code>: daarmee kan de app de geklokte uren in de Officient-kalender zetten, pas als jij dat doet.</li>
         <li>Vul als <strong>callback-URL</strong> in: <span class="copybox off-callback"><code id="off-cb">${esc(callback)}</code><button type="button" class="sm" id="off-copy">Kopiëren</button></span></li>
         <li>Kopieer de <strong>client ID</strong> en de <strong>client secret</strong> van die app hieronder.</li>
       </ol>
@@ -3039,7 +3098,8 @@ function officientCard(o, link) {
       ${o.last_sync_at ? `Laatst opgehaald: <strong>${esc(fmt.when(o.last_sync_at))}</strong>.` : 'Nog niet opgehaald.'}</p>
     ${o.last_error ? `<p class="hint bad">Het laatste ophalen lukte niet: ${esc(tr(o.last_error))}</p>` : ''}
     ${officientReport(o.last_report)}
-    <div class="form-actions" style="justify-content:space-between"><button type="button" class="danger" id="off-disconnect">Ontkoppelen</button>
+    <div class="form-actions" style="justify-content:space-between"><span class="toolbar"><button type="button" class="danger" id="off-disconnect">Ontkoppelen</button>
+        <button type="button" id="off-connect" title="Na het aanpassen van de rechten van de app in Officient">Opnieuw koppelen</button></span>
       <button type="button" class="primary" id="off-sync" ${o.syncing ? 'disabled' : ''}>${o.syncing ? 'Bezig met ophalen…' : 'Nu ophalen'}</button></div>`;
   return `
     <section class="card" id="officient">
