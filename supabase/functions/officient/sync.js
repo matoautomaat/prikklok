@@ -7,7 +7,13 @@ export const OFFICIENT_API = 'https://api.officient.io/1.0';
 const PAYSLIP = /loon|payslip|pay slip|fiche|bulletin|salaris|salaire/i;
 const MAX_DOWNLOADS = 60; // per run; the next night picks up the rest
 
-export function makeOfficient({ db, fetch, api = OFFICIENT_API, wait = ms => new Promise(r => setTimeout(r, ms)) }) {
+export function makeOfficient({ db: query, fetch, api = OFFICIENT_API, wait = ms => new Promise(r => setTimeout(r, ms)) }) {
+  // json from the database may come back as text, depending on the driver
+  const db = async (text, params) => {
+    const r = await query(text, params);
+    if (typeof r === 'string' && /^[[{]/.test(r)) { try { return JSON.parse(r); } catch { /* plain text */ } }
+    return r;
+  };
   async function token(cfg, body) {
     const res = await fetch(`${api}/token`, {
       method: 'POST',
@@ -53,20 +59,26 @@ export function makeOfficient({ db, fetch, api = OFFICIENT_API, wait = ms => new
 
   async function sync(access) {
     const report = { at: new Date().toISOString(), people: 0, matched: 0, linked: 0, updated: [], unmatched: [],
-                     payslips: [], already: 0, document_types: {}, more: false };
+                     payslips: [], already: 0, document_types: {}, more: false, skipped: 0, fields: {} };
     let downloads = 0;
     const people = await pages(access, '/people/list');
     report.people = people.length;
+    // which fields Officient sends (names only), to see what to expect
+    if (people[0]) report.fields.list = Object.keys(people[0]).slice(0, 40);
     for (const p of people) {
-      const detail = (await get(access, `/people/${p.id}/detail`)) || p;
-      const wage = await get(access, `/wages/${p.id}/current`);
-      const r = await db('select app_private.officient_apply_person($1::jsonb) as r', [JSON.stringify({ ...detail, id: p.id, wage })]);
-      if (r.status === 'unmatched') { report.unmatched.push(r.name); continue; }
-      if (r.status !== 'matched') continue;
+      const id = p.id ?? p.person_id ?? p.people_id ?? p.employee_id;
+      if (id == null) { report.skipped++; continue; }
+      const detail = (await get(access, `/people/${id}/detail`)) || p;
+      const wage = await get(access, `/wages/${id}/current`);
+      if (!report.fields.detail && detail !== p) report.fields.detail = Object.keys(detail).slice(0, 60);
+      if (!report.fields.wage && wage) report.fields.wage = Object.keys(wage).slice(0, 40);
+      const r = await db('select app_private.officient_apply_person($1::text::jsonb) as r', [JSON.stringify({ ...p, ...detail, id, wage })]);
+      if (r && r.status === 'unmatched') { report.unmatched.push(r.name); continue; }
+      if (!r || r.status !== 'matched') { report.skipped++; continue; }
       report.matched++;
       if (r.new_link) report.linked++;
       if (r.changed.length) report.updated.push({ name: r.name, changed: r.changed });
-      for (const d of await pages(access, `/documents/employee/${p.id}/list`)) {
+      for (const d of await pages(access, `/documents/employee/${id}/list`)) {
         const type = d.document_type || '—';
         report.document_types[type] = (report.document_types[type] || 0) + 1;
         if (!PAYSLIP.test(`${d.document_type || ''} ${d.filename || ''}`) || !/\.pdf$/i.test(d.filename || '')) continue;
@@ -112,7 +124,7 @@ export function makeOfficient({ db, fetch, api = OFFICIENT_API, wait = ms => new
         }
       }
       const report = await sync(t.access_token);
-      await db('select app_private.officient_finish($1::jsonb, null) as r', [JSON.stringify(report)]);
+      await db('select app_private.officient_finish($1::text::jsonb, null) as r', [JSON.stringify(report)]);
       return { ok: true, report };
     } catch (e) {
       await db('select app_private.officient_finish(null, $1) as r', [String(e.message || e)]);
