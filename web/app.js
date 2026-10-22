@@ -2844,14 +2844,20 @@ const okFileType = t => ['application/pdf', 'image/png', 'image/jpeg'].includes(
 // staff's details, wages, contract hours and new payslips.
 const officientCall = body => rpc('officient', { token: S.token, ...body }, { auth: false, path: '/functions/v1/officient' });
 const OFFICIENT_RETURN = 'prikklok.officient';
+const OFFICIENT_STATE = 'prikklok.officient.state';
 const OFFICIENT_SCOPES = ['basics:read', 'personal.info:read', 'wages:read', 'weekly.schedules:read', 'contracts:read', 'documents.read'];
 
-// Officient sends the manager back to the app with ?code=…&state=…; keep it
-// until the app has signed in, and clean up the address.
+// Officient sends the manager back to the app with ?code=…&state=… (or an
+// error); keep it until the app has signed in, and clean up the address. If
+// Officient leaves out the state, the one saved before leaving is used.
 (function catchOfficientReturn() {
   const q = new URLSearchParams(location.search);
-  if (!q.get('state') || !(q.get('code') || q.get('error'))) return;
-  store.set(OFFICIENT_RETURN, JSON.stringify({ code: q.get('code'), state: q.get('state'), error: q.get('error') }));
+  const h = new URLSearchParams(location.hash.includes('=') ? location.hash.slice(1) : '');
+  const get = k => q.get(k) || h.get(k);
+  const code = get('code'), error = get('error_description') || get('error');
+  if (!code && !error) return;
+  store.set(OFFICIENT_RETURN, JSON.stringify({ code, state: get('state') || store.get(OFFICIENT_STATE), error }));
+  store.set(OFFICIENT_STATE, null);
   history.replaceState(null, '', location.pathname + '#team');
 })();
 
@@ -2861,7 +2867,10 @@ async function finishOfficient() {
   store.set(OFFICIENT_RETURN, null);
   let back;
   try { back = JSON.parse(raw); } catch { return; }
-  if (back.error || !back.code) { toast('Koppelen met Officient geannuleerd.', 'error'); return; }
+  if (back.error || !back.code) {
+    toast(back.error ? `Officient koppelde niet: ${back.error}` : 'Koppelen met Officient geannuleerd.', 'error');
+    return;
+  }
   toast('Bezig met koppelen en ophalen bij Officient…');
   try {
     const r = await officientCall({ action: 'connect', code: back.code, state: back.state });
@@ -2960,6 +2969,7 @@ function bindOfficient(el, o, link) {
   const connect = $('#off-connect', card);
   if (connect) connect.addEventListener('click', () => busy(connect, async () => {
     const a = await rpc('mgr_officient_authorize');
+    store.set(OFFICIENT_STATE, a.state);
     location.href = `https://app.officient.io/authorize?client_id=${encodeURIComponent(a.client_id)}&state=${encodeURIComponent(a.state)}`;
   }).catch(() => {}));
   const sync = $('#off-sync', card);
