@@ -2887,18 +2887,23 @@ const officientSummary = r => r
   ? `${r.matched} van ${plural(r.people, 'persoon', 'mensen')} gevonden, ${r.updated.length} bijgewerkt, ${plural(r.payslips.length, 'nieuwe loonbrief', 'nieuwe loonbrieven')}.`
   : '';
 
+const OFFICIENT_DOC_TYPES = { SalarySlip: 'Loonbrieven', BelcotaxSheets: 'Belcotax-fiches', IndividualAccount: 'Individuele rekeningen' };
+
 function officientReport(r) {
-  if (!r) return '';
+  if (!r || typeof r !== 'object') return '';
   const types = Object.entries(r.document_types || {});
+  const slips = new Map();
+  for (const x of r.payslips) slips.set(x.name, [...(slips.get(x.name) || []), x.month]);
   return `
     <ul class="plain-list off-report">
       <li><strong>${r.matched}</strong> van de ${plural(r.people, 'persoon', 'mensen')} in Officient gevonden in de app${r.linked ? `, waarvan ${r.linked} nieuw gekoppeld` : ''}.</li>
       ${r.updated.length ? `<li>Bijgewerkt: ${r.updated.map(u => `${esc(u.name)} <span class="muted">(${esc(u.changed.join(', '))})</span>`).join(', ')}.</li>` : '<li>Geen gegevens gewijzigd.</li>'}
-      ${r.payslips.length ? `<li>Nieuwe loonbrieven: ${r.payslips.map(x => `${esc(x.name)} – ${esc(fmt.month(new Date(x.month + 'T00:00')))}`).join(', ')}.</li>` : '<li>Geen nieuwe loonbrieven.</li>'}
+      ${slips.size ? `<li>Nieuwe loonbrieven: ${[...slips].map(([name, months]) => `${esc(name)} <span class="muted">(${months.sort().map(m => esc(fmt.month(new Date(m + 'T00:00')))).join(', ')})</span>`).join('; ')}.</li>` : '<li>Geen nieuwe loonbrieven.</li>'}
       ${r.already ? `<li>${plural(r.already, 'loonbrief stond', 'loonbrieven stonden')} er al (zelf geüpload).</li>` : ''}
+      ${r.no_month ? `<li>${plural(r.no_month, 'loonbrief', 'loonbrieven')} zonder maand in de bestandsnaam overgeslagen.</li>` : ''}
       ${r.more ? '<li>Er zijn nog meer loonbrieven; die komen bij de volgende ophaling.</li>' : ''}
       ${r.unmatched.length ? `<li class="off-unmatched">In Officient, maar niet in de app: <strong>${r.unmatched.map(esc).join(', ')}</strong>. Voeg ze toe bij <em>Persoon toevoegen</em> met dezelfde naam; de volgende ophaling vult hun gegevens aan.</li>` : ''}
-      <li class="muted">Documenten in Officient: ${types.length ? types.map(([k, n]) => `${esc(k)} (${n})`).join(', ') : 'geen'}.</li>
+      <li class="muted">Documenten in Officient: ${types.length ? types.map(([k, n]) => `${esc(OFFICIENT_DOC_TYPES[k] || k)} (${n})`).join(', ') : 'geen'}.</li>
     </ul>`;
 }
 

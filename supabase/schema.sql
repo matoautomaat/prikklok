@@ -2040,7 +2040,9 @@ begin
 end $$;
 
 -- Before downloading: 'exists' when fetched before, 'already' when that month
--- has a payslip uploaded by hand (now marked as the same one), else null.
+-- has a payslip uploaded by hand (now marked as the same one), 'exists' too
+-- when the month already has one from another Officient file (a second copy),
+-- else null.
 create function app_private.officient_payslip_known(p_ref text, p_staff uuid, p_month date) returns text
 language plpgsql set search_path = public as $$
 begin
@@ -2051,6 +2053,10 @@ begin
    where staff_id = p_staff and month = date_trunc('month', p_month)::date and archived_at is null and source_ref is null;
   if found then
     return 'already';
+  end if;
+  if exists (select 1 from public.payslips
+              where staff_id = p_staff and month = date_trunc('month', p_month)::date and archived_at is null) then
+    return 'exists';
   end if;
   return null;
 end $$;

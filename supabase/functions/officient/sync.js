@@ -4,7 +4,10 @@
 // db(text, params) that returns the first row's "r" column.
 
 export const OFFICIENT_API = 'https://api.officient.io/1.0';
-const PAYSLIP = /loon|payslip|pay slip|fiche|bulletin|salaris|salaire/i;
+// Officient marks payslips with the document type SalarySlip; files without a
+// type are judged by their name. Belcotax fiches and individual accounts are not payslips.
+const PAYSLIP_TYPE = /salary ?slip|pay ?slip|loonbrie|loonfiche|fiche de paie|bulletin de paie/i;
+const PAYSLIP_NAME = /loonbrie|loonfiche|payslip|pay slip|fiche de paie|bulletin de paie/i;
 const MAX_DOWNLOADS = 60; // per run; the next night picks up the rest
 
 export function makeOfficient({ db: query, fetch, api = OFFICIENT_API, wait = ms => new Promise(r => setTimeout(r, ms)) }) {
@@ -59,7 +62,7 @@ export function makeOfficient({ db: query, fetch, api = OFFICIENT_API, wait = ms
 
   async function sync(access) {
     const report = { at: new Date().toISOString(), people: 0, matched: 0, linked: 0, updated: [], unmatched: [],
-                     payslips: [], already: 0, document_types: {}, more: false, skipped: 0, fields: {} };
+                     payslips: [], already: 0, no_month: 0, document_types: {}, more: false, skipped: 0, fields: {} };
     let downloads = 0;
     const people = await pages(access, '/people/list');
     report.people = people.length;
@@ -81,9 +84,11 @@ export function makeOfficient({ db: query, fetch, api = OFFICIENT_API, wait = ms
       for (const d of await pages(access, `/documents/employee/${id}/list`)) {
         const type = d.document_type || '—';
         report.document_types[type] = (report.document_types[type] || 0) + 1;
-        if (!PAYSLIP.test(`${d.document_type || ''} ${d.filename || ''}`) || !/\.pdf$/i.test(d.filename || '')) continue;
+        if (!report.fields.document) report.fields.document = Object.keys(d).slice(0, 30);
+        const slip = d.document_type ? PAYSLIP_TYPE.test(d.document_type) : PAYSLIP_NAME.test(d.filename || '');
+        if (!slip || !/\.pdf$/i.test(d.filename || '')) continue;
         const ref = `officient:${d.id}`, month = monthOf(d);
-        if (!month) continue;
+        if (!month) { report.no_month++; continue; }
         const known = await db('select app_private.officient_payslip_known($1, $2::uuid, $3::date) as r', [ref, r.staff_id, month]);
         if (known === 'already') report.already++;
         if (known) continue;
@@ -135,13 +140,22 @@ export function makeOfficient({ db: query, fetch, api = OFFICIENT_API, wait = ms
   return { run, sync };
 }
 
-// Securex names payslips like "Loonbrief - 01-09-2026 - 30-09-2026 - NAME.pdf";
-// otherwise the month before the upload.
+const MONTHS = ['januari january janvier', 'februari february fevrier', 'maart march mars', 'april avril', 'mei may mai',
+  'juni june juin', 'juli july juillet', 'augustus august aout', 'september septembre', 'oktober october octobre',
+  'november novembre', 'december decembre'].map(m => m.split(' '));
+
+// The pay month, from the file name: Officient's "Loonbrief juli 2026.pdf" or
+// Securex's "Loonbrief - 01-09-2026 - 30-09-2026 - NAME.pdf". The upload date
+// says nothing reliable (a payslip can come the same month or months later),
+// so a file without a month in its name is left out.
 export function monthOf(doc) {
-  const m = String(doc.filename || '').match(/(\d{2})[-._](\d{2})[-._](\d{4})/);
+  const name = String(doc.filename || '').normalize('NFD').replace(/[\u0300-\u036f]/g, '').toLowerCase();
+  const m = name.match(/(\d{2})[-._](\d{2})[-._](\d{4})/);
   if (m && +m[2] >= 1 && +m[2] <= 12) return `${m[3]}-${m[2]}-01`;
-  const u = String(doc.date_uploaded || '').match(/^(\d{4})-(\d{2})/);
-  if (u) return new Date(Date.UTC(+u[1], +u[2] - 2, 1)).toISOString().slice(0, 10);
+  for (const [, word, year] of name.matchAll(/([a-z]+)[\s._-]+(\d{4})/g)) {
+    const i = MONTHS.findIndex(names => names.includes(word));
+    if (i >= 0) return `${year}-${String(i + 1).padStart(2, '0')}-01`;
+  }
   return null;
 }
 
