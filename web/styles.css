@@ -566,7 +566,7 @@ button.cal-shift.is-open:hover { background: var(--accent); color: var(--accent-
 .day-open { color: var(--accent); }
 .day-shift > button { flex: none; min-height: 44px; }
 /* calendar pages get more room so each shift fits on one line */
-main.view[data-view="schedule"], main.view[data-view="shifts"] { max-width: 1360px; }
+main.view[data-view="schedule"], main.view[data-view="shifts"], main.view[data-view="family"] { max-width: 1360px; }
 
 /* month buttons and time fields */
 .chips { display: flex; gap: 8px; flex-wrap: wrap; }
@@ -805,26 +805,19 @@ dialog.sheet { width: min(480px, 100vw); }
 .fam-head { align-items: center; flex-wrap: wrap; gap: 12px; }
 .stat.is-cash .v { color: var(--bad); }
 .fam-card h2 { font-size: 1.3rem; }
-.fam-card > .muted.small { margin-top: 4px; }
-.fam-day { padding: 14px 0; border-top: 1px solid var(--line); }
-.fam-card > h2 + .fam-day { border-top: none; }
-.fam-day h3 { font-size: 1.05rem; margin: 0 0 8px; text-transform: capitalize; display: flex; align-items: center; gap: 8px; }
-.fam-day.is-today h3 { color: var(--accent); }
-.fam-shift { display: flex; align-items: center; gap: 10px; flex-wrap: wrap; padding: 6px 0; font-size: 1.02rem; }
-.fam-shift .time { font: 600 1rem/1 var(--f-mono); }
-.fam-who { display: inline-flex; align-items: center; gap: 8px; font-weight: 600; }
-.fam-shift.is-open .fam-who { color: var(--bad); }
-.fam-open { display: flex; flex-direction: column; margin-top: 8px; }
-.fam-open-day { display: flex; align-items: center; gap: 8px 16px; flex-wrap: wrap; padding: 10px 0; border-top: 1px solid var(--line); }
-.fam-open-day:first-child { border-top: none; }
-.fam-open-list { display: flex; flex-wrap: wrap; gap: 8px 18px; }
-.fam-slot { display: inline-flex; align-items: center; gap: 8px; }
-.fam-slot .time { font: 600 1rem/1 var(--f-mono); }
-.fam-slot .fam-who { color: var(--bad); }
-.fam-date { font-weight: 600; text-transform: capitalize; min-width: 12em; }
-.fam-before { margin-top: 10px; border-top: 1px solid var(--line); padding-top: 10px; }
-.fam-before summary { cursor: pointer; font-weight: 600; color: var(--ink-2); min-height: 44px; display: flex; align-items: center; }
-.fam-before .fam-day { opacity: .75; }
+.fam-daypanel h2 { font-size: 1.2rem; text-transform: capitalize; display: flex; align-items: center; gap: 8px; flex-wrap: wrap; }
+.fam-daypanel .day-shift { padding: 14px; }
+.fam-daypanel .day-who { font-size: 1.05rem; }
+.fam-daypanel .day-shift.is-past { opacity: .6; }
+.fam-open-who { color: var(--bad); font-weight: 700; }
+.only-phone-block { display: none; }
+.fam-table td, .fam-table th { vertical-align: middle; }
+.fam-table .row-sub { display: block; font-weight: 400; }
+.fam-table tr.is-cash td:first-child { box-shadow: inset 4px 0 0 var(--bad); }
+.fam-table tr.is-cash .fam-total { color: var(--bad); font-weight: 700; }
+@media (min-width: 760px) {
+  .fam-daypanel { display: none; }
+}
 .fam-people { display: grid; grid-template-columns: repeat(auto-fill, minmax(260px, 1fr)); gap: 12px; margin-top: 12px; }
 .fam-person { border: 1px solid var(--line); border-radius: 14px; padding: 14px; background: var(--surface); }
 .fam-person.is-cash { border-color: color-mix(in srgb, var(--bad) 55%, var(--line)); box-shadow: inset 4px 0 0 var(--bad); }
@@ -837,7 +830,10 @@ dialog.sheet { width: min(480px, 100vw); }
 .fam-person.is-cash .fam-total { color: var(--bad); }
 .plain-list { margin: 10px 0 0; padding-left: 1.2em; display: grid; gap: 6px; }
 @media (max-width: 759px) {
-  .fam-date { min-width: 0; width: 100%; }
+  .only-wide-block { display: none; }
+  .only-phone-block { display: grid; }
+  .cal-grid .cal-cell { -webkit-tap-highlight-color: transparent; }
+  .cal-grid .cal-cell.is-selected { box-shadow: inset 0 0 0 2px var(--accent); background: var(--accent-soft); }
   .stats.fam-stats { grid-template-columns: 1fr !important; }
   .fam-stats .stat { flex-direction: row; align-items: baseline; justify-content: space-between; gap: 12px; }
   .fam-stats .stat .v { font-size: 1.35rem; order: 2; white-space: nowrap; }

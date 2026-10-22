@@ -452,7 +452,7 @@ function setTheme(pref) {
 if (darkQuery && darkQuery.addEventListener) darkQuery.addEventListener('change', () => { if (themePref() === 'auto') applyTheme(); });
 
 function tabsFor() {
-  if (isViewer()) return [['family', 'Overzicht']];
+  if (isViewer()) return [['family', L('Kalender', '排班')], ['famstaff', L('Personeel', '员工')]];
   return isManager()
     ? [['today', 'Vandaag'], ['schedule', 'Planning'], ['monthly', 'Overzicht'], ['requests', 'Aanvragen'], ['team', 'Team'], ['ranking', 'Ranglijst'], ['profile', 'Profiel']]
     : [['clock', 'Klok'], ['shifts', 'Shiften'], ['hours', 'Mijn uren'], ['ranking', 'Ranglijst'], ['profile', 'Profiel']];
@@ -731,19 +731,19 @@ function updateBadges() {
 const VIEWS = {
   clock: viewClock, shifts: viewShifts, hours: viewHours, profile: viewProfile, ranking: viewRanking,
   today: viewToday, schedule: viewSchedule, monthly: viewMonthly, requests: viewRequests, team: viewTeam, member: viewMember,
-  family: viewFamily,
+  family: viewFamily, famstaff: viewFamilyStaff,
 };
 
 // #profile works for everyone (managers reach it through their picture);
-// #team/<id> opens one team member for managers, #family shows them what the
-// family account sees.
+// #team/<id> opens one team member for managers, #family and #famstaff show
+// them what the family account sees.
 function route() {
   if (!S.me) return;
   const tabs = tabsFor().map(t => t[0]);
   let v = location.hash.replace('#', ''), tab = v;
   const member = v.match(/^team\/([0-9a-f-]{36})$/);
   if (member && isManager()) { S.memberId = member[1]; v = 'member'; tab = 'team'; }
-  else if (v === 'family' && isManager()) tab = 'team';
+  else if ((v === 'family' || v === 'famstaff') && isManager()) tab = 'team';
   else if (!tabs.includes(v)) { v = tabs[0]; tab = v; }
   if (S.view !== v) S.month = null;
   S.view = v;
@@ -2532,9 +2532,8 @@ function familyMember(el, p) {
       <section class="card">
         <h2>Wat ziet dit account?</h2>
         <ul class="plain-list">
-          <li>Per maand: de open shiften en wie op welke dag komt werken.</li>
-          <li>Per persoon: de gewerkte uren, het uurloon, het totaal en <strong>Cash</strong> (rood) of <strong>Ingeschreven</strong>.</li>
-          <li>De lijst van al het personeel.</li>
+          <li><strong>Kalender:</strong> de maand, met wie op welke dag werkt en de open shiften in het rood. Ook op een gsm: een tik op een dag toont die dag groot.</li>
+          <li><strong>Personeel:</strong> iedereen met de leeftijd, het uurloon, de gewerkte uren van de maand, het totaal en <strong>Cash</strong> (rood) of <strong>Ingeschreven</strong>.</li>
           <li>In het Nederlands of het Chinees (中文), te kiezen bovenaan.</li>
         </ul>
         <div class="form-actions"><button class="sm" id="see-family">Bekijk het overzicht</button></div>
@@ -2773,6 +2772,8 @@ function bindLang(root, after) {
 }
 
 function renderFamilyShell() {
+  const tabs = tabsFor();
+  const icon = { family: ICONS.shifts, famstaff: ICONS.team };
   document.title = `${S.settings.business_name} · ${L('Overzicht', '概览')}`;
   $('#app').innerHTML = `
     <header class="topbar" lang="${langAttr()}">
@@ -2783,113 +2784,186 @@ function renderFamilyShell() {
         <a class="logo-link" href="#" aria-label="${esc(S.settings.business_name)}">${logoHTML('logo')}</a>
         <div class="topbar-end"><button type="button" class="icon ghost theme-btn" data-theme-btn></button><button class="ghost sm" id="signout">${L('Afmelden', '退出')}</button></div>
       </div>
+      <nav class="tabs" aria-label="${L('Onderdelen', '页面')}"><div class="tabs-inner">
+        ${tabs.map(([k, l]) => `<button class="tab" data-tab="${k}">${l}</button>`).join('')}
+      </div></nav>
     </header>
-    <main class="view" id="view"></main>`;
+    <main class="view" id="view"></main>
+    <nav class="bnav" aria-label="${L('Onderdelen', '页面')}" lang="${langAttr()}">
+      ${tabs.map(([k, l]) => `<button data-tab="${k}">${icon[k]}<span>${l}</span></button>`).join('')}
+    </nav>`;
   $('#signout').addEventListener('click', askSignOut);
   $('[data-theme-btn]').addEventListener('click', () => setTheme(isDark() ? 'light' : 'dark'));
+  $$('[data-tab]').forEach(b => b.addEventListener('click', () => { location.hash = b.dataset.tab; }));
   applyTheme();
   route();
 }
 
-async function viewFamily(el, current) {
-  S.month = S.month || startOfMonth(now());
-  const m = S.month, t = now(), today = startOfDay(t);
-  const r = await rpc('family_overview', { p_from: m.toISOString(), p_to: addMonths(m, 1).toISOString() });
-  if (!current()) return;
-  el.setAttribute('lang', langAttr());
-
-  const shifts = r.shifts.filter(s => new Date(s.starts_at) >= m);
-  const open = dayEntries(shifts.filter(s => !s.staff_id && new Date(s.ends_at) > t));
-  const openCount = open.reduce((a, x) => a + x.count, 0);
-  const openDays = [];
-  for (const x of open) {
-    const d = startOfDay(x.starts_at);
-    let g = openDays.find(o => o.day.getTime() === d.getTime());
-    if (!g) openDays.push(g = { day: d, list: [] });
-    g.list.push(x);
-  }
-  const days = [];
-  for (const s of shifts) {
-    const d = startOfDay(s.starts_at);
-    let g = days.find(x => x.day.getTime() === d.getTime());
-    if (!g) days.push(g = { day: d, list: [] });
-    g.list.push(s);
-  }
-  const before = days.filter(g => g.day < today), coming = days.filter(g => g.day >= today);
-
-  const workers = r.people.filter(p => p.worked_minutes > 0 || p.shifts > 0);
-  const owed = p => p.hourly_rate != null ? Math.round(p.worked_minutes / 60 * p.hourly_rate * 100) / 100 : null;
-  const cashTotal = workers.filter(p => p.pay_method === 'cash').reduce((a, p) => a + (owed(p) || 0), 0);
-  const totalMins = workers.reduce((a, p) => a + p.worked_minutes, 0);
-  const team = r.people.filter(p => p.active);
-  const tag = x => `<span class="cal-tag${partClass(shiftPart(x))}">${esc(fam.part(x))}</span>`;
-
-  const dayBlock = g => `
-    <div class="fam-day${sameDay(g.day, t) ? ' is-today' : ''}">
-      <h3>${esc(fam.day(g.day))}${sameDay(g.day, t) ? ` <span class="pill on">${L('Vandaag', '今天')}</span>` : ''}</h3>
-      ${dayEntries(g.list).map(x => `<div class="fam-shift${x.open ? ' is-open' : ''}">
-        ${tag(x)}<span class="time">${fmt.range(x.starts_at, x.ends_at)}</span>
-        <span class="fam-who">${x.open ? `${L('Open', '空缺')}${x.count > 1 ? ` ×${x.count}` : ''}` : `${personPic({ name: x.staff_name, avatar: (r.people.find(p => p.id === x.staff_id) || {}).avatar })}${esc(x.staff_name)}`}</span>
-      </div>`).join('')}
-    </div>`;
-
-  const workerCard = p => `
-    <div class="fam-person${p.pay_method === 'cash' ? ' is-cash' : ''}">
-      <div class="fam-person-head">${personPic(p, 'lg')}<strong>${esc(p.name)}</strong>${payPill(p.pay_method, L)}</div>
-      <dl class="fam-kv">
-        <dt>${L('Gewerkt', '工作时间')}</dt><dd>${fam.dur(p.worked_minutes)} <span class="muted">· ${L(`${p.times} keer`, `${p.times}次`)}</span></dd>
-        <dt>${L('Per uur', '时薪')}</dt><dd>${p.hourly_rate != null ? fam.money(p.hourly_rate) : '—'}</dd>
-        <dt>${L('Samen', '合计')}</dt><dd class="fam-total">${owed(p) != null ? fam.money(owed(p)) : L('geen uurloon', '没有时薪')}</dd>
-        <dt>${L('Shiften', '班次')}</dt><dd>${p.shifts}</dd>
-      </dl>
-    </div>`;
-
-  el.innerHTML = `
-    <div class="view-head fam-head"><div><h1>${L('Overzicht', '概览')}</h1><p>${esc(S.settings.business_name)}</p></div>${langSwitch()}</div>
-    ${isViewer() ? '' : `<p class="hint info">Zo ziet het familie-account dit overzicht. <button class="link" id="fam-back">Terug naar Team</button></p>`}
-    ${periodBar(esc(fam.month(m)), sameDay(m, startOfMonth(t)) ? L('Deze maand', '本月') : '&nbsp;', 'fam-prev', 'fam-next')}
-    <div class="stats stats-3 fam-stats">
-      <div class="stat ${openCount ? 'alert' : 'good'}"><span class="v">${openCount}</span><span class="k">${L('Open shiften, nog niemand', '空缺班次，还没人')}</span></div>
-      <div class="stat"><span class="v">${fam.dur(totalMins)}</span><span class="k">${L('Samen gewerkt', '总共工作')}</span></div>
-      <div class="stat is-cash"><span class="v">${fam.money(cashTotal)}</span><span class="k">${L('Cash te betalen', '要付的现金')}</span></div>
-    </div>
-    <section class="card fam-card">
-      <h2>${L('Open shiften', '空缺班次')}</h2>
-      ${openDays.length ? `<div class="fam-open">${openDays.map(g => `<div class="fam-open-day">
-          <span class="fam-date">${esc(fam.day(g.day))}</span>
-          <span class="fam-open-list">${g.list.map(x => `<span class="fam-slot">${tag(x)}<span class="time">${fmt.range(x.starts_at, x.ends_at)}</span>${x.count > 1 ? `<span class="fam-who">×${x.count}</span>` : ''}</span>`).join('')}</span>
-        </div>`).join('')}</div>`
-        : `<p class="empty">${L('Alle shiften zijn ingevuld.', '所有班次都有人了。')}</p>`}
-    </section>
-    <section class="card fam-card">
-      <h2>${L('Wie komt werken', '谁来上班')}</h2>
-      ${coming.length ? coming.map(dayBlock).join('') : `<p class="empty">${L('Geen shiften meer deze maand.', '这个月没有班次了。')}</p>`}
-      ${before.length ? `<details class="fam-before"${coming.length ? '' : ' open'}><summary>${L(`Voorbije dagen (${before.length})`, `过去的日子（${before.length}）`)}</summary>${before.map(dayBlock).join('')}</details>` : ''}
-    </section>
-    <section class="card fam-card">
-      <h2>${L('Uren en loon', '工时和工资')}</h2>
-      <p class="muted small">${L('Gewerkte uren volgens de prikklok, maal het uurloon.', '按打卡记录的工作时间，乘以时薪。')}</p>
-      ${workers.length ? `<div class="fam-people">${workers.map(workerCard).join('')}</div>`
-        : `<p class="empty">${L('Nog niemand gewerkt deze maand.', '这个月还没有人工作。')}</p>`}
-    </section>
-    <section class="card fam-card">
-      <div class="card-head"><h2>${L('Al het personeel', '全部员工')}</h2><span class="pill">${team.length}</span></div>
-      <div class="rows">${team.map(p => `<div class="row">
-        <div class="person">${personPic(p, 'lg')}<div class="row-main"><span class="row-title">${esc(p.name)}</span>
-          <span class="row-sub">${p.role === 'manager' ? L('Verantwoordelijke', '负责人') : L('Medewerker', '员工')} · ${p.hourly_rate != null ? `${fam.money(p.hourly_rate)} ${L('per uur', '每小时')}` : L('geen uurloon', '没有时薪')}${p.phone ? ` · <a href="tel:${esc(p.phone.replace(/[^\d+]/g, ''))}">${esc(p.phone)}</a>` : ''}</span></div></div>
-        ${payPill(p.pay_method, L)}
-      </div>`).join('')}</div>
-    </section>
-    ${isViewer() ? `<button type="button" class="signout-wide" id="fam-signout">${ICONS.signout}<span>${L('Afmelden', '退出登录')}</span></button>` : ''}`;
-
-  $('#fam-prev', el).addEventListener('click', () => { S.month = addMonths(m, -1); renderView(); });
-  $('#fam-next', el).addEventListener('click', () => { S.month = addMonths(m, 1); renderView(); });
+// Both family pages share the month and the top of the page.
+async function familyData() {
+  S.famMonth = S.famMonth || startOfMonth(now());
+  const m = S.famMonth;
+  return { m, r: await rpc('family_overview', { p_from: m.toISOString(), p_to: addMonths(m, 1).toISOString() }) };
+}
+function familyHead(m, title) {
+  return `
+    <div class="view-head fam-head"><div><h1>${title}</h1><p>${esc(S.settings.business_name)}</p></div>${langSwitch()}</div>
+    ${isViewer() ? '' : `<p class="hint info">Zo ziet het familie-account dit.
+      <button class="link" data-go-fam="family">Kalender</button> · <button class="link" data-go-fam="famstaff">Personeel</button> · <button class="link" data-go-fam="team">Terug naar Team</button></p>`}
+    ${periodBar(esc(fam.month(m)), sameDay(m, startOfMonth(now())) ? L('Deze maand', '本月') : '&nbsp;', 'fam-prev', 'fam-next')}`;
+}
+function bindFamilyHead(el, m) {
+  $('#fam-prev', el).addEventListener('click', () => { S.famMonth = addMonths(m, -1); renderView(); });
+  $('#fam-next', el).addEventListener('click', () => { S.famMonth = addMonths(m, 1); renderView(); });
   bindLang(el, () => (isViewer() ? renderShell() : renderView()));
-  const back = $('#fam-back', el);
-  if (back) back.addEventListener('click', () => { location.hash = 'team'; });
+  $$('[data-go-fam]', el).forEach(b => b.addEventListener('click', () => { location.hash = b.dataset.goFam; }));
   const so = $('#fam-signout', el);
   if (so) so.addEventListener('click', askSignOut);
   startPolling(5 * 60000);
+}
+const famSignOut = () => isViewer() ? `<button type="button" class="signout-wide" id="fam-signout">${ICONS.signout}<span>${L('Afmelden', '退出登录')}</span></button>` : '';
+
+const DAY_NAMES_ZH = ['星期日', '星期一', '星期二', '星期三', '星期四', '星期五', '星期六'];
+
+// The month grid, read only, in the family's language. On a phone the cells
+// only show a letter and a picture; the chosen day is spelled out below it.
+function famCalendarHTML(shifts, month, people, selected) {
+  const t = now(), first = startOfMonth(month), today = startOfDay(t);
+  const days = new Date(first.getFullYear(), first.getMonth() + 1, 0).getDate();
+  const avatarOf = id => (people.find(p => p.id === id) || {}).avatar;
+  const entry = x => {
+    const part = shiftPart(x), label = fam.part(x), past = new Date(x.ends_at) <= t;
+    const who = x.open ? `${L('Open', '空缺')}${x.count > 1 ? ` ×${x.count}` : ''}` : esc(x.staff_name);
+    const av = x.open ? null : avatarOf(x.staff_id);
+    const pic = x.open ? '' : av ? `<span class="cal-pic">${Avatar.head(av)}</span>` : `<span class="cal-pic cal-initials">${esc(initials(x.staff_name))}</span>`;
+    return `<span class="cal-shift${x.open ? ' is-open' : ''}${past ? ' is-past' : ''}" title="${esc(`${label}, ${fmt.range(x.starts_at, x.ends_at)}`)}">
+      <span class="cal-line"><span class="cal-tag${partClass(part)}"><span class="tag-full">${esc(label)}</span><span class="tag-short" aria-hidden="true">${esc(label.charAt(0))}</span></span><span class="t">${fmt.range(x.starts_at, x.ends_at)}</span>${x.open && x.count > 1 ? `<span class="cal-count" aria-hidden="true">×${x.count}</span>` : ''}</span>
+      <span class="cal-who">${pic}<b>${who}</b></span></span>`;
+  };
+  const cells = [];
+  for (let i = 0; i < weekdayIndex(first); i++) cells.push('<div class="cal-cell is-blank"></div>');
+  for (let i = 0; i < days; i++) {
+    const d = addDays(first, i), list = dayEntries(shifts.filter(s => sameDay(s.starts_at, d)));
+    cells.push(`<div class="cal-cell${sameDay(d, t) ? ' is-today' : ''}${d < today ? ' is-before' : ''}${list.length ? ' has-shifts' : ''}${sameDay(d, selected) ? ' is-selected' : ''}" data-day="${toDateInput(d)}">
+      <div class="cal-day"><span class="cal-num">${i + 1}</span></div>
+      ${list.map(entry).join('')}
+    </div>`);
+  }
+  while (cells.length % 7) cells.push('<div class="cal-cell is-blank"></div>');
+  const names = lang() === 'zh' ? DAY_NAMES_ZH : DAY_NAMES;
+  return `
+    <div class="cal-wrap" lang="${langAttr()}">
+      <h2 class="cal-title">${esc(fam.month(first))}</h2>
+      <div class="cal-grid">
+        ${WEEK_ORDER.map(i => names[i]).map(n => `<div class="cal-head"><span class="only-wide">${n}</span><span class="only-phone" aria-hidden="true">${lang() === 'zh' ? n.slice(-1) : n.slice(0, 2)}</span></div>`).join('')}
+        ${cells.join('')}
+      </div>
+      <div class="cal-legend only-phone">
+        <span><span class="cal-tag is-day">${L('M', '午')}</span> ${L('Middag', '午班')}</span><span><span class="cal-tag is-eve">${L('A', '晚')}</span> ${L('Avond', '晚班')}</span>
+        <span><span class="lg-box is-open"></span> ${L('Open, nog niemand', '空缺，还没人')}</span>
+        <span class="muted">${L('Tik op een dag.', '点日期看详情。')}</span>
+      </div>
+    </div>`;
+}
+
+// One day spelled out in big letters, under the calendar on a phone.
+function famDayHTML(shifts, day, people) {
+  const t = now(), list = dayEntries(shifts.filter(s => sameDay(s.starts_at, day)));
+  const avatarOf = id => (people.find(p => p.id === id) || {}).avatar;
+  return `
+    <h2>${esc(fam.day(day))}${sameDay(day, t) ? ` <span class="pill on">${L('Vandaag', '今天')}</span>` : ''}</h2>
+    ${list.length ? `<div class="day-list">${list.map(x => `
+      <div class="day-shift${x.open ? ' is-open' : ''}${new Date(x.ends_at) <= t ? ' is-past' : ''}">
+        <div class="day-main">
+          <div class="day-when"><span class="cal-tag${partClass(shiftPart(x))}">${esc(fam.part(x))}</span><span class="time">${fmt.range(x.starts_at, x.ends_at)}</span></div>
+          <div class="day-who">${x.open ? `<span class="fam-open-who">${L('Open, nog niemand', '空缺，还没人')}${x.count > 1 ? ` · ${L(`${x.count} plaatsen`, `${x.count}个位置`)}` : ''}</span>`
+            : `${personPic({ name: x.staff_name, avatar: avatarOf(x.staff_id) })}<span>${esc(x.staff_name)}</span>`}</div>
+        </div>
+      </div>`).join('')}</div>` : `<p class="empty">${L('Geen shiften op deze dag.', '这天没有班次。')}</p>`}`;
+}
+
+async function viewFamily(el, current) {
+  const { m, r } = await familyData();
+  if (!current()) return;
+  el.setAttribute('lang', langAttr());
+  const t = now();
+  const shifts = r.shifts.filter(s => new Date(s.starts_at) >= m);
+  const openCount = dayEntries(shifts.filter(s => !s.staff_id && new Date(s.ends_at) > t)).reduce((a, x) => a + x.count, 0);
+  const people = r.people;
+  // the chosen day: today in this month, otherwise the first day with shifts
+  let day = sameDay(startOfMonth(t), m) ? startOfDay(t)
+    : shifts.length ? startOfDay(shifts[0].starts_at) : m;
+  const working = new Set(shifts.filter(s => s.staff_id && new Date(s.ends_at) > t).map(s => s.staff_id)).size;
+  el.innerHTML = `
+    ${familyHead(m, L('Kalender', '排班'))}
+    <div class="stats stats-3 fam-stats">
+      <div class="stat ${openCount ? 'alert' : 'good'}"><span class="v">${openCount}</span><span class="k">${L('Open shiften, nog niemand', '空缺班次，还没人')}</span></div>
+      <div class="stat"><span class="v">${shifts.filter(s => s.staff_id).length}</span><span class="k">${L('Shiften met iemand', '有人的班次')}</span></div>
+      <div class="stat"><span class="v">${working}</span><span class="k">${L('Mensen die nog komen werken', '还要来上班的人')}</span></div>
+    </div>
+    <section class="card cal-card">${famCalendarHTML(shifts, m, people, day)}</section>
+    <section class="card fam-daypanel" id="fam-day" lang="${langAttr()}">${famDayHTML(shifts, day, people)}</section>
+    ${famSignOut()}`;
+  bindFamilyHead(el, m);
+  // phones: a tap on a day shows it below the calendar
+  $('.cal-grid', el).addEventListener('click', ev => {
+    const cell = ev.target.closest('.cal-cell[data-day]');
+    if (!cell || !isPhone()) return;
+    day = new Date(cell.dataset.day + 'T00:00');
+    $$('.cal-cell.is-selected', el).forEach(c => c.classList.remove('is-selected'));
+    cell.classList.add('is-selected');
+    const panel = $('#fam-day', el);
+    panel.innerHTML = famDayHTML(shifts, day, people);
+    panel.scrollIntoView({ behavior: 'smooth', block: 'nearest' });
+  });
+}
+
+async function viewFamilyStaff(el, current) {
+  const { m, r } = await familyData();
+  if (!current()) return;
+  el.setAttribute('lang', langAttr());
+  const team = r.people.filter(p => p.active || p.worked_minutes > 0);
+  const owed = p => p.hourly_rate != null ? Math.round(p.worked_minutes / 60 * p.hourly_rate * 100) / 100 : null;
+  const cashTotal = team.filter(p => p.pay_method === 'cash').reduce((a, p) => a + (owed(p) || 0), 0);
+  const totalMins = team.reduce((a, p) => a + p.worked_minutes, 0);
+  const role = p => p.role === 'manager' ? L('Verantwoordelijke', '负责人') : L('Medewerker', '员工');
+  const age = p => p.age != null ? L(`${p.age} jaar`, `${p.age}岁`) : '—';
+  const rate = p => p.hourly_rate != null ? fam.money(p.hourly_rate) : '—';
+  const total = p => owed(p) != null ? fam.money(owed(p)) : '—';
+  const tel = p => p.phone ? `<a href="tel:${esc(p.phone.replace(/[^\d+]/g, ''))}">${esc(p.phone)}</a>` : '';
+  el.innerHTML = `
+    ${familyHead(m, L('Personeel', '员工'))}
+    <div class="stats stats-3 fam-stats">
+      <div class="stat"><span class="v">${team.filter(p => p.active).length}</span><span class="k">${L('Mensen in het team', '团队人数')}</span></div>
+      <div class="stat"><span class="v">${fam.dur(totalMins)}</span><span class="k">${L('Samen gewerkt deze maand', '本月总共工作')}</span></div>
+      <div class="stat is-cash"><span class="v">${fam.money(cashTotal)}</span><span class="k">${L('Cash te betalen', '要付的现金')}</span></div>
+    </div>
+    <section class="card fam-card">
+      <div class="card-head"><h2>${L('Al het personeel', '全部员工')}</h2><span class="muted small">${L('Uren volgens de prikklok', '按打卡记录的工时')}</span></div>
+      ${team.length ? `
+      <div class="table-wrap only-wide-block"><table class="fam-table">
+        <thead><tr><th>${L('Naam', '名字')}</th><th class="num">${L('Leeftijd', '年龄')}</th><th class="num">${L('Per uur', '时薪')}</th><th class="num">${L('Gewerkt', '工作时间')}</th><th class="num">${L('Samen', '合计')}</th><th>${L('Betaling', '付款')}</th></tr></thead>
+        <tbody>${team.map(p => `<tr class="${p.pay_method === 'cash' ? 'is-cash' : ''}">
+          <td><span class="person">${personPic(p, 'lg')}<span><strong>${esc(p.name)}</strong><span class="row-sub">${role(p)}${p.phone ? ` · ${tel(p)}` : ''}</span></span></span></td>
+          <td class="num">${age(p)}</td><td class="num">${rate(p)}</td>
+          <td class="num">${fam.dur(p.worked_minutes)}</td><td class="num fam-total">${total(p)}</td>
+          <td>${payPill(p.pay_method, L)}</td></tr>`).join('')}</tbody>
+      </table></div>
+      <div class="fam-people only-phone-block">${team.map(p => `
+        <div class="fam-person${p.pay_method === 'cash' ? ' is-cash' : ''}">
+          <div class="fam-person-head">${personPic(p, 'lg')}<strong>${esc(p.name)}</strong>${payPill(p.pay_method, L)}</div>
+          <dl class="fam-kv">
+            <dt>${L('Leeftijd', '年龄')}</dt><dd>${age(p)}</dd>
+            <dt>${L('Per uur', '时薪')}</dt><dd>${rate(p)}</dd>
+            <dt>${L('Gewerkt', '工作时间')}</dt><dd>${fam.dur(p.worked_minutes)} <span class="muted">· ${L(`${p.times} keer`, `${p.times}次`)}</span></dd>
+            <dt>${L('Samen', '合计')}</dt><dd class="fam-total">${total(p)}</dd>
+            <dt>${L('Functie', '职位')}</dt><dd>${role(p)}</dd>
+            ${p.phone ? `<dt>${L('Telefoon', '电话')}</dt><dd>${tel(p)}</dd>` : ''}
+          </dl>
+        </div>`).join('')}</div>` : `<p class="empty">${L('Nog niemand in het team.', '团队里还没有人。')}</p>`}
+    </section>
+    ${famSignOut()}`;
+  bindFamilyHead(el, m);
 }
 
 /* -------------------------------------- payslips: read, check and save */

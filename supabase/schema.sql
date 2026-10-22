@@ -1721,8 +1721,8 @@ begin
 end $$;
 
 -- One month for a family account (managers can look too): every shift with
--- who works it, and per person the hours worked, hourly rate and how they're
--- paid. Family accounts themselves are left out.
+-- who works it, and per person the age, hours worked, hourly rate and how
+-- they're paid. Family accounts themselves are left out.
 create function public.family_overview(p_token text, p_from timestamptz, p_to timestamptz) returns json
 language plpgsql volatile security definer set search_path = public, extensions as $$
 declare v public.staff;
@@ -1744,6 +1744,7 @@ begin
      where sh.cancelled_at is null and sh.starts_at < p_to and sh.ends_at > p_from), '[]'::json),
     'people', coalesce((select json_agg(r order by lower(r.name)) from (
         select st.id, st.name, st.active, app_private.role_of(st) as role, st.hourly_rate, st.pay_method, st.phone, st.avatar,
+               extract(year from age(current_date, st.birth_date))::int as age,
                coalesce(w.minutes, 0) as worked_minutes, coalesce(w.times, 0) as times,
                (select count(*) from public.shifts s
                  where s.staff_id = st.id and s.cancelled_at is null
