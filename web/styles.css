@@ -864,3 +864,4 @@ button.cal-shift.is-group { cursor: pointer; }
 .off-callback { display: inline-flex; margin-top: 6px; max-width: 100%; }
 .off-report { margin-top: 12px; }
 .off-unmatched { color: var(--warn); }
+.off-connect-host { margin: 12px 0 4px; }

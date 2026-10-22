@@ -1832,7 +1832,8 @@ create table app_private.officient (
   sync_started_at timestamptz,
   last_sync_at    timestamptz,
   last_report     jsonb,
-  last_error      text
+  last_error      text,
+  host            text -- the account's own address, eg 'xinsen.officient.io'; sign-in happens there
 );
 insert into app_private.officient (id) values (1);
 revoke all on app_private.officient from public, anon, authenticated;
@@ -1848,7 +1849,7 @@ begin
     'connected', o.refresh_token is not null, 'connected_at', o.connected_at,
     'syncing', coalesce(o.sync_started_at > now() - interval '5 minutes', false),
     'last_sync_at', o.last_sync_at, 'last_report', o.last_report, 'last_error', o.last_error,
-    'linked', (select count(*) from public.staff where officient_id is not null));
+    'host', o.host, 'linked', (select count(*) from public.staff where officient_id is not null));
 end $$;
 
 -- The client ID and secret of the app the manager made under Developers in Officient.
@@ -1877,7 +1878,22 @@ begin
     raise exception using message = 'Fill in the client ID and client secret from Officient first.', errcode = 'P0001';
   end if;
   update app_private.officient set oauth_state = v_state, oauth_state_at = now() where id = 1;
-  return json_build_object('client_id', o.client_id, 'state', v_state);
+  return json_build_object('client_id', o.client_id, 'state', v_state, 'host', coalesce(o.host, 'app.officient.io'));
+end $$;
+
+-- The account's own Officient address. A pasted link works too
+-- ("https://xinsen.officient.io/dashboard"); only *.officient.io is taken.
+create function public.mgr_officient_save_host(p_token text, p_host text) returns json
+language plpgsql security definer set search_path = public, extensions as $$
+declare v public.staff;
+  v_host text := nullif(split_part(regexp_replace(lower(btrim(coalesce(p_host, ''))), '^[a-z]+://', ''), '/', 1), '');
+begin
+  v := app_private.current_manager(p_token);
+  if v_host is not null and v_host !~ '^[a-z0-9][a-z0-9-]*\.officient\.io$' then
+    raise exception using message = 'Fill in your Officient address, like yourcompany.officient.io.', errcode = 'P0001';
+  end if;
+  update app_private.officient set host = v_host where id = 1;
+  return json_build_object('ok', true, 'host', v_host);
 end $$;
 
 create function public.mgr_officient_disconnect(p_token text) returns json

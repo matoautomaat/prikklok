@@ -47,6 +47,7 @@ const SERVER_NL = {
   'Enter start and end times like 17:30.': 'Vul een begin- en einduur in, bijvoorbeeld 17:30.',
   'Fill in the client ID and client secret from Officient first.': 'Vul eerst de client ID en de client secret van Officient in.',
   'Fill in the client ID and client secret from Officient.': 'Vul de client ID en de client secret van Officient in.',
+  'Fill in your Officient address, like yourcompany.officient.io.': 'Vul je Officient-adres in, bv. jouwzaak.officient.io.',
   'Grace period must be between 0 and 120 minutes.': 'De speling moet tussen 0 en 120 minuten liggen.',
   'Number of people must be between 1 and 20.': 'Het aantal personen moet tussen 1 en 20 liggen.',
   'Officient gave no lasting access. Connect again.': 'Officient gaf geen blijvende toegang. Koppel opnieuw.',
@@ -2902,16 +2903,20 @@ function officientReport(r) {
 }
 
 function officientCard(o, link) {
-  const callback = link;
+  const callback = link, host = o.host || 'app.officient.io';
+  const hostField = id => `<div class="field wide"><label for="${id}">Je Officient-adres</label>
+    <input id="${id}" maxlength="120" autocomplete="off" spellcheck="false" placeholder="jouwzaak.officient.io" value="${esc(o.host || '')}">
+    <span class="help">Het adres waarop je Officient opent, bv. jouwzaak.officient.io. Daar meld je je aan om te koppelen.</span></div>`;
   const appForm = `
     <form id="off-form" novalidate>
       <ol class="plain-list off-steps">
-        <li>Meld je aan in Officient als beheerder. Klik rechtsboven op je avatar en dan op <a href="https://app.officient.io/developer" target="_blank" rel="noopener">Developers</a>.</li>
+        <li>Meld je aan in Officient als beheerder. Klik rechtsboven op je avatar en dan op <a href="https://${esc(host)}/developer" target="_blank" rel="noopener">Developers</a>.</li>
         <li>Maak een <strong>client app</strong>, bv. “Prikklok”. Geef alleen <strong>leesrechten</strong>: <code>${OFFICIENT_SCOPES.join('</code>, <code>')}</code>.</li>
         <li>Vul als <strong>callback-URL</strong> in: <span class="copybox off-callback"><code id="off-cb">${esc(callback)}</code><button type="button" class="sm" id="off-copy">Kopiëren</button></span></li>
         <li>Kopieer de <strong>client ID</strong> en de <strong>client secret</strong> van die app hieronder.</li>
       </ol>
       <div class="form-grid" style="margin-top:12px">
+        ${hostField('off-host')}
         <div class="field"><label for="off-id">Client ID</label><input id="off-id" maxlength="200" autocomplete="off" spellcheck="false" value="${esc(o.client_id || '')}"></div>
         <div class="field"><label for="off-secret">Client secret</label><input id="off-secret" type="password" maxlength="200" autocomplete="off" spellcheck="false"></div>
       </div>
@@ -2924,6 +2929,7 @@ function officientCard(o, link) {
   else if (!o.connected) body = `
     <p>De app-gegevens zijn bewaard (client ID <code>${esc(o.client_id)}</code>). Koppel nu: je meldt je aan bij Officient en keurt de toegang goed.</p>
     ${o.last_error ? `<p class="hint bad">${esc(tr(o.last_error))}</p>` : ''}
+    <div class="form-grid off-connect-host">${hostField('off-host-connect')}</div>
     <div class="form-actions" style="justify-content:space-between"><button type="button" class="link" id="off-edit">Andere app-gegevens</button><button type="button" class="primary" id="off-connect">Koppelen met Officient</button></div>
     <div id="off-edit-box" hidden>${appForm}</div>`;
   else body = `
@@ -2956,6 +2962,7 @@ function bindOfficient(el, o, link) {
       const id = $('#off-id', form).value.trim(), secret = $('#off-secret', form).value.trim();
       if (!id || !secret) { err.textContent = 'Vul de client ID en de client secret in.'; return; }
       await busy($('button[type=submit]', form), async () => {
+        await rpc('mgr_officient_save_host', { p_host: $('#off-host', form).value });
         await rpc('mgr_officient_save_app', { p_client_id: id, p_client_secret: secret });
         toast('App-gegevens bewaard. Koppel nu met Officient.');
         renderView();
@@ -2968,9 +2975,11 @@ function bindOfficient(el, o, link) {
   if (edit) edit.addEventListener('click', () => { $('#off-edit-box', card).hidden = false; $('#off-id', card).focus(); });
   const connect = $('#off-connect', card);
   if (connect) connect.addEventListener('click', () => busy(connect, async () => {
+    const hostInput = $('#off-host-connect', card);
+    if (hostInput && hostInput.value.trim() !== (o.host || '')) await rpc('mgr_officient_save_host', { p_host: hostInput.value });
     const a = await rpc('mgr_officient_authorize');
     store.set(OFFICIENT_STATE, a.state);
-    location.href = `https://app.officient.io/authorize?client_id=${encodeURIComponent(a.client_id)}&state=${encodeURIComponent(a.state)}`;
+    location.href = `https://${a.host}/authorize?client_id=${encodeURIComponent(a.client_id)}&state=${encodeURIComponent(a.state)}`;
   }).catch(() => {}));
   const sync = $('#off-sync', card);
   if (sync) sync.addEventListener('click', () => busy(sync, async () => {
