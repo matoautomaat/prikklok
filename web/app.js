@@ -2506,8 +2506,10 @@ async function viewTeam(el, current) {
 
 /* ---------------------------------------------------- manager: one person */
 
-// A family account only has a name, a PIN and the switch to turn it off.
-function familyMember(el, p) {
+// A family account: name, PIN and the switch to turn it off, plus the
+// personal details and payslips when that person is on the payroll too.
+function familyMember(el, r) {
+  const p = r.person;
   el.innerHTML = `
     <div class="view-head"><div class="hello">
       ${personPic(p, 'xl')}
@@ -2538,9 +2540,34 @@ function familyMember(el, p) {
         </ul>
         <div class="form-actions"><button class="sm" id="see-family">Bekijk het overzicht</button></div>
       </section>
-    </div>`;
+    </div>
+    <section class="card">
+      <h2>Persoonlijke gegevens</h2>
+      <form id="pf-form" novalidate><div class="form-grid" style="margin-top:12px">${profileFields('mf', r.profile)}</div>
+        <p class="form-error" id="pf-err"></p><div class="form-actions"><button type="submit" class="primary">Gegevens opslaan</button></div></form>
+    </section>
+    ${r.payslips.length ? `<section class="card">
+      <h2>Loonfiches</h2>
+      <div class="rows">${r.payslips.map(x => `
+        <div class="row"><div class="row-main"><span class="row-title">${fmt.month(new Date(x.month + 'T00:00'))}</span>
+          <span class="row-sub">${x.net_pay != null ? `Netto ${fmt.money(x.net_pay)}${x.gross_pay != null ? ` · bruto ${fmt.money(x.gross_pay)}` : ''} · ` : ''}${esc(x.file_name)}</span></div>
+          <div class="row-actions"><button class="sm" data-slip-get="${x.id}">Downloaden</button></div></div>`).join('')}</div>
+    </section>` : ''}`;
   $('#back', el).addEventListener('click', () => { location.hash = 'team'; });
   $('#see-family', el).addEventListener('click', () => { location.hash = 'family'; });
+  $$('[data-slip-get]', el).forEach(b => b.addEventListener('click', () => downloadPayslip(b.dataset.slipGet, b)));
+  const pf = $('#pf-form', el);
+  pf.addEventListener('submit', async ev => {
+    ev.preventDefault();
+    const err = $('#pf-err', el); err.textContent = '';
+    const r2 = readProfile(pf);
+    if (r2.error) { err.textContent = r2.error; r2.field.focus(); return; }
+    await busy($('button[type=submit]', pf), async () => {
+      await rpc('mgr_save_profile', { p_id: p.id, p_profile: r2.values });
+      toast('Gegevens opgeslagen.');
+      renderView();
+    }).catch(e => { err.textContent = e.message; });
+  });
   const pm = $('#pm-form', el);
   pm.addEventListener('submit', async ev => {
     ev.preventDefault();
@@ -2564,7 +2591,7 @@ async function viewMember(el, current) {
   const [r] = await Promise.all([rpc('mgr_get_staff', { p_id: id }), loadStaff()]);
   if (!current()) return;
   const p = r.person, pr = r.profile, xp = r.xp, self = p.id === S.me.id, first = p.name.split(' ')[0];
-  if (p.role === 'viewer') return familyMember(el, p);
+  if (p.role === 'viewer') return familyMember(el, r);
   el.innerHTML = `
     <div class="view-head"><div class="hello">
       ${personPic(p, 'xl')}
