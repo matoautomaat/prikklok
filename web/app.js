@@ -58,6 +58,7 @@ const SERVER_NL = {
   'Pick a team member.': 'Kies een medewerker.',
   'Pick an active team member.': 'Kies een actieve medewerker.',
   'Pick at least one day.': 'Kies minstens één dag.',
+  'Pick cash or registered.': 'Kies cash of ingeschreven.',
   'Say briefly why you give this shift back.': 'Zeg kort waarom je deze shift teruggeeft.',
   'Someone else already picked up this shift.': 'Iemand anders heeft deze shift al opgenomen.',
   'Someone on the team already has that name. Try adding a last initial.': 'Iemand in het team heeft die naam al. Voeg bijvoorbeeld de eerste letter van de achternaam toe.',
@@ -66,6 +67,7 @@ const SERVER_NL = {
   'That file is empty.': 'Dat bestand is leeg.',
   'That file is over 4 MB. Save it as a smaller PDF and try again.': 'Dat bestand is groter dan 4 MB. Bewaar het als een kleinere pdf en probeer opnieuw.',
   "That isn't one of your shifts.": 'Dat is geen shift van jou.',
+  'This account can only look at the overview.': 'Dit account kan alleen het overzicht bekijken.',
   "That name and PIN don't match.": 'Naam en pincode komen niet overeen.',
   "That payslip isn't available.": 'Die loonfiche is niet beschikbaar.',
   "That person wasn't found.": 'Die persoon werd niet gevonden.',
@@ -251,6 +253,7 @@ const $ = (sel, root = document) => root.querySelector(sel);
 const $$ = (sel, root = document) => [...root.querySelectorAll(sel)];
 const initials = name => String(name || '?').trim().split(/\s+/).slice(0, 2).map(p => p[0]).join('').toUpperCase();
 const isManager = () => S.me && S.me.role === 'manager';
+const isViewer = () => S.me && S.me.role === 'viewer';
 
 /* ------------------------------------------------ people, avatars, levels */
 
@@ -449,6 +452,7 @@ function setTheme(pref) {
 if (darkQuery && darkQuery.addEventListener) darkQuery.addEventListener('change', () => { if (themePref() === 'auto') applyTheme(); });
 
 function tabsFor() {
+  if (isViewer()) return [['family', 'Overzicht']];
   return isManager()
     ? [['today', 'Vandaag'], ['schedule', 'Planning'], ['monthly', 'Overzicht'], ['requests', 'Aanvragen'], ['team', 'Team'], ['ranking', 'Ranglijst'], ['profile', 'Profiel']]
     : [['clock', 'Klok'], ['shifts', 'Shiften'], ['hours', 'Mijn uren'], ['ranking', 'Ranglijst'], ['profile', 'Profiel']];
@@ -471,7 +475,7 @@ const modal = {
     return d;
   },
   close() { const d = $('#modal'); if (d.open) d.close(); d.innerHTML = ''; d.classList.remove('wide', 'sheet'); },
-  confirm({ title, body = '', ok = 'Bevestigen', danger = false }) {
+  confirm({ title, body = '', ok = 'Bevestigen', cancel = 'Annuleren', danger = false }) {
     return new Promise(resolve => {
       let done = false;
       const finish = v => { if (!done) { done = true; resolve(v); } };
@@ -479,7 +483,7 @@ const modal = {
         <h2 id="modal-title">${esc(title)}</h2>
         ${body ? `<p>${body}</p>` : ''}
         <div class="form-actions">
-          <button type="button" data-close>Annuleren</button>
+          <button type="button" data-close>${esc(cancel)}</button>
           <button type="button" class="${danger ? 'danger solid' : 'primary'}" id="confirm-ok">${esc(ok)}</button>
         </div>`);
       $('#confirm-ok', d).addEventListener('click', () => { finish(true); modal.close(); });
@@ -531,37 +535,42 @@ async function showSignIn(message) {
 
   renderAuthShell(`
     ${authBrand(status.business_name)}
-    <div>
+    <div lang="${langAttr()}">
       <h1>${CFG.logo ? 'Prikklok' : esc(status.business_name)}</h1>
-      <p class="lede">Meld je aan om in te klokken, shiften op te nemen en je uren te bekijken.</p>
+      <p class="lede">${L('Meld je aan om in te klokken, shiften op te nemen en je uren te bekijken.', '登录后可以打卡、选班次和查看工时。')}</p>
     </div>
-    <form class="card" id="login-form" novalidate>
+    <form class="card" id="login-form" lang="${langAttr()}" novalidate>
       ${message ? `<p class="hint info">${esc(message)}</p>` : ''}
       <div class="field">
-        <label for="login-name">Je naam</label>
+        <label for="login-name">${L('Je naam', '你的名字')}</label>
         <input id="login-name" name="name" autocomplete="username" autocapitalize="words" required>
       </div>
       <div class="field">
-        <label for="login-pin">Pincode</label>
+        <label for="login-pin">${L('Pincode', '密码')}</label>
         <input id="login-pin" name="pin" class="pin-input" type="password" inputmode="numeric" pattern="[0-9]*" maxlength="8" autocomplete="current-password" required>
       </div>
-      <button type="submit" class="primary">Aanmelden</button>
+      <button type="submit" class="primary">${L('Aanmelden', '登录')}</button>
       <p class="form-error" id="login-error"></p>
     </form>
-    <p class="muted small">Pincode vergeten? Vraag je verantwoordelijke om een nieuwe.</p>`);
+    <p class="muted small" lang="${langAttr()}">${L('Pincode vergeten? Vraag je verantwoordelijke om een nieuwe.', '忘记密码？请负责人给你一个新的。')}</p>
+    ${langSwitch()}`);
 
+  bindLang($('#app'), () => showSignIn(message));
   const form = $('#login-form');
   form.addEventListener('submit', async ev => {
     ev.preventDefault();
     const err = $('#login-error');
     err.textContent = '';
     const name = form.name.value.trim(), pin = form.pin.value.trim();
-    if (!name || !pin) { err.textContent = 'Vul je naam en pincode in.'; return; }
+    if (!name || !pin) { err.textContent = L('Vul je naam en pincode in.', '请输入你的名字和密码。'); return; }
     const btn = $('button[type=submit]', form);
-    btn.disabled = true; btn.textContent = 'Bezig met aanmelden…';
+    btn.disabled = true; btn.textContent = L('Bezig met aanmelden…', '正在登录…');
     try {
       const r = await rpc('login', { p_name: name, p_pin: pin }, { auth: false });
-      if (!r.ok) { err.textContent = tr(r.error); form.pin.value = ''; form.pin.focus(); return; }
+      if (!r.ok) {
+        err.textContent = r.error === "That name and PIN don't match." ? L(tr(r.error), '名字或密码不对。') : tr(r.error);
+        form.pin.value = ''; form.pin.focus(); return;
+      }
       setToken(r.token);
       await refreshMe();
       location.hash = '';
@@ -569,7 +578,7 @@ async function showSignIn(message) {
     } catch (e) {
       err.textContent = e.message;
     } finally {
-      if (btn.isConnected) { btn.disabled = false; btn.textContent = 'Aanmelden'; }
+      if (btn.isConnected) { btn.disabled = false; btn.textContent = L('Aanmelden', '登录'); }
     }
   });
 }
@@ -648,7 +657,11 @@ const logoHTML = cls => CFG.logo
   : `<span class="${cls} logo-text">${esc(S.settings.business_name)}</span>`;
 
 async function askSignOut() {
-  if (await modal.confirm({ title: 'Afmelden?', body: 'Je hebt je naam en pincode nodig om je opnieuw aan te melden.', ok: 'Afmelden' })) signOut();
+  const t = isViewer() ? L : nl => nl;
+  if (await modal.confirm({
+    title: t('Afmelden?', '退出登录？'), body: t('Je hebt je naam en pincode nodig om je opnieuw aan te melden.', '再次登录需要你的名字和密码。'),
+    ok: t('Afmelden', '退出'), cancel: t('Annuleren', '取消'),
+  })) signOut();
 }
 
 // Phones show at most five buttons at the bottom; the rest goes under "Meer".
@@ -670,6 +683,7 @@ function openMore() {
 }
 
 function renderShell() {
+  if (isViewer()) return renderFamilyShell();
   const tabs = tabsFor(), { main, more } = bottomTabs();
   const badge = k => k === 'requests' ? '<span class="count" data-badge hidden></span>' : '';
   document.title = `${S.settings.business_name} · Prikklok`;
@@ -717,16 +731,19 @@ function updateBadges() {
 const VIEWS = {
   clock: viewClock, shifts: viewShifts, hours: viewHours, profile: viewProfile, ranking: viewRanking,
   today: viewToday, schedule: viewSchedule, monthly: viewMonthly, requests: viewRequests, team: viewTeam, member: viewMember,
+  family: viewFamily,
 };
 
 // #profile works for everyone (managers reach it through their picture);
-// #team/<id> opens one team member for managers.
+// #team/<id> opens one team member for managers, #family shows them what the
+// family account sees.
 function route() {
   if (!S.me) return;
   const tabs = tabsFor().map(t => t[0]);
   let v = location.hash.replace('#', ''), tab = v;
   const member = v.match(/^team\/([0-9a-f-]{36})$/);
   if (member && isManager()) { S.memberId = member[1]; v = 'member'; tab = 'team'; }
+  else if (v === 'family' && isManager()) tab = 'team';
   else if (!tabs.includes(v)) { v = tabs[0]; tab = v; }
   if (S.view !== v) S.month = null;
   S.view = v;
@@ -1193,7 +1210,8 @@ async function loadStaff(force = false) {
   if (!S.staff || force) S.staff = await rpc('mgr_staff_list');
   return S.staff;
 }
-const activeStaff = () => (S.staff || []).filter(p => p.active);
+const workers = () => (S.staff || []).filter(p => p.role !== 'viewer');
+const activeStaff = () => workers().filter(p => p.active);
 function staffOptions(selected, { openLabel = 'Open' } = {}) {
   return `<option value="">${esc(openLabel)}</option>` +
     activeStaff().map(p => `<option value="${p.id}" ${p.id === selected ? 'selected' : ''}>${esc(p.name)}</option>`).join('');
@@ -2148,7 +2166,7 @@ async function viewMonthly(el, current) {
         <thead><tr><th>Naam</th><th class="num">Gewerkt</th><th class="num">Gepland</th><th class="num">Shiften</th><th class="num">Te laat</th><th class="num">Vroeger weg</th><th class="num">Niet gekomen</th>${anyRate ? '<th class="num">Uurloon</th><th class="num">Geschat loon</th>' : ''}</tr></thead>
         <tbody>${people.map(p => `
           <tr class="clickable ${openId === p.id ? 'open' : ''}" data-person="${p.id}" tabindex="0" aria-expanded="${openId === p.id}">
-            <td><span class="person">${picFor(p.id, p.name)}<span><strong>${esc(p.name)}</strong>${p.active ? '' : ' <span class="pill">Inactief</span>'}${p.open_entries ? ' <span class="pill warn">Ingeklokt</span>' : ''}${p.pending_requests ? ` <span class="pill accent">${plural(p.pending_requests, 'aanpassing', 'aanpassingen')}</span>` : ''}</span></span></td>
+            <td><span class="person">${picFor(p.id, p.name)}<span><strong>${esc(p.name)}</strong>${p.pay_method ? ` ${payPill(p.pay_method)}` : ''}${p.active ? '' : ' <span class="pill">Inactief</span>'}${p.open_entries ? ' <span class="pill warn">Ingeklokt</span>' : ''}${p.pending_requests ? ` <span class="pill accent">${plural(p.pending_requests, 'aanpassing', 'aanpassingen')}</span>` : ''}</span></span></td>
             <td class="num"><strong>${fmt.dur(p.worked_minutes)}</strong></td>
             <td class="num">${fmt.dur(p.scheduled_minutes)}</td>
             ${cell(p.entries)}${cell(p.late, 'flag')}${cell(p.left_early, 'flag')}${cell(p.missed, 'flag')}
@@ -2272,7 +2290,7 @@ function entryModal(x, staffId) {
     <p>${x ? (x.pending ? 'Voor deze registratie wacht een aanvraag bij Aanvragen.' : 'Wijzigingen tellen meteen mee.') : 'Voor iemand die gewerkt heeft maar niet inklokte.'}</p>
     <form id="en-form" novalidate>
       <div class="form-grid">
-        ${x ? '' : `<div class="field wide"><label for="en-staff">Persoon</label><select id="en-staff">${(S.staff || []).map(p => `<option value="${p.id}" ${p.id === staffId ? 'selected' : ''}>${esc(p.name)}</option>`).join('')}</select></div>`}
+        ${x ? '' : `<div class="field wide"><label for="en-staff">Persoon</label><select id="en-staff">${workers().map(p => `<option value="${p.id}" ${p.id === staffId ? 'selected' : ''}>${esc(p.name)}</option>`).join('')}</select></div>`}
         <div class="field wide"><label for="en-day">Dag</label>${dateField('en-day', inV, startOfMonth(base), monthEnd < t ? monthEnd : t)}</div>
         <div class="field"><label for="en-in">Ingeklokt</label>${timeField('en-in', toTimeInput(inV))}</div>
         <div class="field"><label for="en-out">Uitgeklokt</label>${timeField('en-out', outV ? toTimeInput(outV) : '', { required: false })}<span class="help">Leeg betekent nog ingeklokt.</span></div>
@@ -2355,6 +2373,12 @@ async function viewRequests(el, current) {
 
 /* ----------------------------------------------------------- manager: team */
 
+const ROLE_NL = { staff: 'Medewerker', manager: 'Verantwoordelijke', viewer: 'Familie · alleen overzicht' };
+const roleOptions = sel => Object.entries({ staff: 'Medewerker', manager: 'Verantwoordelijke (ziet alles)', viewer: 'Familie (alleen het maandoverzicht)' })
+  .map(([k, l]) => `<option value="${k}" ${k === sel ? 'selected' : ''}>${l}</option>`).join('');
+const payOptions = sel => `<option value="">Niet ingevuld</option>${Object.entries(PAY)
+  .map(([k, [l]]) => `<option value="${k}" ${k === sel ? 'selected' : ''}>${l}</option>`).join('')}`;
+
 async function viewTeam(el, current) {
   const staff = await loadStaff(true);
   if (!current()) return;
@@ -2363,7 +2387,8 @@ async function viewTeam(el, current) {
   const deviceTz = Intl.DateTimeFormat().resolvedOptions().timeZone;
   const cutLabel = h => h === 0 ? 'De shift begint' : h === 168 ? '1 week ervoor' : `${h} uur ervoor`;
   el.innerHTML = `
-    <div class="view-head"><div><h1>Team</h1><p>Voeg mensen toe, reset pincodes en stel de app in.</p></div></div>
+    <div class="view-head"><div><h1>Team</h1><p>Voeg mensen toe, reset pincodes en stel de app in.</p></div>
+      <button class="sm" id="see-family">Familie-overzicht bekijken</button></div>
     <section class="card">
       <h2>Delen met je personeel</h2>
       <p class="muted" style="margin-top:6px">Stuur deze link. Iedereen meldt zich aan met de eigen naam en de pincode die je hieronder instelt.</p>
@@ -2371,14 +2396,14 @@ async function viewTeam(el, current) {
     </section>
     <div class="grid-2">
       <section class="card">
-        <div class="card-head"><h2>Mensen</h2><span class="pill">${staff.filter(p => p.active).length} actief</span></div>
+        <div class="card-head"><h2>Mensen</h2><span class="pill">${staff.filter(p => p.active && p.role !== 'viewer').length} actief</span></div>
         <div class="rows">${staff.map(p => `
           <div class="row team-row">
             <div class="person">${personPic(p, 'lg')}
-              <div class="row-main"><span class="row-title">${esc(p.name)}${p.id === S.me.id ? ' (jij)' : ''} ${levelPill(p.xp)}</span>
-              <span class="row-sub">${p.role === 'manager' ? 'Verantwoordelijke' : 'Medewerker'}${p.contract_type ? ` · ${CONTRACT_SHORT[p.contract_type]}` : ''}${p.hourly_rate != null ? ` · ${fmt.money(p.hourly_rate)}/u` : ''}${p.payroll_id ? ` · nr. ${esc(p.payroll_id)}` : ''}</span></div></div>
+              <div class="row-main"><span class="row-title">${esc(p.name)}${p.id === S.me.id ? ' (jij)' : ''} ${p.role === 'viewer' ? '' : `${levelPill(p.xp)} ${payPill(p.pay_method)}`}</span>
+              <span class="row-sub">${ROLE_NL[p.role]}${p.contract_type ? ` · ${CONTRACT_SHORT[p.contract_type]}` : ''}${p.hourly_rate != null ? ` · ${fmt.money(p.hourly_rate)}/u` : ''}${p.payroll_id ? ` · nr. ${esc(p.payroll_id)}` : ''}</span></div></div>
             <div class="row-actions">
-              ${p.locked ? '<span class="pill bad">Geblokkeerd</span>' : ''}${p.active ? '' : '<span class="pill">Inactief</span>'}${p.active && p.missing && p.missing.length ? '<span class="pill warn">Gegevens onvolledig</span>' : ''}
+              ${p.locked ? '<span class="pill bad">Geblokkeerd</span>' : ''}${p.active ? '' : '<span class="pill">Inactief</span>'}${p.active && p.role !== 'viewer' && p.missing && p.missing.length ? '<span class="pill warn">Gegevens onvolledig</span>' : ''}
               <button class="sm" data-person="${p.id}">Openen</button>
             </div>
           </div>`).join('')}</div>
@@ -2392,7 +2417,9 @@ async function viewTeam(el, current) {
             <div class="field"><label for="ap-rate">Uurloon (€)</label><input id="ap-rate" type="number" min="0" step="0.01" inputmode="decimal" placeholder="Optioneel"></div>
             <div class="field"><label for="ap-type">Statuut</label><select id="ap-type">${contractOptions('')}</select></div>
             <div class="field"><label for="ap-pid">Werknemersnummer (Securex)</label><input id="ap-pid" maxlength="30" autocomplete="off" placeholder="Optioneel"></div>
-            <div class="field wide"><label for="ap-role">Rol</label><select id="ap-role"><option value="staff">Medewerker</option><option value="manager">Verantwoordelijke (ziet alles)</option></select></div>
+            <div class="field"><label for="ap-pay">Betaling</label><select id="ap-pay">${payOptions(null)}</select></div>
+            <div class="field wide"><label for="ap-role">Rol</label><select id="ap-role">${roleOptions('staff')}</select>
+              <span class="help" id="ap-role-help" hidden>Een familie-account ziet alleen het maandoverzicht: wie wanneer werkt, de open shiften, de uren, het uurloon en cash of ingeschreven. In het Nederlands of het Chinees. Het kan niet inklokken en geen shiften opnemen.</span></div>
           </div>
           <p class="form-error" id="ap-err"></p>
           <div class="form-actions"><button type="submit" class="primary">Persoon toevoegen</button></div>
@@ -2435,15 +2462,25 @@ async function viewTeam(el, current) {
     const name = $('#ap-name', ap).value.trim(), pin = $('#ap-pin', ap).value.trim(), rate = $('#ap-rate', ap).value;
     if (!name) { err.textContent = 'Vul een naam in.'; return; }
     if (!/^\d{4,8}$/.test(pin)) { err.textContent = 'De pincode moet 4 tot 8 cijfers hebben.'; return; }
+    const role = $('#ap-role', ap).value, family = role === 'viewer';
     await busy($('button[type=submit]', ap), async () => {
-      const added = await rpc('mgr_save_staff', { p_id: null, p_name: name, p_pin: pin, p_role: $('#ap-role', ap).value, p_hourly_rate: rate === '' ? null : Number(rate), p_active: true });
-      const type = $('#ap-type', ap).value, pid = $('#ap-pid', ap).value.trim();
-      if (type || pid) await rpc('mgr_save_staff_payroll', { p_id: added.id, p_contract_type: type || null, p_payroll_id: pid });
+      const added = await rpc('mgr_save_staff', { p_id: null, p_name: name, p_pin: pin, p_role: role, p_hourly_rate: rate === '' || family ? null : Number(rate), p_active: true });
+      const type = $('#ap-type', ap).value, pid = $('#ap-pid', ap).value.trim(), pay = $('#ap-pay', ap).value;
+      if (!family && (type || pid)) await rpc('mgr_save_staff_payroll', { p_id: added.id, p_contract_type: type || null, p_payroll_id: pid });
+      if (!family && pay) await rpc('mgr_set_pay_method', { p_id: added.id, p_method: pay });
       toast(`${name} toegevoegd. Geef de pincode door: ${pin}`);
       renderView();
     }).catch(e => { err.textContent = e.message; });
   });
   $$('[data-person]', el).forEach(b => b.addEventListener('click', () => { location.hash = `team/${b.dataset.person}`; }));
+  $('#see-family', el).addEventListener('click', () => { location.hash = 'family'; });
+  // a family account needs no wage, contract or employee number
+  const apRole = $('#ap-role', ap);
+  apRole.addEventListener('change', () => {
+    const family = apRole.value === 'viewer';
+    ['#ap-rate', '#ap-type', '#ap-pid', '#ap-pay'].forEach(sel => { $(sel, ap).closest('.field').hidden = family; });
+    $('#ap-role-help', ap).hidden = !family;
+  });
   const tzBtn = $('#st-tz', el);
   if (tzBtn) tzBtn.addEventListener('click', () => busy(tzBtn, async () => {
     await rpc('mgr_set_timezone', { p_tz: deviceTz });
@@ -2469,16 +2506,71 @@ async function viewTeam(el, current) {
 
 /* ---------------------------------------------------- manager: one person */
 
+// A family account only has a name, a PIN and the switch to turn it off.
+function familyMember(el, p) {
+  el.innerHTML = `
+    <div class="view-head"><div class="hello">
+      ${personPic(p, 'xl')}
+      <div><button class="link back" id="back">‹ Team</button><h1>${esc(p.name)}</h1>
+        <p class="muted">Familie · ziet alleen het maandoverzicht${p.active ? '' : ' · Inactief'}</p></div>
+    </div></div>
+    ${p.locked ? '<p class="hint bad">Geblokkeerd na te veel verkeerde pincodes. Stel hieronder een nieuwe pincode in om te deblokkeren.</p>' : ''}
+    <div class="grid-2">
+      <section class="card">
+        <h2>Account</h2>
+        <form id="pm-form" novalidate>
+          <div class="form-grid" style="margin-top:12px">
+            <div class="field wide"><label for="pm-name">Naam</label><input id="pm-name" maxlength="60" value="${esc(p.name)}" required><span class="help">Hiermee meldt die persoon zich aan.</span></div>
+            <div class="field"><label for="pm-pin">Nieuwe pincode</label><input id="pm-pin" class="pin-input" inputmode="numeric" pattern="[0-9]*" maxlength="8" placeholder="Leeg laten om te behouden"></div>
+            <div class="field"><label for="pm-role">Rol</label><select id="pm-role">${roleOptions(p.role)}</select></div>
+            <div class="field wide"><label class="check"><input type="checkbox" id="pm-active" ${p.active ? 'checked' : ''}> Actief</label></div>
+          </div>
+          <p class="form-error" id="pm-err"></p>
+          <div class="form-actions"><button type="submit" class="primary">Opslaan</button></div>
+        </form>
+      </section>
+      <section class="card">
+        <h2>Wat ziet dit account?</h2>
+        <ul class="plain-list">
+          <li>Per maand: de open shiften en wie op welke dag komt werken.</li>
+          <li>Per persoon: de gewerkte uren, het uurloon, het totaal en <strong>Cash</strong> (rood) of <strong>Ingeschreven</strong>.</li>
+          <li>De lijst van al het personeel.</li>
+          <li>In het Nederlands of het Chinees (中文), te kiezen bovenaan.</li>
+        </ul>
+        <div class="form-actions"><button class="sm" id="see-family">Bekijk het overzicht</button></div>
+      </section>
+    </div>`;
+  $('#back', el).addEventListener('click', () => { location.hash = 'team'; });
+  $('#see-family', el).addEventListener('click', () => { location.hash = 'family'; });
+  const pm = $('#pm-form', el);
+  pm.addEventListener('submit', async ev => {
+    ev.preventDefault();
+    const err = $('#pm-err', el); err.textContent = '';
+    const pin = $('#pm-pin', pm).value.trim();
+    if (pin && !/^\d{4,8}$/.test(pin)) { err.textContent = 'De pincode moet 4 tot 8 cijfers hebben.'; return; }
+    await busy($('button[type=submit]', pm), async () => {
+      await rpc('mgr_save_staff', {
+        p_id: p.id, p_name: $('#pm-name', pm).value, p_pin: pin || null, p_role: $('#pm-role', pm).value,
+        p_hourly_rate: null, p_active: $('#pm-active', pm).checked,
+      });
+      toast(pin ? `Opgeslagen. Nieuwe pincode: ${pin}` : 'Opgeslagen.');
+      await loadStaff(true);
+      renderView();
+    }).catch(e => { err.textContent = e.message; });
+  });
+}
+
 async function viewMember(el, current) {
   const id = S.memberId;
   const [r] = await Promise.all([rpc('mgr_get_staff', { p_id: id }), loadStaff()]);
   if (!current()) return;
   const p = r.person, pr = r.profile, xp = r.xp, self = p.id === S.me.id, first = p.name.split(' ')[0];
+  if (p.role === 'viewer') return familyMember(el, p);
   el.innerHTML = `
     <div class="view-head"><div class="hello">
       ${personPic(p, 'xl')}
       <div><button class="link back" id="back">‹ Team</button><h1>${esc(p.name)}</h1>
-        <p class="lvl-line">${levelPill(xp)} <span>${esc(levelTitle(xp.level))}</span> <span class="muted">· ${p.role === 'manager' ? 'Verantwoordelijke' : 'Medewerker'}${p.active ? '' : ' · Inactief'}</span></p></div>
+        <p class="lvl-line">${levelPill(xp)} <span>${esc(levelTitle(xp.level))}</span> <span class="muted">· ${ROLE_NL[p.role]}${p.active ? '' : ' · Inactief'}</span> ${payPill(p.pay_method)}</p></div>
     </div></div>
     ${p.locked ? '<p class="hint bad">Geblokkeerd na te veel verkeerde pincodes. Stel hieronder een nieuwe pincode in om te deblokkeren.</p>' : ''}
     <div class="grid-2">
@@ -2489,10 +2581,12 @@ async function viewMember(el, current) {
             <div class="field wide"><label for="pm-name">Naam</label><input id="pm-name" maxlength="60" value="${esc(p.name)}" required><span class="help">Hiermee meldt ${esc(first)} zich aan.</span></div>
             <div class="field"><label for="pm-pin">Nieuwe pincode</label><input id="pm-pin" class="pin-input" inputmode="numeric" pattern="[0-9]*" maxlength="8" placeholder="Leeg laten om te behouden"></div>
             <div class="field"><label for="pm-rate">Uurloon (€)</label><input id="pm-rate" type="number" min="0" step="0.01" inputmode="decimal" value="${p.hourly_rate ?? ''}"></div>
+            <div class="field"><label for="pm-pay">Betaling</label><select id="pm-pay">${payOptions(p.pay_method)}</select>
+              <span class="help">Staat ook in het familie-overzicht. Cash in het rood.</span></div>
             <div class="field"><label for="pm-type">Statuut</label><select id="pm-type">${contractOptions(p.contract_type)}</select></div>
             <div class="field"><label for="pm-pid">Werknemersnummer (Securex)</label><input id="pm-pid" maxlength="30" autocomplete="off" value="${esc(p.payroll_id || '')}"></div>
             <div class="field"><label for="pm-start">In dienst sinds</label><input id="pm-start" data-k="start_date" inputmode="numeric" placeholder="dd/mm/jjjj" maxlength="10" value="${esc(isoToDMY(pr.start_date))}"></div>
-            <div class="field"><label for="pm-role">Rol</label><select id="pm-role"><option value="staff">Medewerker</option><option value="manager" ${p.role === 'manager' ? 'selected' : ''}>Verantwoordelijke</option></select></div>
+            <div class="field"><label for="pm-role">Rol</label><select id="pm-role">${roleOptions(p.role)}</select></div>
             <div class="field"><label for="pm-bonus">Bonus-XP</label><input id="pm-bonus" type="number" min="0" max="100000" step="1" inputmode="numeric" value="${p.xp_bonus || 0}">
               <span class="help">XP die jij geeft, bovenop het werk. Telt voor het level, niet voor de uren of het loon. Level 20 = ${num(xpForLevel(20), 0)} XP.</span></div>
             <div class="field wide"><label class="check"><input type="checkbox" id="pm-active" ${p.active ? 'checked' : ''} ${self ? 'disabled' : ''}> Actief</label>
@@ -2573,6 +2667,8 @@ async function viewMember(el, current) {
       await rpc('mgr_save_staff_payroll', { p_id: p.id, p_contract_type: $('#pm-type', pm).value || null, p_payroll_id: $('#pm-pid', pm).value.trim() });
       await rpc('mgr_save_profile', { p_id: p.id, p_profile: { start_date: start } });
       if (bonus !== (p.xp_bonus || 0)) await rpc('mgr_set_xp_bonus', { p_id: p.id, p_bonus: bonus });
+      const pay = $('#pm-pay', pm).value || null;
+      if (pay !== (p.pay_method || null)) await rpc('mgr_set_pay_method', { p_id: p.id, p_method: pay });
       toast(pin ? `Opgeslagen. Nieuwe pincode: ${pin}` : 'Opgeslagen.');
       await loadStaff(true);
       if (self) { await refreshMe(); renderShell(); } else renderView();
@@ -2639,6 +2735,162 @@ async function viewMember(el, current) {
 
 const fileType = f => f ? (f.type || (/\.pdf$/i.test(f.name) ? 'application/pdf' : '')).replace(/^image\/jpg$/, 'image/jpeg') : '';
 const okFileType = t => ['application/pdf', 'image/png', 'image/jpeg'].includes(t);
+
+/* ------------------------------------------------- family (view only) */
+
+// A family account sees one simple page per month: the open shifts, who works
+// which day, and per person the hours, the hourly rate and whether they're
+// paid in cash or registered. That page and the sign-in screen read in Dutch
+// or Chinese; the rest of the app is Dutch.
+const LANG_KEY = 'prikklok.lang';
+const lang = () => store.get(LANG_KEY) === 'zh' ? 'zh' : 'nl';
+const L = (nl, zh) => lang() === 'zh' ? zh : nl;
+const langAttr = () => lang() === 'zh' ? 'zh-Hans' : 'nl-BE';
+const fam = {
+  locale: () => lang() === 'zh' ? 'zh-CN' : LOCALE,
+  month: d => new Date(d).toLocaleDateString(fam.locale(), { month: 'long', year: 'numeric' }),
+  day: d => new Date(d).toLocaleDateString(fam.locale(), { weekday: 'long', day: 'numeric', month: 'long' }),
+  dur(mins) {
+    const t = Math.max(0, Math.round(mins)), h = Math.floor(t / 60), m = t % 60;
+    return L(h ? `${h}u ${pad(m)}m` : `${m}m`, h ? `${h}小时${m ? `${m}分` : ''}` : `${m}分钟`);
+  },
+  money: n => lang() === 'zh' ? `${S.settings.currency || '€'}${num(n, 2).replace(/\./g, '').replace(',', '.')}` : fmt.money(n),
+  part: s => { const p = shiftPart(s); return lang() === 'zh' ? ({ Middag: '午班', Avond: '晚班' }[p] || p) : p; },
+};
+
+const PAY = { cash: ['Cash', '现金'], registered: ['Ingeschreven', '已登记'] };
+// Cash is red; t is L on the family page, Dutch everywhere else.
+const payPill = (m, t = nl => nl) => PAY[m]
+  ? `<span class="pay-pill is-${m}">${esc(t(...PAY[m]))}</span>`
+  : `<span class="pay-pill is-none">${esc(t('Niet ingevuld', '未填写'))}</span>`;
+
+function langSwitch() {
+  return `<div class="chips lang-switch" role="group" aria-label="Taal · 语言">${[['nl', 'Nederlands', 'nl-BE'], ['zh', '中文', 'zh-Hans']].map(([k, l, a]) =>
+    `<button type="button" class="chip${lang() === k ? ' is-on' : ''}" data-lang="${k}" lang="${a}" aria-pressed="${lang() === k}">${l}</button>`).join('')}</div>`;
+}
+function bindLang(root, after) {
+  $$('[data-lang]', root).forEach(b => b.addEventListener('click', () => { store.set(LANG_KEY, b.dataset.lang); after(); }));
+}
+
+function renderFamilyShell() {
+  document.title = `${S.settings.business_name} · ${L('Overzicht', '概览')}`;
+  $('#app').innerHTML = `
+    <header class="topbar" lang="${langAttr()}">
+      <div class="topbar-inner">
+        <div class="brand">${personPic(S.me, 'lg')}
+          <div class="brand-text"><div class="biz">${esc(S.me.name)}</div><div class="who">${L('Maandoverzicht', '每月概览')}</div></div>
+        </div>
+        <a class="logo-link" href="#" aria-label="${esc(S.settings.business_name)}">${logoHTML('logo')}</a>
+        <div class="topbar-end"><button type="button" class="icon ghost theme-btn" data-theme-btn></button><button class="ghost sm" id="signout">${L('Afmelden', '退出')}</button></div>
+      </div>
+    </header>
+    <main class="view" id="view"></main>`;
+  $('#signout').addEventListener('click', askSignOut);
+  $('[data-theme-btn]').addEventListener('click', () => setTheme(isDark() ? 'light' : 'dark'));
+  applyTheme();
+  route();
+}
+
+async function viewFamily(el, current) {
+  S.month = S.month || startOfMonth(now());
+  const m = S.month, t = now(), today = startOfDay(t);
+  const r = await rpc('family_overview', { p_from: m.toISOString(), p_to: addMonths(m, 1).toISOString() });
+  if (!current()) return;
+  el.setAttribute('lang', langAttr());
+
+  const shifts = r.shifts.filter(s => new Date(s.starts_at) >= m);
+  const open = dayEntries(shifts.filter(s => !s.staff_id && new Date(s.ends_at) > t));
+  const openCount = open.reduce((a, x) => a + x.count, 0);
+  const openDays = [];
+  for (const x of open) {
+    const d = startOfDay(x.starts_at);
+    let g = openDays.find(o => o.day.getTime() === d.getTime());
+    if (!g) openDays.push(g = { day: d, list: [] });
+    g.list.push(x);
+  }
+  const days = [];
+  for (const s of shifts) {
+    const d = startOfDay(s.starts_at);
+    let g = days.find(x => x.day.getTime() === d.getTime());
+    if (!g) days.push(g = { day: d, list: [] });
+    g.list.push(s);
+  }
+  const before = days.filter(g => g.day < today), coming = days.filter(g => g.day >= today);
+
+  const workers = r.people.filter(p => p.worked_minutes > 0 || p.shifts > 0);
+  const owed = p => p.hourly_rate != null ? Math.round(p.worked_minutes / 60 * p.hourly_rate * 100) / 100 : null;
+  const cashTotal = workers.filter(p => p.pay_method === 'cash').reduce((a, p) => a + (owed(p) || 0), 0);
+  const totalMins = workers.reduce((a, p) => a + p.worked_minutes, 0);
+  const team = r.people.filter(p => p.active);
+  const tag = x => `<span class="cal-tag${partClass(shiftPart(x))}">${esc(fam.part(x))}</span>`;
+
+  const dayBlock = g => `
+    <div class="fam-day${sameDay(g.day, t) ? ' is-today' : ''}">
+      <h3>${esc(fam.day(g.day))}${sameDay(g.day, t) ? ` <span class="pill on">${L('Vandaag', '今天')}</span>` : ''}</h3>
+      ${dayEntries(g.list).map(x => `<div class="fam-shift${x.open ? ' is-open' : ''}">
+        ${tag(x)}<span class="time">${fmt.range(x.starts_at, x.ends_at)}</span>
+        <span class="fam-who">${x.open ? `${L('Open', '空缺')}${x.count > 1 ? ` ×${x.count}` : ''}` : `${personPic({ name: x.staff_name, avatar: (r.people.find(p => p.id === x.staff_id) || {}).avatar })}${esc(x.staff_name)}`}</span>
+      </div>`).join('')}
+    </div>`;
+
+  const workerCard = p => `
+    <div class="fam-person${p.pay_method === 'cash' ? ' is-cash' : ''}">
+      <div class="fam-person-head">${personPic(p, 'lg')}<strong>${esc(p.name)}</strong>${payPill(p.pay_method, L)}</div>
+      <dl class="fam-kv">
+        <dt>${L('Gewerkt', '工作时间')}</dt><dd>${fam.dur(p.worked_minutes)} <span class="muted">· ${L(`${p.times} keer`, `${p.times}次`)}</span></dd>
+        <dt>${L('Per uur', '时薪')}</dt><dd>${p.hourly_rate != null ? fam.money(p.hourly_rate) : '—'}</dd>
+        <dt>${L('Samen', '合计')}</dt><dd class="fam-total">${owed(p) != null ? fam.money(owed(p)) : L('geen uurloon', '没有时薪')}</dd>
+        <dt>${L('Shiften', '班次')}</dt><dd>${p.shifts}</dd>
+      </dl>
+    </div>`;
+
+  el.innerHTML = `
+    <div class="view-head fam-head"><div><h1>${L('Overzicht', '概览')}</h1><p>${esc(S.settings.business_name)}</p></div>${langSwitch()}</div>
+    ${isViewer() ? '' : `<p class="hint info">Zo ziet het familie-account dit overzicht. <button class="link" id="fam-back">Terug naar Team</button></p>`}
+    ${periodBar(esc(fam.month(m)), sameDay(m, startOfMonth(t)) ? L('Deze maand', '本月') : '&nbsp;', 'fam-prev', 'fam-next')}
+    <div class="stats stats-3 fam-stats">
+      <div class="stat ${openCount ? 'alert' : 'good'}"><span class="v">${openCount}</span><span class="k">${L('Open shiften, nog niemand', '空缺班次，还没人')}</span></div>
+      <div class="stat"><span class="v">${fam.dur(totalMins)}</span><span class="k">${L('Samen gewerkt', '总共工作')}</span></div>
+      <div class="stat is-cash"><span class="v">${fam.money(cashTotal)}</span><span class="k">${L('Cash te betalen', '要付的现金')}</span></div>
+    </div>
+    <section class="card fam-card">
+      <h2>${L('Open shiften', '空缺班次')}</h2>
+      ${openDays.length ? `<div class="fam-open">${openDays.map(g => `<div class="fam-open-day">
+          <span class="fam-date">${esc(fam.day(g.day))}</span>
+          <span class="fam-open-list">${g.list.map(x => `<span class="fam-slot">${tag(x)}<span class="time">${fmt.range(x.starts_at, x.ends_at)}</span>${x.count > 1 ? `<span class="fam-who">×${x.count}</span>` : ''}</span>`).join('')}</span>
+        </div>`).join('')}</div>`
+        : `<p class="empty">${L('Alle shiften zijn ingevuld.', '所有班次都有人了。')}</p>`}
+    </section>
+    <section class="card fam-card">
+      <h2>${L('Wie komt werken', '谁来上班')}</h2>
+      ${coming.length ? coming.map(dayBlock).join('') : `<p class="empty">${L('Geen shiften meer deze maand.', '这个月没有班次了。')}</p>`}
+      ${before.length ? `<details class="fam-before"${coming.length ? '' : ' open'}><summary>${L(`Voorbije dagen (${before.length})`, `过去的日子（${before.length}）`)}</summary>${before.map(dayBlock).join('')}</details>` : ''}
+    </section>
+    <section class="card fam-card">
+      <h2>${L('Uren en loon', '工时和工资')}</h2>
+      <p class="muted small">${L('Gewerkte uren volgens de prikklok, maal het uurloon.', '按打卡记录的工作时间，乘以时薪。')}</p>
+      ${workers.length ? `<div class="fam-people">${workers.map(workerCard).join('')}</div>`
+        : `<p class="empty">${L('Nog niemand gewerkt deze maand.', '这个月还没有人工作。')}</p>`}
+    </section>
+    <section class="card fam-card">
+      <div class="card-head"><h2>${L('Al het personeel', '全部员工')}</h2><span class="pill">${team.length}</span></div>
+      <div class="rows">${team.map(p => `<div class="row">
+        <div class="person">${personPic(p, 'lg')}<div class="row-main"><span class="row-title">${esc(p.name)}</span>
+          <span class="row-sub">${p.role === 'manager' ? L('Verantwoordelijke', '负责人') : L('Medewerker', '员工')} · ${p.hourly_rate != null ? `${fam.money(p.hourly_rate)} ${L('per uur', '每小时')}` : L('geen uurloon', '没有时薪')}${p.phone ? ` · <a href="tel:${esc(p.phone.replace(/[^\d+]/g, ''))}">${esc(p.phone)}</a>` : ''}</span></div></div>
+        ${payPill(p.pay_method, L)}
+      </div>`).join('')}</div>
+    </section>
+    ${isViewer() ? `<button type="button" class="signout-wide" id="fam-signout">${ICONS.signout}<span>${L('Afmelden', '退出登录')}</span></button>` : ''}`;
+
+  $('#fam-prev', el).addEventListener('click', () => { S.month = addMonths(m, -1); renderView(); });
+  $('#fam-next', el).addEventListener('click', () => { S.month = addMonths(m, 1); renderView(); });
+  bindLang(el, () => (isViewer() ? renderShell() : renderView()));
+  const back = $('#fam-back', el);
+  if (back) back.addEventListener('click', () => { location.hash = 'team'; });
+  const so = $('#fam-signout', el);
+  if (so) so.addEventListener('click', askSignOut);
+  startPolling(5 * 60000);
+}
 
 /* -------------------------------------- payslips: read, check and save */
 
@@ -2708,7 +2960,7 @@ function slipReview(items, { fixed }) {
         ${info.text_found ? `<span class="pill on">Gelezen${info.staff_id ? '' : ', naam niet gevonden'}</span>` : `<span class="pill warn">${/pdf/.test(fileType(it.file)) ? 'Geen tekst gevonden' : 'Foto'}: kies zelf</span>`}</div>
       <div class="form-grid">
         <div class="field"><label for="si-staff-${i}">Voor wie</label><select id="si-staff-${i}" data-f="staff" ${fixed ? 'disabled' : ''}>
-          <option value="">Kies een persoon</option>${(S.staff || []).filter(p => p.active || p.id === it.staffId).map(p => `<option value="${p.id}" ${p.id === it.staffId ? 'selected' : ''}>${esc(p.name)}</option>`).join('')}</select></div>
+          <option value="">Kies een persoon</option>${workers().filter(p => p.active || p.id === it.staffId).map(p => `<option value="${p.id}" ${p.id === it.staffId ? 'selected' : ''}>${esc(p.name)}</option>`).join('')}</select></div>
         <div class="field"><label for="si-month-${i}">Maand</label><select id="si-month-${i}" data-f="month">${months.sort().reverse().map(m => `<option value="${m}" ${m === it.month ? 'selected' : ''}>${fmt.month(new Date(m + 'T00:00'))}</option>`).join('')}</select></div>
         <div class="field"><label for="si-gross-${i}">Bruto</label><input id="si-gross-${i}" data-f="gross" inputmode="decimal" placeholder="Niet gevonden" value="${moneyInput(info.gross_pay)}"></div>
         <div class="field"><label for="si-net-${i}">Netto, uitbetaald</label><input id="si-net-${i}" data-f="net" inputmode="decimal" placeholder="Niet gevonden" value="${moneyInput(info.net_pay)}"></div>

@@ -51,7 +51,10 @@ create table public.staff (
   emergency_name  text check (length(emergency_name) <= 80),
   emergency_phone text check (length(emergency_phone) <= 30),
   start_date      date, -- in service since
-  xp_bonus        int not null default 0 check (xp_bonus between 0 and 100000) -- XP a manager gave, on top of the work
+  xp_bonus        int not null default 0 check (xp_bonus between 0 and 100000), -- XP a manager gave, on top of the work
+  -- a family account (the app calls its role 'viewer'): it only sees the month overview, never works shifts
+  view_only       boolean not null default false,
+  pay_method      text check (pay_method in ('cash', 'registered')) -- paid in cash, or registered on the payroll
 );
 create unique index staff_name_key on public.staff (lower(name));
 
@@ -176,7 +179,9 @@ language sql immutable set search_path = public, extensions as $$
   select encode(extensions.digest(p_token, 'sha256'), 'hex')
 $$;
 
-create function app_private.current_staff(p_token text) returns public.staff
+-- Anyone signed in, family accounts included. Almost everything uses
+-- current_staff or current_manager instead.
+create function app_private.current_account(p_token text) returns public.staff
 language plpgsql stable set search_path = public, extensions as $$
 declare v public.staff;
 begin
@@ -188,6 +193,17 @@ begin
      and st.active;
   if not found then
     raise exception using message = 'Your sign-in has expired. Please sign in again.', errcode = '28000';
+  end if;
+  return v;
+end $$;
+
+create function app_private.current_staff(p_token text) returns public.staff
+language plpgsql stable set search_path = public, extensions as $$
+declare v public.staff;
+begin
+  v := app_private.current_account(p_token);
+  if v.view_only then
+    raise exception using message = 'This account can only look at the overview.', errcode = 'P0001';
   end if;
   return v;
 end $$;
@@ -234,6 +250,12 @@ end $$;
 create function app_private.clean_text(p_text text, p_max int) returns text
 language sql immutable set search_path = public as $$
   select left(btrim(coalesce(p_text, '')), p_max)
+$$;
+
+-- 'staff', 'manager' or 'viewer' (a family account)
+create function app_private.role_of(p public.staff) returns text
+language sql immutable set search_path = public as $$
+  select case when p.view_only then 'viewer' else p.role end
 $$;
 
 -- The shift a check-in at p_at belongs to: one of the person's shifts that
@@ -366,9 +388,9 @@ create function public.get_me(p_token text) returns json
 language plpgsql stable security definer set search_path = public, extensions as $$
 declare v public.staff;
 begin
-  v := app_private.current_staff(p_token);
+  v := app_private.current_account(p_token);
   return json_build_object(
-    'me', json_build_object('id', v.id, 'name', v.name, 'role', v.role, 'avatar', v.avatar,
+    'me', json_build_object('id', v.id, 'name', v.name, 'role', app_private.role_of(v), 'avatar', v.avatar,
                             'xp', app_private.xp_json(v.id)),
     'settings', (select json_build_object(
         'business_name', business_name, 'drop_cutoff_hours', drop_cutoff_hours,
@@ -648,9 +670,9 @@ declare v public.staff;
 begin
   v := app_private.current_manager(p_token);
   return coalesce((select json_agg(json_build_object(
-      'id', id, 'name', name, 'role', role, 'hourly_rate', hourly_rate, 'active', active,
+      'id', id, 'name', name, 'role', app_private.role_of(staff), 'hourly_rate', hourly_rate, 'active', active,
       'locked', coalesce(locked_until > now(), false), 'created_at', created_at,
-      'contract_type', contract_type, 'payroll_id', payroll_id,
+      'contract_type', contract_type, 'payroll_id', payroll_id, 'pay_method', pay_method,
       'avatar', avatar, 'xp', app_private.xp_json(id), 'start_date', start_date, 'national_id', national_id,
       'missing', array_remove(array[
         case when national_id is null then 'national_id' end, case when iban is null then 'iban' end,
@@ -664,11 +686,12 @@ create function public.mgr_save_staff(p_token text, p_id uuid, p_name text, p_pi
                                       p_hourly_rate numeric, p_active boolean) returns json
 language plpgsql security definer set search_path = public, extensions as $$
 declare v public.staff; old public.staff; v_name text; v_id uuid; v_pin text := nullif(p_pin, '');
-        v_active boolean := coalesce(p_active, true);
+        v_active boolean := coalesce(p_active, true); v_view boolean := p_role = 'viewer';
+        v_role text := case when p_role = 'viewer' then 'staff' else p_role end;
 begin
   v := app_private.current_manager(p_token);
   v_name := app_private.clean_name(p_name);
-  if p_role is null or p_role not in ('staff', 'manager') then
+  if p_role is null or p_role not in ('staff', 'manager', 'viewer') then
     raise exception using message = 'Pick a role.', errcode = 'P0001';
   end if;
   if p_hourly_rate is not null and (p_hourly_rate < 0 or p_hourly_rate > 10000) then
@@ -676,8 +699,9 @@ begin
   end if;
   if p_id is null then
     perform app_private.check_pin(v_pin);
-    insert into public.staff (name, pin_hash, role, hourly_rate, active)
-    values (v_name, extensions.crypt(v_pin, extensions.gen_salt('bf', 8)), p_role, p_hourly_rate, v_active)
+    insert into public.staff (name, pin_hash, role, view_only, hourly_rate, active)
+    values (v_name, extensions.crypt(v_pin, extensions.gen_salt('bf', 8)), v_role, v_view,
+            case when v_view then null else p_hourly_rate end, v_active)
     returning id into v_id;
   else
     select * into old from public.staff where id = p_id for update;
@@ -692,17 +716,18 @@ begin
       perform app_private.check_pin(v_pin);
     end if;
     update public.staff
-       set name = v_name, role = p_role, hourly_rate = p_hourly_rate, active = v_active,
+       set name = v_name, role = v_role, view_only = v_view,
+           hourly_rate = case when v_view then null else p_hourly_rate end, active = v_active,
            pin_hash        = case when v_pin is null then pin_hash else extensions.crypt(v_pin, extensions.gen_salt('bf', 8)) end,
            failed_attempts = case when v_pin is null then failed_attempts else 0 end,
            locked_until    = case when v_pin is null then locked_until end
      where id = p_id;
     v_id := p_id;
-    if not v_active or v_pin is not null then
-      delete from public.sessions
+    if not v_active or v_pin is not null or v_view <> old.view_only then
+      update public.sessions set expires_at = now()
        where staff_id = p_id and token_hash <> app_private.hash_token(coalesce(p_token, ''));
     end if;
-    if not v_active then
+    if not v_active or v_view then
       update public.shifts set staff_id = null where staff_id = p_id and starts_at > now();
     end if;
   end if;
@@ -856,7 +881,7 @@ begin
     select json_build_object(
       'grace_minutes', v_grace,
       'staff', coalesce((select json_agg(r order by lower(r.name)) from (
-          select st.id, st.name, st.hourly_rate, st.active, st.contract_type, st.payroll_id,
+          select st.id, st.name, st.hourly_rate, st.active, st.contract_type, st.payroll_id, st.pay_method,
             coalesce((select round(sum(extract(epoch from (e.clock_out - e.clock_in))) / 60, 1)
                         from ent e where e.staff_id = st.id and e.clock_out is not null), 0) as worked_minutes,
             (select count(*) from ent e where e.staff_id = st.id) as entries,
@@ -872,7 +897,7 @@ begin
             (select count(*) from missed m where m.staff_id = st.id) as missed,
             (select count(*) from public.time_edits d where d.staff_id = st.id and d.status = 'pending') as pending_requests
           from public.staff st
-         where st.active
+         where (st.active and not st.view_only)
             or st.id in (select staff_id from ent)
             or st.id in (select staff_id from sch)
         ) r), '[]'::json),
@@ -1540,9 +1565,10 @@ begin
     raise exception using message = 'That person wasn''t found.', errcode = 'P0001';
   end if;
   return json_build_object(
-    'person', json_build_object('id', s.id, 'name', s.name, 'role', s.role, 'hourly_rate', s.hourly_rate,
+    'person', json_build_object('id', s.id, 'name', s.name, 'role', app_private.role_of(s), 'hourly_rate', s.hourly_rate,
       'active', s.active, 'locked', coalesce(s.locked_until > now(), false), 'contract_type', s.contract_type,
-      'payroll_id', s.payroll_id, 'created_at', s.created_at, 'avatar', s.avatar, 'xp_bonus', s.xp_bonus),
+      'payroll_id', s.payroll_id, 'created_at', s.created_at, 'avatar', s.avatar, 'xp_bonus', s.xp_bonus,
+      'pay_method', s.pay_method),
     'profile', app_private.profile_json(s),
     'xp', app_private.xp_json(s.id),
     'contracts', app_private.contracts_json(s.id),
@@ -1656,7 +1682,7 @@ begin
       order by lower(st.name))
     from public.staff st
     cross join lateral (select app_private.xp_json(st.id) as x) j
-   where st.active), '[]'::json);
+   where st.active and not st.view_only), '[]'::json);
 end $$;
 
 -- Bonus XP a manager gives someone, on top of what their work earns. It counts
@@ -1674,4 +1700,59 @@ begin
     raise exception using message = 'That person wasn''t found.', errcode = 'P0001';
   end if;
   return json_build_object('ok', true);
+end $$;
+
+-- ------------------------------------------------------- family account
+
+-- How someone is paid: 'cash', 'registered', or null when not filled in.
+create function public.mgr_set_pay_method(p_token text, p_id uuid, p_method text) returns json
+language plpgsql security definer set search_path = public, extensions as $$
+declare v public.staff;
+begin
+  v := app_private.current_manager(p_token);
+  if p_method is not null and p_method not in ('cash', 'registered') then
+    raise exception using message = 'Pick cash or registered.', errcode = 'P0001';
+  end if;
+  update public.staff set pay_method = p_method where id = p_id;
+  if not found then
+    raise exception using message = 'That person wasn''t found.', errcode = 'P0001';
+  end if;
+  return json_build_object('ok', true);
+end $$;
+
+-- One month for a family account (managers can look too): every shift with
+-- who works it, and per person the hours worked, hourly rate and how they're
+-- paid. Family accounts themselves are left out.
+create function public.family_overview(p_token text, p_from timestamptz, p_to timestamptz) returns json
+language plpgsql volatile security definer set search_path = public, extensions as $$
+declare v public.staff;
+begin
+  v := app_private.current_account(p_token);
+  if not v.view_only and v.role <> 'manager' then
+    raise exception using message = 'Only managers can do that.', errcode = 'P0001';
+  end if;
+  if p_from is null or p_to is null or p_to <= p_from or p_to - p_from > interval '62 days' then
+    raise exception using message = 'Pick a shorter date range.', errcode = 'P0001';
+  end if;
+  perform app_private.ensure_template_shifts(p_from, p_to);
+  return json_build_object(
+    'shifts', coalesce((select json_agg(json_build_object(
+        'id', sh.id, 'starts_at', sh.starts_at, 'ends_at', sh.ends_at, 'label', sh.label,
+        'staff_id', sh.staff_id, 'staff_name', st.name)
+        order by sh.starts_at, st.name nulls last, sh.template_slot)
+      from public.shifts sh left join public.staff st on st.id = sh.staff_id
+     where sh.cancelled_at is null and sh.starts_at < p_to and sh.ends_at > p_from), '[]'::json),
+    'people', coalesce((select json_agg(r order by lower(r.name)) from (
+        select st.id, st.name, st.active, app_private.role_of(st) as role, st.hourly_rate, st.pay_method, st.phone, st.avatar,
+               coalesce(w.minutes, 0) as worked_minutes, coalesce(w.times, 0) as times,
+               (select count(*) from public.shifts s
+                 where s.staff_id = st.id and s.cancelled_at is null
+                   and s.starts_at >= p_from and s.starts_at < p_to) as shifts
+          from public.staff st
+          left join lateral (
+            select round(sum(extract(epoch from (e.clock_out - e.clock_in))) / 60)::int as minutes, count(*) as times
+              from public.time_entries e
+             where e.staff_id = st.id and e.deleted_at is null and e.clock_out is not null
+               and e.clock_in >= p_from and e.clock_in < p_to) w on true
+         where not st.view_only and (st.active or coalesce(w.times, 0) > 0)) r), '[]'::json));
 end $$;
