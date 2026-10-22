@@ -513,20 +513,57 @@ button.cal-shift.is-open:hover { background: var(--accent); color: var(--accent-
 .cal-cell:hover .cal-add, .cal-add:focus-visible { opacity: 1; }
 .cal-add:hover { background: var(--sunk); border-color: var(--line); color: var(--ink); }
 @media (hover: none) { .cal-add { opacity: 1; } }
-.cal-agenda { display: none; }
 
+/* Phones get the same month grid, made compact: a letter for the part of
+   the day (M/A), a picture or the number of open places. A tap opens the day. */
+.only-phone, .tag-short, .cal-count, .cal-legend { display: none; }
 @media (max-width: 759px) {
-  .cal-card { padding: 18px 16px 6px; }
-  .cal-grid { display: none; }
-  .cal-agenda { display: flex; flex-direction: column; }
-  .ag-day { padding: 12px 0; border-top: 1px solid var(--line); display: flex; flex-direction: column; gap: 6px; }
-  .ag-head { display: flex; justify-content: space-between; align-items: center; min-height: 32px; font: 600 .8rem/1 var(--f-cal); text-transform: uppercase; letter-spacing: .06em; }
-  .ag-day.is-today .ag-head span { color: var(--accent); }
-  .ag-day .cal-shift { font-size: 1rem; padding: 11px 12px; border: 1px solid var(--line); border-radius: 9px; }
-  .ag-day .cal-shift.is-open { border-style: dashed; border-color: color-mix(in srgb, var(--accent) 65%, transparent); }
-  .ag-day .cal-add { opacity: 1; width: 32px; height: 32px; border-color: var(--line); }
+  .only-wide { display: none; }
+  .only-phone { display: inline; }
+  .cal-card { padding: 14px 6px 10px; }
+  .cal-title { font-size: 1.45rem; letter-spacing: .22em; margin: 4px 0 12px; }
+  .cal-head { padding: 8px 0; font-size: .68rem; }
+  .cal-cell { min-height: 72px; padding: 3px 2px 4px; gap: 2px; }
+  .cal-cell.has-shifts { cursor: pointer; }
+  .cal-cell.has-shifts:active { background: var(--accent-soft); }
+  .cal-day { justify-content: center; min-height: 18px; margin-bottom: 1px; }
+  .cal-num { font-size: .72rem; }
+  .cal-cell.is-today .cal-num { padding: 3px 6px; }
+  .cal-add { display: none; }
+  /* .cal-grid in front: these win over the general calendar rules further down */
+  .cal-grid .cal-shift { flex-direction: row; align-items: center; justify-content: center; gap: 2px; padding: 2px 1px; border-radius: 5px; min-height: 20px; }
+  .cal-grid .cal-shift .t, .cal-grid .cal-who b, .cal-grid .tag-full { display: none; }
+  .cal-grid .tag-short, .cal-grid .cal-count { display: inline; }
+  .cal-grid .cal-line { flex-wrap: nowrap; gap: 2px; }
+  .cal-grid .cal-tag { padding: 2px 4px; font-size: .62rem; }
+  .cal-grid .cal-count { font: 700 .62rem/1 var(--f-body); color: var(--accent); }
+  .cal-grid .cal-pic { width: 16px; height: 16px; margin: 0; vertical-align: middle; }
+  .cal-legend {
+    display: flex; flex-wrap: wrap; gap: 6px 12px; align-items: center; justify-content: center;
+    font-size: .78rem; color: var(--ink-2); margin-top: 12px;
+  }
+  .cal-legend > span { display: inline-flex; align-items: center; gap: 5px; }
   .stats-3 .stat .v { font-size: 1.25rem; }
 }
+.lg-box { width: 16px; height: 12px; border-radius: 3px; display: inline-block; }
+.lg-box.is-open { background: var(--accent-soft); border: 1px dashed color-mix(in srgb, var(--accent) 65%, transparent); }
+.lg-box.is-mine { background: var(--on-soft); border: 1px solid color-mix(in srgb, var(--on) 50%, transparent); }
+
+/* one day, opened from the phone calendar */
+.day-list { display: flex; flex-direction: column; gap: 10px; margin-top: 6px; }
+.day-shift {
+  display: flex; align-items: center; gap: 12px; padding: 12px; border-radius: 12px;
+  border: 1px solid var(--line); background: var(--surface);
+}
+.day-shift.is-open { border-style: dashed; border-color: color-mix(in srgb, var(--accent) 65%, transparent); background: var(--accent-soft); }
+.day-shift.is-mine { border-color: color-mix(in srgb, var(--on) 50%, transparent); background: var(--on-soft); }
+.day-shift.is-past { opacity: .55; }
+.day-main { flex: 1; min-width: 0; display: flex; flex-direction: column; gap: 6px; }
+.day-when { display: flex; align-items: center; gap: 8px; }
+.day-when .time { font: 600 1rem/1 var(--f-mono); }
+.day-who { display: flex; align-items: center; gap: 8px; font-weight: 600; min-width: 0; }
+.day-open { color: var(--accent); }
+.day-shift > button { flex: none; min-height: 44px; }
 /* calendar pages get more room so each shift fits on one line */
 main.view[data-view="schedule"], main.view[data-view="shifts"] { max-width: 1360px; }
 
@@ -714,7 +751,6 @@ dialog.sheet { width: min(480px, 100vw); }
 .cal-pic svg { width: 100%; height: 100%; display: block; }
 .cal-initials { font: 700 .55rem/1 var(--f-body); color: var(--ink-2); background: var(--sunk); }
 .cal-shift.is-mine .cal-pic { box-shadow: 0 0 0 1.5px var(--on); }
-@media (max-width: 759px) { .ag-day .cal-pic { width: 26px; height: 26px; vertical-align: -8px; margin-right: 8px; } }
 
 /* ------------------------------------------------------------ ranking */
 .podium { display: grid; grid-template-columns: repeat(3, minmax(0, 1fr)); gap: 10px; align-items: end; padding-bottom: 0; overflow: hidden; }
@@ -757,4 +793,3 @@ dialog.sheet { width: min(480px, 100vw); }
   :root:not([data-theme="light"]) .cal-tag.is-day { background: #5A4210; color: #FCE3A4; }
   :root:not([data-theme="light"]) .cal-tag.is-eve { background: #3B3670; color: #ECEAFF; }
 }
-@media (max-width: 759px) { .ag-day .cal-tag { font-size: .7rem; padding: 4px 7px; } .ag-day .cal-line { gap: 8px; } }

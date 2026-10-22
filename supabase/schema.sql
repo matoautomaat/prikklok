@@ -75,10 +75,13 @@ create table public.shift_templates (
   archived_at timestamptz,
   created_at  timestamptz not null default now()
 );
+-- Closed on Tuesday. Weekdays: Middag 11:30-14:30 and Avond 17:30-21:30;
+-- Friday to Sunday the evening runs until 22:30 and Sunday lunch until 15:00.
 insert into public.shift_templates (label, weekdays, start_time, end_time, people) values
-  ('Avond',  '{5,6,0}', '17:30', '22:30', 1),
-  ('Middag', '{5,6}',   '11:30', '14:30', 1),
-  ('Middag', '{0}',     '11:30', '15:00', 1);
+  ('Avond',  '{5,6,0}',     '17:30', '22:30', 1),
+  ('Middag', '{1,3,4,5,6}', '11:30', '14:30', 1),
+  ('Middag', '{0}',         '11:30', '15:00', 1),
+  ('Avond',  '{1,3,4}',     '17:30', '21:30', 1);
 
 create table public.shifts (
   id         uuid primary key default gen_random_uuid(),

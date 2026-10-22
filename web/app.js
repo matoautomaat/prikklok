@@ -972,7 +972,8 @@ function calEntry(x, manager, t) {
   const cls = `cal-shift${x.open ? ' is-open' : ''}${x.mine && !manager ? ' is-mine' : ''}${past ? ' is-past' : ''}`;
   const clickable = manager || (!past && (x.open || x.mine));
   const title = esc(`${part}, ${time}${x.open ? (manager ? ' (open)' : ' – tik om op te nemen') : ''}`);
-  const inner = `<span class="cal-line"><span class="cal-tag${partClass(part)}">${esc(part)}</span><span class="t">${time}</span></span>
+  // phones show only the first letter of the part of the day, and the number of open places
+  const inner = `<span class="cal-line"><span class="cal-tag${partClass(part)}"><span class="tag-full">${esc(part)}</span><span class="tag-short" aria-hidden="true">${esc(part.charAt(0))}</span></span><span class="t">${time}</span>${x.open && x.count > 1 ? `<span class="cal-count" aria-hidden="true">×${x.count}</span>` : ''}</span>
     <span class="cal-who">${pic}<b>${who}</b></span>`;
   return clickable
     ? `<button type="button" class="${cls}" data-shift="${x.id}" title="${title}">${inner}</button>`
@@ -988,32 +989,71 @@ function calendarHTML(shifts, month, { manager = false } = {}) {
   for (let i = 0; i < first.getDay(); i++) cells.push('<div class="cal-cell is-blank"></div>');
   byDay.forEach((list, i) => {
     const d = addDays(first, i);
-    cells.push(`<div class="cal-cell${sameDay(d, t) ? ' is-today' : ''}${d < startOfDay(t) ? ' is-before' : ''}">
+    cells.push(`<div class="cal-cell${sameDay(d, t) ? ' is-today' : ''}${d < startOfDay(t) ? ' is-before' : ''}${list.length ? ' has-shifts' : ''}" data-day="${toDateInput(d)}">
       <div class="cal-day"><span class="cal-num">${i + 1}</span>${addBtn(d)}</div>
       ${list.map(x => calEntry(x, manager, t)).join('')}
     </div>`);
   });
   while (cells.length % 7) cells.push('<div class="cal-cell is-blank"></div>');
-  const agenda = byDay.map((list, i) => ({ d: addDays(first, i), list })).filter(x => x.list.length || sameDay(x.d, t));
   return `
     <div class="cal-wrap">
       <h2 class="cal-title">${esc(fmt.month(first))}</h2>
       <div class="cal-grid">
-        ${DAY_NAMES.map(n => `<div class="cal-head">${n}</div>`).join('')}
+        ${DAY_NAMES.map(n => `<div class="cal-head"><span class="only-wide">${n}</span><span class="only-phone" aria-hidden="true">${n.slice(0, 2)}</span></div>`).join('')}
         ${cells.join('')}
       </div>
-      <div class="cal-agenda">
-        ${agenda.length ? agenda.map(({ d, list }) => `
-          <div class="ag-day${sameDay(d, t) ? ' is-today' : ''}">
-            <div class="ag-head"><span>${esc(fmt.day(d))}${sameDay(d, t) ? ' · vandaag' : ''}</span>${addBtn(d)}</div>
-            ${list.length ? list.map(x => calEntry(x, manager, t)).join('') : '<p class="muted small">Geen shiften</p>'}
-          </div>`).join('') : '<p class="empty">Geen shiften deze maand.</p>'}
+      <div class="cal-legend only-phone">
+        <span><span class="cal-tag is-day">M</span> Middag</span><span><span class="cal-tag is-eve">A</span> Avond</span>
+        <span><span class="lg-box is-open"></span> Open</span>${manager ? '' : '<span><span class="lg-box is-mine"></span> Jouw shift</span>'}
+        <span class="muted">Tik op een dag.</span>
       </div>
     </div>`;
 }
 
+const isPhone = () => window.matchMedia('(max-width: 759px)').matches;
+
+// On a phone the month is too small to tap single shifts: a tap on a day
+// opens that day with big buttons.
+function daySheet(dateStr, shifts, manager) {
+  const day = new Date(dateStr + 'T00:00'), t = now();
+  const list = dayEntries(shifts.filter(s => sameDay(s.starts_at, day)));
+  if (!list.length && !manager) return;
+  const row = x => {
+    const part = shiftPart(x), past = new Date(x.ends_at) <= t;
+    const who = x.open
+      ? `<span class="day-open">Open${x.count > 1 ? ` · ${x.count} plaatsen` : ''}</span>`
+      : `${personPic({ name: x.staff_name, avatar: x.staff_avatar })}<span>${esc(x.staff_name)}${x.mine && !manager ? ' (jij)' : ''}</span>`;
+    const action = manager ? `<button type="button" class="sm" data-day-edit="${x.id}">Wijzigen</button>`
+      : past ? '' : x.open ? `<button type="button" class="primary" data-day-claim="${x.id}">Opnemen</button>`
+      : x.mine ? `<button type="button" data-day-own="${x.id}">Teruggeven</button>` : '';
+    return `<div class="day-shift${x.open ? ' is-open' : ''}${x.mine && !manager ? ' is-mine' : ''}${past ? ' is-past' : ''}">
+      <div class="day-main">
+        <div class="day-when"><span class="cal-tag${partClass(part)}">${esc(part)}</span><span class="time">${fmt.range(x.starts_at, x.ends_at)}</span></div>
+        <div class="day-who">${who}</div>
+        ${x.notes ? `<p class="muted small">${esc(x.notes)}</p>` : ''}
+      </div>
+      ${action}
+    </div>`;
+  };
+  const d = modal.open(`
+    <h2 id="modal-title">${esc(fmt.dayLong(day))}${sameDay(day, t) ? ' · vandaag' : ''}</h2>
+    ${list.length ? `<div class="day-list">${list.map(row).join('')}</div>` : '<p class="empty">Nog geen shiften op deze dag.</p>'}
+    <div class="form-actions">${manager ? '<button type="button" class="primary" id="day-add">+ Shift toevoegen</button>' : ''}<button type="button" data-close>Sluiten</button></div>`, null, { sheet: true });
+  const find = id => shifts.find(s => s.id === id);
+  $$('[data-day-claim]', d).forEach(b => b.addEventListener('click', () => claimShift(find(b.dataset.dayClaim))));
+  $$('[data-day-own]', d).forEach(b => b.addEventListener('click', () => ownShift(find(b.dataset.dayOwn))));
+  $$('[data-day-edit]', d).forEach(b => b.addEventListener('click', () => editShift(find(b.dataset.dayEdit))));
+  const add = $('#day-add', d);
+  if (add) add.addEventListener('click', () => addShiftModal(dateStr));
+}
+
 function bindCalendar(el, shifts, manager) {
   $('.cal-wrap', el).addEventListener('click', ev => {
+    if (isPhone()) {
+      const cell = ev.target.closest('.cal-cell[data-day]');
+      if (cell) daySheet(cell.dataset.day, shifts, manager);
+      return;
+    }
     const add = ev.target.closest('[data-add-day]');
     if (add) { addShiftModal(add.dataset.addDay); return; }
     const b = ev.target.closest('[data-shift]');
@@ -1072,7 +1112,7 @@ async function viewShifts(el, current) {
   const mineMins = mine.reduce((a, s) => a + minutesBetween(s.starts_at, s.ends_at), 0);
   el.innerHTML = `
     <div class="view-head">
-      <div><h1>Shiften</h1><p>Tik op een <span class="key-open">open</span> shift om hem op te nemen. Tik op een van jouw shiften om hem terug te geven.</p></div>
+      <div><h1>Shiften</h1><p><span class="only-wide">Tik op een <span class="key-open">open</span> shift om hem op te nemen. Tik op een van jouw shiften om hem terug te geven.</span><span class="only-phone">Tik op een dag om de shiften te zien. Bij een <span class="key-open">open</span> shift tik je op Opnemen.</span></p></div>
       ${periodBar(fmt.month(m), sameDay(m, startOfMonth(t)) ? 'Deze maand' : '', 'mo-prev', 'mo-next')}
     </div>
     ${monthChips()}
