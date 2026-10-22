@@ -1272,7 +1272,7 @@ async function viewSchedule(el, current) {
       <h3 class="tp-head">Open, voor wie wil</h3>
       ${openTps.length ? `<div class="rows">${openTps.map(templateRow).join('')}</div>` : '<p class="empty">Geen open vaste shiften.</p>'}
       <h3 class="tp-head">Vaste werknemers</h3>
-      <p class="muted small">Hun uren staan elke week meteen op hun naam. Kunnen ze een keer niet, dan geven ze die shift terug.</p>
+      <p class="muted small">Ze staan niet in de kalender: die is voor studenten en deeltijdsen. Tijdens hun vaste uren kunnen ze inklokken.</p>
       ${fixedTps.length ? `<div class="rows">${byPerson(fixedTps).map(([name, list]) => `
         <div class="row tp-person">
           <div class="person">${personPic({ name, avatar: list[0].staff_avatar })}
@@ -2689,7 +2689,7 @@ async function viewMember(el, current) {
     </div>
     <section class="card">
       <div class="card-head"><h2>Vaste uren</h2>${p.active ? '<button class="sm" id="add-fixed">+ Vaste uren toevoegen</button>' : ''}</div>
-      <p class="muted small" style="margin-top:6px">Werkt ${esc(first)} elke week op dezelfde momenten? Dan staan die shiften vanzelf op ${esc(first)}s naam in de kalender, en kan ${esc(first)} dan inklokken.</p>
+      <p class="muted small" style="margin-top:6px">Werkt ${esc(first)} elke week op dezelfde momenten? Dan kan ${esc(first)} tijdens die uren inklokken. Vaste uren staan niet in de kalender: die is voor studenten en deeltijdsen.</p>
       ${mine.length ? `<div class="rows">${mine.map(tp => `
         <div class="row"><div class="row-main"><span class="row-title">${esc(tp.label || 'Shift')}</span>
           <span class="row-sub">${daysText(tp.weekdays)} · <span class="time">${tp.start_time} – ${tp.end_time}</span></span></div>
@@ -2913,6 +2913,24 @@ const famSignOut = () => isViewer() ? `<button type="button" class="signout-wide
 
 const DAY_NAMES_ZH = ['星期日', '星期一', '星期二', '星期三', '星期四', '星期五', '星期六'];
 
+// A fixed worker's weekly hours in words: "elke dag behalve dinsdag · 11:30 – 14:30 en 17:00 – 22:30".
+function fixedText(list, t = nl => nl) {
+  if (!list || !list.length) return '';
+  const zh = t('nl', 'zh') === 'zh', names = zh ? DAY_NAMES_ZH.map(n => n.replace('星期', '周')) : DAY_NAMES;
+  const daysOf = days => {
+    if (days.length === 7) return t('elke dag', '每天');
+    if (days.length === 6) { const off = WEEK_ORDER.find(d => !days.includes(d)); return t(`elke dag behalve ${names[off]}`, `除${names[off]}外每天`); }
+    return WEEK_ORDER.filter(d => days.includes(d)).map(d => zh ? names[d] : DAY_SHORT[d]).join(zh ? '、' : ', ');
+  };
+  const groups = new Map();
+  for (const x of list) {
+    const k = [...x.weekdays].sort().join();
+    if (!groups.has(k)) groups.set(k, { days: x.weekdays, times: [] });
+    groups.get(k).times.push(`${x.start_time} – ${x.end_time}`);
+  }
+  return [...groups.values()].map(g => `${daysOf(g.days)} · ${g.times.join(t(' en ', '、'))}`).join('; ');
+}
+
 // The month grid, read only, in the family's language. On a phone the cells
 // only show a letter and a picture; the chosen day is spelled out below it.
 function famCalendarHTML(shifts, month, people, selected) {
@@ -3037,10 +3055,10 @@ async function viewFamilyStaff(el, current) {
       <div class="card-head"><h2>${L('Al het personeel', '全部员工')}</h2><span class="muted small">${L('Uren volgens de prikklok', '按打卡记录的工时')}</span></div>
       ${team.length ? `
       <div class="table-wrap only-wide-block"><table class="fam-table">
-        <thead><tr><th>${L('Naam', '名字')}</th><th class="num">${L('Leeftijd', '年龄')}</th><th class="num">${L('Per uur', '时薪')}</th><th class="num">${L('Gewerkt', '工作时间')}</th><th class="num">${L('Samen', '合计')}</th><th>${L('Betaling', '付款')}</th></tr></thead>
+        <thead><tr><th>${L('Naam', '名字')}</th><th class="num">${L('Leeftijd', '年龄')}</th><th>${L('Vaste uren', '固定时间')}</th><th class="num">${L('Per uur', '时薪')}</th><th class="num">${L('Gewerkt', '工作时间')}</th><th class="num">${L('Samen', '合计')}</th><th>${L('Betaling', '付款')}</th></tr></thead>
         <tbody>${team.map(p => `<tr class="${p.pay_method === 'cash' ? 'is-cash' : ''}">
           <td><span class="person">${personPic(p, 'lg')}<span><strong>${esc(p.name)}</strong><span class="row-sub">${role(p)}${p.phone ? ` · ${tel(p)}` : ''}</span></span></span></td>
-          <td class="num">${age(p)}</td><td class="num">${rate(p)}</td>
+          <td class="num">${age(p)}</td><td class="fam-fixed">${p.fixed ? esc(fixedText(p.fixed, L)) : `<span class="muted">${L('Volgens de kalender', '按排班')}</span>`}</td><td class="num">${rate(p)}</td>
           <td class="num">${fam.dur(p.worked_minutes)}</td><td class="num fam-total">${total(p)}</td>
           <td>${payPill(p.pay_method, L)}</td></tr>`).join('')}</tbody>
       </table></div>
@@ -3049,6 +3067,7 @@ async function viewFamilyStaff(el, current) {
           <div class="fam-person-head">${personPic(p, 'lg')}<strong>${esc(p.name)}</strong>${payPill(p.pay_method, L)}</div>
           <dl class="fam-kv">
             <dt>${L('Leeftijd', '年龄')}</dt><dd>${age(p)}</dd>
+            <dt>${L('Vaste uren', '固定时间')}</dt><dd>${p.fixed ? esc(fixedText(p.fixed, L)) : `<span class="muted">${L('Volgens de kalender', '按排班')}</span>`}</dd>
             <dt>${L('Per uur', '时薪')}</dt><dd>${rate(p)}</dd>
             <dt>${L('Gewerkt', '工作时间')}</dt><dd>${fam.dur(p.worked_minutes)} <span class="muted">· ${L(`${p.times} keer`, `${p.times}次`)}</span></dd>
             <dt>${L('Samen', '合计')}</dt><dd class="fam-total">${total(p)}</dd>

@@ -570,7 +570,7 @@ button.cal-shift.is-open:hover { background: var(--accent); color: var(--accent-
 .day-open { color: var(--accent); }
 .day-shift > button { flex: none; min-height: 44px; }
 /* calendar pages get more room so each shift fits on one line */
-main.view[data-view="schedule"], main.view[data-view="shifts"], main.view[data-view="family"] { max-width: 1360px; }
+main.view[data-view="schedule"], main.view[data-view="shifts"], main.view[data-view="family"], main.view[data-view="famstaff"] { max-width: 1360px; }
 
 /* month buttons and time fields */
 .chips { display: flex; gap: 8px; flex-wrap: wrap; }
@@ -827,7 +827,7 @@ button.cal-shift.is-group { cursor: pointer; }
 .fam-daypanel .day-who { font-size: 1.05rem; }
 .fam-daypanel .day-shift.is-past { opacity: .6; }
 .fam-open-who { color: var(--bad); font-weight: 700; }
-.only-phone-block { display: none; }
+.only-phone-block, .fam-people.only-phone-block { display: none; }
 .fam-table td, .fam-table th { vertical-align: middle; }
 .fam-table .row-sub { display: block; font-weight: 400; }
 .fam-table tr.is-cash td:first-child { box-shadow: inset 4px 0 0 var(--bad); }
@@ -848,7 +848,7 @@ button.cal-shift.is-group { cursor: pointer; }
 .plain-list { margin: 10px 0 0; padding-left: 1.2em; display: grid; gap: 6px; }
 @media (max-width: 759px) {
   .only-wide-block { display: none; }
-  .only-phone-block { display: grid; }
+  .only-phone-block, .fam-people.only-phone-block { display: grid; }
   .cal-grid .cal-cell { -webkit-tap-highlight-color: transparent; }
   .cal-grid .cal-cell.is-selected { box-shadow: inset 0 0 0 2px var(--accent); background: var(--accent-soft); }
   .stats.fam-stats { grid-template-columns: 1fr !important; }
@@ -858,3 +858,4 @@ button.cal-shift.is-group { cursor: pointer; }
   .fam-people { grid-template-columns: 1fr; }
 }
 .fam-card a[href^="tel:"] { white-space: nowrap; }
+.fam-fixed { min-width: 14em; }

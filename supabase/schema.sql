@@ -253,6 +253,15 @@ language sql immutable set search_path = public as $$
   select left(btrim(coalesce(p_text, '')), p_max)
 $$;
 
+-- A fixed worker's own weekly shift, still on their name. It lets them clock
+-- in, but it stays out of the calendars: those are for students and
+-- part-timers. Once given back it is an ordinary open shift again.
+create function app_private.is_fixed_shift(p_template uuid, p_staff uuid) returns boolean
+language sql stable set search_path = public as $$
+  select p_template is not null and p_staff is not null
+     and exists (select 1 from public.shift_templates where id = p_template and staff_id = p_staff)
+$$;
+
 -- 'staff', 'manager' or 'viewer' (a family account)
 create function app_private.role_of(p public.staff) returns text
 language sql immutable set search_path = public as $$
@@ -498,7 +507,8 @@ begin
          where r.shift_id = sh.id order by r.created_at desc limit 1) end)
       order by sh.starts_at, st.name nulls last, sh.template_slot)
     from public.shifts sh left join public.staff st on st.id = sh.staff_id
-   where sh.cancelled_at is null and sh.starts_at < p_to and sh.ends_at > p_from), '[]'::json);
+   where sh.cancelled_at is null and sh.starts_at < p_to and sh.ends_at > p_from
+     and not app_private.is_fixed_shift(sh.template_id, sh.staff_id)), '[]'::json);
 end $$;
 
 create function public.claim_shift(p_token text, p_shift_id uuid) returns json
@@ -658,7 +668,8 @@ begin
                    where e.shift_id = sh.id and e.deleted_at is null order by e.clock_in limit 1))
         order by sh.starts_at, st.name nulls last)
       from public.shifts sh left join public.staff st on st.id = sh.staff_id
-     where sh.cancelled_at is null and sh.starts_at < p_day_end and sh.ends_at > p_day_start), '[]'::json),
+     where sh.cancelled_at is null and sh.starts_at < p_day_end and sh.ends_at > p_day_start
+       and not app_private.is_fixed_shift(sh.template_id, sh.staff_id)), '[]'::json),
     'pending_requests', (select count(*) from public.time_edits where status = 'pending'),
     'open_shifts_week', (select count(*) from public.shifts
        where staff_id is null and cancelled_at is null
@@ -1757,9 +1768,9 @@ begin
   return json_build_object('ok', true);
 end $$;
 
--- One month for a family account (managers can look too): every shift with
--- who works it, and per person the age, hours worked, hourly rate and how
--- they're paid. Family accounts themselves are left out.
+-- One month for a family account (managers can look too): the calendar's
+-- shifts with who works them, and per person the age, fixed hours, hours
+-- worked, hourly rate and how they're paid. Family accounts are left out.
 create function public.family_overview(p_token text, p_from timestamptz, p_to timestamptz) returns json
 language plpgsql volatile security definer set search_path = public, extensions as $$
 declare v public.staff;
@@ -1778,10 +1789,15 @@ begin
         'staff_id', sh.staff_id, 'staff_name', st.name)
         order by sh.starts_at, st.name nulls last, sh.template_slot)
       from public.shifts sh left join public.staff st on st.id = sh.staff_id
-     where sh.cancelled_at is null and sh.starts_at < p_to and sh.ends_at > p_from), '[]'::json),
+     where sh.cancelled_at is null and sh.starts_at < p_to and sh.ends_at > p_from
+       and not app_private.is_fixed_shift(sh.template_id, sh.staff_id)), '[]'::json),
     'people', coalesce((select json_agg(r order by lower(r.name)) from (
         select st.id, st.name, st.active, app_private.role_of(st) as role, st.hourly_rate, st.pay_method, st.phone, st.avatar,
                extract(year from age(current_date, st.birth_date))::int as age,
+               (select json_agg(json_build_object('label', tp.label, 'weekdays', tp.weekdays,
+                         'start_time', to_char(tp.start_time, 'HH24:MI'), 'end_time', to_char(tp.end_time, 'HH24:MI'))
+                         order by tp.start_time)
+                  from public.shift_templates tp where tp.staff_id = st.id and tp.archived_at is null) as fixed,
                coalesce(w.minutes, 0) as worked_minutes, coalesce(w.times, 0) as times,
                (select count(*) from public.shifts s
                  where s.staff_id = st.id and s.cancelled_at is null
