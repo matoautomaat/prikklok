@@ -11,6 +11,7 @@ const PAYSLIP_TYPE = /salary ?slip|pay ?slip|loonbrie|loonfiche|fiche de paie|bu
 const PAYSLIP_NAME = /loonbrie|loonfiche|payslip|pay slip|fiche de paie|bulletin de paie/i;
 const MAX_DOWNLOADS = 60; // per run; the next night picks up the rest
 const NO_CALENDAR = 'Officient gives no access to the calendar yet. Add calendar:read and calendar:write to the Prikklok app in Officient, then connect again.';
+const NO_CONTRACTS = 'Officient gives no access to contracts yet. Add contracts.write to the Prikklok app in Officient, then connect again.';
 // Reading PDFs is the heavy part: an Edge Function gets 2 seconds of CPU per
 // request, so one run reads for about this long and leaves the rest for the next.
 const READ_BUDGET_MS = 900;
@@ -60,14 +61,14 @@ export function makeOfficient({ db: query, fetch, readPayslip, api = OFFICIENT_A
   }
   // A change in Officient. Officient's refusal (eg a month already processed)
   // comes back as { error }, so one person doesn't stop the others.
-  async function send(access, method, path, body) {
+  async function send(access, method, path, body, denied = NO_CALENDAR) {
     for (let attempt = 0; attempt < 4; attempt++) {
       await slot();
       const res = await fetch(api + path, { method, headers: { Authorization: `Bearer ${access}`, 'Content-Type': 'application/json' },
                                             body: JSON.stringify(body) });
       if (res.status === 429) { await wait(5000); continue; }
       const data = await res.json().catch(() => ({}));
-      if (res.status === 401 || res.status === 403) throw new Error(NO_CALENDAR);
+      if (res.status === 401 || res.status === 403) throw new Error(denied);
       if (!res.ok) return { error: String(data.reason_phrase || `Officient answered ${res.status}.`) };
       return data;
     }
@@ -308,15 +309,82 @@ export function makeOfficient({ db: query, fetch, readPayslip, api = OFFICIENT_A
     return out;
   }
 
+  // A student contract the app wrote, into the person's contracts in
+  // Officient (once), and with sign Officient e-mails them to sign it.
+  async function sendContract(access, appToken, id, sign) {
+    const c = await db('select app_private.contract_for_officient($1, $2::uuid) as r', [appToken, id]);
+    let officientId = c.officient_contract_id;
+    if (!officientId) {
+      const r = await send(access, 'POST', '/contracts/add', { person_id: Number(c.officient_id), file_type: 'pdf', contract_name: c.title,
+                                                               template_id: '', pdf_base64: c.data }, NO_CONTRACTS);
+      if (r.error) throw new Error(`Officient refused the contract: ${r.error}`);
+      officientId = String((r.data && r.data.id) || '');
+      if (!officientId) throw new Error('Officient did not take the contract.');
+      await db('select app_private.contract_officient_done($1::uuid, $2, false, false) as r', [id, officientId]);
+    }
+    let signature = null;
+    if (sign) {
+      const r = await send(access, 'POST', '/contracts/signature/request', { contract_id: Number(officientId), optional_message: '' }, NO_CONTRACTS);
+      if (r.error) signature = r.error;
+      else await db('select app_private.contract_officient_done($1::uuid, null, true, false) as r', [id]);
+    }
+    return { officient_contract_id: officientId, signature_error: signature };
+  }
+
+  // The hours planned for a student contract's period, into Officient's
+  // calendar day by day: the planned time on days with a shift, 0 on the
+  // other days Officient has time on, so Officient (and Securex) start from
+  // the planning. Holidays and days with an absence stay as they are.
+  // Officient only takes days in an employment it knows (with its Dimona),
+  // which the manager creates in Officient first.
+  async function contractHours(access, appToken, id, dry) {
+    const c = await db('select app_private.contract_for_officient($1, $2::uuid) as r', [appToken, id]);
+    const planned = await db('select app_private.planned_by_day($1::uuid, $2::date, $3::date) as r', [c.staff_id, c.starts_on, c.ends_on]);
+    const steps = [];
+    const first = new Date(`${c.starts_on}T00:00:00Z`), last = new Date(`${c.ends_on}T00:00:00Z`);
+    for (let m = new Date(Date.UTC(first.getUTCFullYear(), first.getUTCMonth(), 1)); m <= last; m.setUTCMonth(m.getUTCMonth() + 1)) {
+      const days = await monthDays(access, c.officient_id, m.getUTCFullYear(), m.getUTCMonth() + 1, null);
+      for (const d = new Date(Math.max(m, first)); d <= last && d.getUTCMonth() === m.getUTCMonth(); d.setUTCDate(d.getUTCDate() + 1)) {
+        const date = d.toISOString().slice(0, 10), want = planned[date] || 0;
+        const day = days.get(date) || { scheduled: 0, off: 0, extra: 0, holiday: null, events: [], net: 0 };
+        if (day.holiday || day.off || day.extra) {
+          if (want !== day.net) steps.push({ date, planned: want, before: day.net, action: 'skip', why: day.holiday ? 'holiday' : day.events.join(', ') });
+        } else if (day.scheduled !== want) {
+          steps.push({ date, planned: want, before: day.scheduled, action: 'set' });
+        }
+      }
+    }
+    const out = { contract: id, name: c.name, from: c.starts_on, to: c.ends_on, steps, done: 0, failed: [] };
+    if (dry) return out;
+    const sets = steps.filter(s => s.action === 'set');
+    for (const year of [...new Set(sets.map(s => s.date.slice(0, 4)))]) {
+      const list = sets.filter(s => s.date.startsWith(year));
+      const r = await send(access, 'PATCH', `/calendar/${c.officient_id}/${year}/work/bulk`, list.map(s => ({ date: s.date, duration_minutes: s.planned })));
+      const bad = r.error ? list.map(s => ({ date: s.date, reason: r.error }))
+        : (Array.isArray(r.failed) ? r.failed : []).map(f => (typeof f === 'string' ? { date: f } : f || {}));
+      for (const s of list) {
+        const f = bad.find(b => b.date === s.date);
+        if (f) { s.failed = true; out.failed.push({ date: s.date, reason: String(f.reason || 'Officient refused.') }); }
+      }
+    }
+    out.done = sets.filter(s => !s.failed).length;
+    if (!out.failed.length) await db('select app_private.contract_officient_done($1::uuid, null, false, true) as r', [id]);
+    return out;
+  }
+
   // action 'connect': right after the manager signed in at Officient (code, state);
   // action 'sync': a manager pressing "Nu ophalen", or the nightly job (cron);
   // action 'read': read payslips uploaded by hand, right after the upload;
   // action 'calendar': Officient's calendar for a month (month: YYYY-MM);
-  // action 'hours': make it count a month's clocked hours (month, people; dry: only the plan).
-  async function run({ action, token: appToken, code, state, cron, month, people, dry }) {
+  // action 'hours': make it count a month's clocked hours (month, people; dry: only the plan);
+  // action 'contract': a student contract into Officient (contract: its id; sign: e-mail it to sign);
+  // action 'contract_hours': its planned hours into Officient's calendar (contract; dry: only the plan).
+  async function run({ action, token: appToken, code, state, cron, month, people, dry, contract, sign }) {
     const job = { spent: 0 };
-    if (action === 'calendar' || action === 'hours') {
-      if (!/^\d{4}-(0[1-9]|1[0-2])$/.test(month || '')) throw new Error('Pick a month.');
+    if (['calendar', 'hours', 'contract', 'contract_hours'].includes(action)) {
+      if (action.startsWith('contract')) {
+        if (!/^[0-9a-f-]{36}$/.test(contract || '')) throw new Error('Pick a contract.');
+      } else if (!/^\d{4}-(0[1-9]|1[0-2])$/.test(month || '')) throw new Error('Pick a month.');
       if (action === 'hours' && !(Array.isArray(people) && people.length)) throw new Error('Pick who to send.');
       const cfg = await db('select app_private.officient_begin($1, null, null) as r', [appToken || '']);
       try {
@@ -325,7 +393,9 @@ export function makeOfficient({ db: query, fetch, readPayslip, api = OFFICIENT_A
           await db('select app_private.officient_save_token($1, false) as r', [t.refresh_token]);
         }
         return { ok: true, ...(action === 'calendar' ? await calendar(t.access_token, month)
-                                                      : await pushHours(t.access_token, month, people, appToken, !!dry)) };
+          : action === 'hours' ? await pushHours(t.access_token, month, people, appToken, !!dry)
+          : action === 'contract' ? await sendContract(t.access_token, appToken, contract, !!sign)
+          : await contractHours(t.access_token, appToken, contract, !!dry)) };
       } catch (e) {
         throw /answered 40[13]/.test(e.message) ? new Error(NO_CALENDAR) : e;
       } finally {

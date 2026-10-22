@@ -66,6 +66,11 @@ const SERVER_NL = {
   'Pick a month.': 'Kies een maand.',
   'Pick a month in the next three months.': 'Kies een maand in de komende drie maanden.',
   'Pick who to send.': 'Duid aan voor wie je de uren stuurt.',
+  'Pick a contract.': 'Kies een contract.',
+  'Pick a shorter period.': 'Kies een kortere periode.',
+  "This person isn't linked with Officient yet.": 'Deze persoon is nog niet gekoppeld met Officient. Haal de gegevens op bij Team → Exact Officient.',
+  'Officient gives no access to contracts yet. Add contracts.write to the Prikklok app in Officient, then connect again.': 'Officient geeft nog geen toegang tot de contracten. Voeg contracts.write toe aan de Prikklok-app in Officient en koppel opnieuw.',
+  'Officient did not take the contract.': 'Officient nam het contract niet aan.',
   'Officient has no absence type "Gewettigde Afwezigheid" (Securex code GA) this year.': 'Officient heeft dit jaar geen afwezigheid "Gewettigde Afwezigheid" (Securex-code GA). Kijk de soorten na in Officient.',
   'That month has passed.': 'Die maand is al voorbij.',
   'Pick a role.': 'Kies een rol.',
@@ -749,7 +754,7 @@ function updateBadges() {
 const VIEWS = {
   clock: viewClock, shifts: viewShifts, hours: viewHours, profile: viewProfile, ranking: viewRanking,
   today: viewToday, schedule: viewSchedule, monthly: viewMonthly, requests: viewRequests, team: viewTeam, member: viewMember,
-  family: viewFamily, famstaff: viewFamilyStaff, availability: viewAvailability,
+  family: viewFamily, famstaff: viewFamilyStaff, availability: viewAvailability, contracts: viewContracts,
 };
 
 // #profile works for everyone (managers reach it through their picture);
@@ -762,12 +767,16 @@ function route() {
   const member = v.match(/^team\/([0-9a-f-]{36})$/);
   const availMonth = v.match(/^availability\/(\d{4}-\d{2})$/);
   if (availMonth) v = tab = 'availability';
+  const ctMonth = v.match(/^contracts(?:\/(\d{4}-\d{2}))?$/);
+  if (ctMonth && isManager()) { v = 'contracts'; tab = 'schedule'; }
   if (member && isManager()) { S.memberId = member[1]; v = 'member'; tab = 'team'; }
   else if ((v === 'family' || v === 'famstaff') && isManager()) tab = 'team';
   else if (v === 'availability' && tabs.includes('shifts')) tab = 'shifts';
+  else if (v === 'contracts' && isManager()) tab = 'schedule';
   else if (!tabs.includes(v)) { v = tabs[0]; tab = v; }
   if (S.view !== v) S.month = null;
   if (availMonth && v === 'availability') S.month = new Date(availMonth[1] + '-01T00:00');
+  if (ctMonth && ctMonth[1] && v === 'contracts') S.month = new Date(ctMonth[1] + '-01T00:00');
   S.view = v;
   $$('[data-tab]').forEach(b => b.setAttribute('aria-current', b.dataset.tab === tab ? 'page' : 'false'));
   const mb = $('#bnav-more');
@@ -1469,7 +1478,7 @@ async function viewSchedule(el, current) {
     ${availabilityPanel(avail, shifts, m)}
     <section class="card cal-card">
       <div class="cal-toolbar"><span class="muted small">Gebruik + op een dag voor een extra shift.</span>
-        <span class="toolbar"><button class="sm" id="print-plan">Afdrukken</button><button class="primary sm" id="add-shift">+ Shift toevoegen</button></span></div>
+        <span class="toolbar"><button class="sm" id="ct-open">Studentencontracten</button><button class="sm" id="print-plan">Afdrukken</button><button class="primary sm" id="add-shift">+ Shift toevoegen</button></span></div>
       ${calendarHTML(shifts, m, { manager: true })}
     </section>
     ${horizonNote(m)}
@@ -1490,6 +1499,7 @@ async function viewSchedule(el, current) {
   bindMonthNav(el);
   bindCalendar(el, shifts, true);
   bindAvailabilityPanel(el, avail, m);
+  $('#ct-open', el).addEventListener('click', () => { location.hash = `contracts/${toDateInput(m).slice(0, 7)}`; });
   $('#print-plan', el).addEventListener('click', () => printSchedule({ m, shifts,
     fixed: byPerson(fixedTps).map(([name, list]) => ({ name, text: fixedText(list) })) }));
   $('#add-shift', el).addEventListener('click', () => addShiftModal(toDateInput(sameDay(m, startOfMonth(t)) ? t : m)));
@@ -1819,7 +1829,7 @@ function officientCompare(cal, rows) {
 
 // Officient's reasons for refusing a day, in Dutch where we know them.
 const offReason = r => /lock/i.test(r) ? 'de maand is al verwerkt en vergrendeld'
-  : /no contract is active/i.test(r) ? 'geen actief contract op die dag'
+  : /no contract is active/i.test(r) ? 'Officient kent op die dag geen tewerkstelling (met Dimona); maak die eerst aan in Officient'
   : /too much time off/i.test(r) ? 'er staat al te veel afwezigheid' : r;
 
 // Make Officient count the month's clocked hours, the way the manager did by
@@ -1981,6 +1991,252 @@ function wageCodesModal() {
       } catch (e) { $('#wc-err', d).textContent = e.message; btn.disabled = false; }
     });
   });
+}
+
+/* ------------------------------------------------------------ student contracts */
+
+// The employer's details on every student contract, as Securex's model asks them.
+const CONTRACT_INFO = [
+  ['employer', 'Werkgever (naam van de vennootschap)', 'bv. XIN SEN BV'],
+  ['employer_address', 'Adres van de werkgever', 'straat, postcode en gemeente'],
+  ['representative', 'Vertegenwoordigd door', 'wie tekent voor de werkgever'],
+  ['work_address', 'Plaats van het werk', 'adres van de zaak'],
+  ['notify', 'Te verwittigen bij ziekte of ongeval', 'naam en telefoon'],
+  ['first_aid', 'Eerste hulp bij ongeval door', 'naam'],
+  ['first_aid_kit', 'De verbandkist bevindt zich…', 'bv. in de berging naast de keuken'],
+  ['prevention', 'Dienst voor preventie en bescherming', 'naam en adres'],
+  ['prevention_phone', 'Telefoon van die dienst', ''],
+  ['inspection', 'Toezicht op de sociale wetten', 'adres en telefoon, op meerdere regels', true],
+  ['committee', 'Paritair comité', 'bv. 302'],
+  ['place', 'Contracten opgemaakt te', 'gemeente'],
+];
+const CONTRACT_MISSING = { birth_date: 'geboortedatum', address: 'adres', iban: 'rekeningnummer', hourly_rate: 'uurloon' };
+const CONTRACT_OPTIONS = [['', 'Geen keuze'], ['vast', 'Vast uurrooster'], ['vast4', 'Vast uurrooster, minimum 4 uur per prestatie'],
+  ['vast_variabel', 'Vast arbeidsregime en variabel uurrooster'], ['variabel', 'Variabel arbeidsregime en variabel uurrooster']];
+const lastDay = m => addDays(addMonths(m, 1), -1);
+const toBase64 = bytes => { let s = ''; for (let i = 0; i < bytes.length; i += 0x8000) s += String.fromCharCode(...bytes.subarray(i, i + 0x8000)); return btoa(s); };
+
+// Every student and their contract for one month: written from the planning
+// on Securex's model, kept with their contracts, and put in Officient with
+// the hours planned.
+async function viewContracts(el, current) {
+  if (!S.month) S.month = nextMonth();
+  const m = S.month;
+  const r = await rpc('mgr_student_contracts', { p_month: toDateInput(m) });
+  if (!current()) return;
+  const info = r.info || {}, ready = !!(info.employer && info.representative);
+  const pills = c => [
+    c.officient_sent_at ? `<span class="pill on">In Officient</span>` : '',
+    c.signature_requested_at ? `<span class="pill">Ter ondertekening sinds ${fmt.short(c.signature_requested_at)}</span>` : '',
+    c.officient_hours_at ? `<span class="pill on">Uren in Officient</span>` : ''].join(' ');
+  const row = p => {
+    const c = p.contract;
+    return `<div class="row ct-row" data-student="${p.staff_id}">
+      <div class="row-main">
+        <span class="row-title">${miniPic(p)} ${esc(p.name)}</span>
+        <span class="row-sub">${p.planned_minutes ? `${fmt.hours2(p.planned_minutes)} u gepland op ${plural(p.planned_days, 'dag', 'dagen')}` : 'Nog niets gepland'}
+          ${c ? ` · contract ${fmt.short(c.starts_on)} – ${fmt.short(c.ends_on)}${c.hours != null ? `, ${num(Number(c.hours))} u` : ''}` : ''}</span>
+        ${p.missing.length ? `<span class="row-sub"><span class="pill warn">Ontbreekt: ${p.missing.map(k => CONTRACT_MISSING[k]).join(', ')}</span> <a href="#team/${p.staff_id}">Aanvullen</a></span>` : ''}
+        ${c ? `<span class="row-sub">${pills(c)}${!p.officient_id ? '<span class="muted small">Niet gekoppeld met Officient</span>' : ''}</span>` : ''}
+      </div>
+      <div class="row-actions">
+        ${c ? `<button class="sm" data-ct-dl="${c.id}">Downloaden</button>` : ''}
+        <button class="sm${c ? '' : ' primary'}" data-ct-make>${c ? 'Opnieuw maken' : 'Contract maken'}</button>
+        ${c && p.officient_id ? `<button class="sm" data-ct-send>${c.officient_sent_at ? 'Laten ondertekenen' : 'Naar Officient'}…</button>
+          <button class="sm" data-ct-hours>Uren in Officient…</button>` : ''}
+      </div></div>`;
+  };
+  el.innerHTML = `
+    <div class="view-head">
+      <div><button class="link back" id="back">‹ Planning</button><h1>Studentencontracten</h1>
+        <p>Een contract per student, op het model van Securex, met de shiften uit de planning als uurrooster. De app zet het in Officient om te laten ondertekenen, en de geplande uren in de kalender van Officient.</p></div>
+      ${periodBar(fmt.month(m), plural(r.students.length, 'student', 'studenten'), 'mo-prev', 'mo-next')}
+    </div>
+    ${ready ? '' : '<p class="hint warn">Vul eerst onderaan de gegevens van de zaak in: die staan op elk contract.</p>'}
+    <section class="card">
+      ${r.students.length ? `<div class="rows">${r.students.map(row).join('')}</div>`
+        : '<p class="empty">Niemand met het statuut Student. Kies het statuut bij Team → (persoon) → Werk en loon.</p>'}
+      <p class="hint info" style="margin-top:12px">De tewerkstelling met de Dimona maak je nog zelf in Officient: dat kan de app niet. Zet de geplande uren in Officient nadat die er is; Officient neemt geen uren aan op dagen zonder tewerkstelling.</p>
+    </section>
+    <section class="card">
+      <details id="ct-info" ${ready ? '' : 'open'}><summary><h2 style="display:inline">Gegevens van de zaak</h2> <span class="muted small">op elk contract</span></summary>
+      <form id="ct-info-form" class="form-grid" novalidate style="margin-top:12px">
+        ${CONTRACT_INFO.map(([k, label, ph, multi]) => `<div class="field${multi ? ' wide' : ''}"><label for="ci-${k}">${label}</label>
+          ${multi ? `<textarea id="ci-${k}" rows="4" maxlength="400" placeholder="${esc(ph)}">${esc(info[k] || '')}</textarea>`
+                  : `<input id="ci-${k}" maxlength="160" placeholder="${esc(ph)}" value="${esc(info[k] || '')}">`}</div>`).join('')}
+        <p class="form-error wide" id="ci-err"></p>
+        <div class="form-actions wide"><button type="submit" class="primary">Opslaan</button></div>
+      </form></details>
+    </section>`;
+  $('#back', el).addEventListener('click', () => { S.month = m; location.hash = 'schedule'; });
+  $('#mo-prev', el).addEventListener('click', () => { S.month = addMonths(m, -1); renderView(); });
+  $('#mo-next', el).addEventListener('click', () => { S.month = addMonths(m, 1); renderView(); });
+  const student = btn => r.students.find(p => p.staff_id === btn.closest('[data-student]').dataset.student);
+  $$('[data-ct-dl]', el).forEach(b => b.addEventListener('click', () => downloadContract(b.dataset.ctDl, b)));
+  $$('[data-ct-make]', el).forEach(b => b.addEventListener('click', () => {
+    if (!ready) { toast('Vul eerst de gegevens van de zaak in.', 'error'); $('#ct-info', el).open = true; return; }
+    contractModal(student(b), m, info);
+  }));
+  $$('[data-ct-send]', el).forEach(b => b.addEventListener('click', () => sendContractModal(student(b))));
+  $$('[data-ct-hours]', el).forEach(b => b.addEventListener('click', () => contractHoursModal(student(b))));
+  $('#ct-info-form', el).addEventListener('submit', async ev => {
+    ev.preventDefault();
+    const btn = $('button[type=submit]', ev.target);
+    const out = Object.fromEntries(CONTRACT_INFO.map(([k]) => [k, $(`#ci-${k}`, el).value.trim()]));
+    if (!out.employer || !out.representative) { $('#ci-err', el).textContent = 'Vul minstens de werkgever en wie tekent in.'; return; }
+    await busy(btn, async () => {
+      await rpc('mgr_save_contract_info', { p_info: out });
+      toast('Gegevens opgeslagen.');
+      renderView();
+    }).catch(e => { $('#ci-err', el).textContent = e.message; });
+  });
+}
+
+// Write one student's contract: the period, what they do and the hours come
+// from the planning; a preview opens the PDF, saving keeps it with their contracts.
+function contractModal(p, m, info) {
+  const today = startOfDay(now());
+  const from0 = m < today && today <= lastDay(m) ? today : m;
+  modal.open(`
+    <h2 id="modal-title">Studentencontract · ${esc(p.name)}</h2>
+    <form id="ctm-form" class="form-grid ct-form" novalidate>
+      <div class="field"><label for="ctm-from">Van</label><input type="date" id="ctm-from" value="${toDateInput(from0)}"></div>
+      <div class="field"><label for="ctm-to">Tot en met</label><input type="date" id="ctm-to" value="${toDateInput(lastDay(m))}"></div>
+      <div class="field"><label for="ctm-function">Hoedanigheid</label><input id="ctm-function" maxlength="80" placeholder="bv. Bediening"></div>
+      <div class="field span2"><label for="ctm-tasks">De prestaties bestaan uit</label><input id="ctm-tasks" maxlength="300" placeholder="bv. bediening en afruimen"></div>
+      <div class="field"><label for="ctm-hours">Geschat aantal uren</label><input type="number" id="ctm-hours" min="0" max="2000" step="0.25"></div>
+      <div class="field"><label for="ctm-rate">Bruto uurloon (€)</label><input type="number" id="ctm-rate" min="0" max="200" step="0.01"></div>
+      <div class="field"><label for="ctm-regime">Prestaties</label><select id="ctm-regime"><option value="deeltijds">Deeltijds</option><option value="voltijds">Voltijds</option></select></div>
+      <div class="field span2"><label for="ctm-option">Deeltijdse optie</label><select id="ctm-option">${CONTRACT_OPTIONS.map(([v, l]) => `<option value="${v}">${l}</option>`).join('')}</select></div>
+      <div class="field"><label for="ctm-weekly">Uren per week <span class="muted">(als dat moet)</span></label><input type="number" id="ctm-weekly" min="0" max="60" step="0.5"></div>
+      <div class="field span2"><label for="ctm-contingent">Eerst gebruiken</label><select id="ctm-contingent"><option value="uren">Het contingent van 650 uren studentenarbeid</option><option value="dagen">Het contingent van dagen occasionele arbeid</option></select></div>
+      <div class="field"><label for="ctm-place">Opgemaakt te</label><input id="ctm-place" maxlength="60" value="${esc(info.place || '')}"></div>
+      <div class="field"><label for="ctm-sign">Op</label><input type="date" id="ctm-sign" value="${toDateInput(today)}"></div>
+      <div class="wide" id="ctm-plan"><p class="muted">De planning wordt gelezen…</p></div>
+      <p class="form-error wide" id="ctm-err"></p>
+      <div class="form-actions wide"><button type="button" data-close>Annuleren</button><button type="button" id="ctm-preview">Voorbeeld</button><button type="submit" class="primary">Opslaan</button></div>
+    </form>`, d => {
+    let draft = null, hoursTouched = false;
+    const v = id => $(`#ctm-${id}`, d).value;
+    $('#ctm-hours', d).addEventListener('input', () => { hoursTouched = true; });
+    const load = async () => {
+      $('#ctm-err', d).textContent = '';
+      try {
+        draft = await rpc('mgr_student_contract_draft', { p_staff_id: p.staff_id, p_from: v('from'), p_to: v('to') });
+      } catch (e) { $('#ctm-err', d).textContent = e.message; return; }
+      const minutes = draft.shifts.reduce((a, x) => a + x.minutes, 0);
+      if (!hoursTouched) $('#ctm-hours', d).value = Math.round(minutes / 15) / 4;
+      $('#ctm-plan', d).innerHTML = `
+        ${draft.missing.length ? `<p class="hint warn">Nog niet in het profiel: ${draft.missing.map(k => CONTRACT_MISSING[k]).join(', ')}. Het contract krijgt daar "…". <a href="#team/${p.staff_id}">Profiel aanvullen</a></p>` : ''}
+        <details><summary>${draft.shifts.length ? `${plural(draft.shifts.length, 'shift', 'shiften')} gepland, ${fmt.hours2(minutes)} u: die komen als uurrooster in bijlage` : 'Nog geen shiften gepland in deze periode'}</summary>
+          <ul class="plain-list">${draft.shifts.map(x => `<li>${esc(fmt.day(new Date(x.date + 'T00:00')))}: ${x.start} – ${x.end}${x.label ? ` · ${esc(x.label)}` : ''}</li>`).join('')}</ul></details>`;
+      return draft;
+    };
+    load().then(dr => {
+      if (!dr) return;
+      const last = dr.last || {};
+      $('#ctm-function', d).value = last.function || '';
+      $('#ctm-tasks', d).value = last.tasks || '';
+      $('#ctm-rate', d).value = dr.student.hourly_rate ?? last.rate ?? '';
+      $('#ctm-regime', d).value = last.regime || 'deeltijds';
+      $('#ctm-option', d).value = last.option || '';
+      $('#ctm-weekly', d).value = last.weekly ?? '';
+      $('#ctm-contingent', d).value = last.contingent || 'uren';
+    });
+    for (const id of ['from', 'to']) $(`#ctm-${id}`, d).addEventListener('change', () => { hoursTouched = false; load(); });
+    const details = () => ({
+      function: v('function').trim(), tasks: v('tasks').trim(), hours: v('hours') === '' ? null : Number(v('hours')),
+      rate: v('rate') === '' ? null : Number(v('rate')), regime: v('regime'), option: v('option') || null,
+      weekly: v('weekly') === '' ? null : Number(v('weekly')), contingent: v('contingent'), place: v('place').trim(), sign_date: v('sign'),
+    });
+    const pdf = async () => {
+      if (!draft) throw new Error('De planning is nog niet gelezen.');
+      const x = details();
+      if (!x.function) throw new Error('Vul de hoedanigheid in, bv. Bediening.');
+      if (!v('from') || !v('to') || v('to') < v('from')) throw new Error('De einddatum moet na de begindatum liggen.');
+      if (x.sign_date > v('from')) throw new Error('Het contract wordt ondertekend vóór de eerste werkdag.');
+      return StudentContract.build({ ...x, info, student: draft.student, from: v('from'), to: v('to'), shifts: draft.shifts });
+    };
+    // the page's security policy keeps a PDF from opening in a tab of its own, so the preview is a download
+    $('#ctm-preview', d).addEventListener('click', ev => busy(ev.currentTarget, async () => {
+      saveBlob(`voorbeeld-contract-${p.name.toLowerCase().replace(/[^a-z0-9]+/g, '-')}.pdf`, new Blob([await pdf()], { type: 'application/pdf' }));
+    }).catch(e => { $('#ctm-err', d).textContent = e.message; }));
+    $('#ctm-form', d).addEventListener('submit', ev => {
+      ev.preventDefault();
+      busy($('button[type=submit]', d), async () => {
+        const bytes = await pdf();
+        await rpc('mgr_save_student_contract', { p_staff_id: p.staff_id, p_from: v('from'), p_to: v('to'), p_details: details(),
+                                                 p_data: toBase64(bytes), p_replace: p.contract ? p.contract.id : null });
+        modal.close();
+        toast(`Contract voor ${p.name} opgeslagen. ${p.name} kan het downloaden bij Profiel.`);
+        renderView();
+      }).catch(e => { $('#ctm-err', d).textContent = e.message; });
+    });
+  }, { wide: true });
+}
+
+// A student contract into Officient, and Officient e-mails the student to sign it.
+function sendContractModal(p) {
+  const c = p.contract;
+  modal.open(`
+    <h2 id="modal-title">Naar Officient · ${esc(p.name)}</h2>
+    <p>${c.officient_sent_at ? `Het contract staat al bij ${esc(p.name)} in Officient.` : `De app zet het contract bij ${esc(p.name)} in Officient, bij de contracten.`}</p>
+    <label class="check"><input type="checkbox" id="cts-sign" ${p.email || c.officient_sent_at ? 'checked' : ''}> Laten ondertekenen: Officient mailt ${esc(p.name)} om te tekenen</label>
+    <p class="muted small">Officient gebruikt het e-mailadres dat het zelf van ${esc(p.name)} heeft.${c.signature_requested_at ? ` Er werd al gevraagd op ${fmt.short(c.signature_requested_at)}; opnieuw vragen stuurt een nieuwe mail.` : ''}</p>
+    <p class="form-error" id="cts-err"></p>
+    <div class="form-actions"><button type="button" data-close>Annuleren</button><button type="button" class="primary" id="cts-go">${c.officient_sent_at ? 'Versturen' : 'Naar Officient'}</button></div>`, d => {
+    const go = $('#cts-go', d);
+    go.addEventListener('click', () => busy(go, async () => {
+      const sign = $('#cts-sign', d).checked;
+      if (c.officient_sent_at && !sign) { modal.close(); return; }
+      const res = await officientCall({ action: 'contract', contract: c.id, sign });
+      modal.close();
+      if (res.signature_error) toast(`In Officient gezet, maar ondertekenen lukte niet: ${res.signature_error}`, 'error');
+      else toast(sign ? `In Officient gezet. ${p.name} krijgt een mail om te tekenen.` : 'In Officient gezet.');
+      renderView();
+    }).catch(e => { $('#cts-err', d).textContent = e.message; }));
+  });
+}
+
+// The hours planned for the contract's period into Officient's calendar, after a look.
+function contractHoursModal(p) {
+  const c = p.contract;
+  const dayName = date => fmt.day(new Date(date + 'T00:00'));
+  modal.open(`
+    <h2 id="modal-title">Uren in Officient · ${esc(p.name)}</h2>
+    <p>De app zet per dag de geplande uren in de kalender van Officient, van ${fmt.short(c.starts_on)} tot ${fmt.short(c.ends_on)}: de uren van de shiften, en 0 op de andere dagen. Feestdagen en afwezigheden blijven zoals ze zijn. Na de maand past <strong>Naar Officient sturen</strong> (bij Overzicht) ze aan aan wat geklokt werd.</p>
+    <div id="cth-plan"><p class="muted">Officient wordt gelezen…</p></div>
+    <p class="form-error" id="cth-err"></p>
+    <div class="form-actions"><button type="button" data-close>Annuleren</button><button type="button" class="primary" id="cth-go" disabled>In Officient zetten</button></div>`, async d => {
+    const out = $('#cth-plan', d), go = $('#cth-go', d);
+    let plan;
+    try { plan = await officientCall({ action: 'contract_hours', contract: c.id, dry: true }); }
+    catch (e) { out.innerHTML = `<p class="hint bad">${esc(e.message)}</p>`; return; }
+    const sets = plan.steps.filter(x => x.action === 'set'), skips = plan.steps.filter(x => x.action === 'skip');
+    if (!sets.length) {
+      out.innerHTML = `<p class="hint info">Officient heeft de geplande uren al.</p>${skips.length ? `<p class="muted small">Niet aangepast: ${skips.map(x => esc(dayName(x.date))).join(', ')}.</p>` : ''}`;
+      return;
+    }
+    out.innerHTML = `<details open><summary>${plural(sets.length, 'dag', 'dagen')} aanpassen</summary><ul class="plain-list">${plan.steps.map(x =>
+      `<li>${esc(dayName(x.date))}: ${x.action === 'set' ? `${fmt.hours2(x.planned)} u <span class="muted">(nu ${fmt.hours2(x.before)})</span>`
+        : `<span class="pill warn">niet aangepast</span> ${esc(x.why === 'holiday' ? holidayLabel(x.date) : x.why)}, gepland ${fmt.hours2(x.planned)} u`}</li>`).join('')}</ul></details>`;
+    go.disabled = false;
+    go.addEventListener('click', () => busy(go, async () => {
+      const res = await officientCall({ action: 'contract_hours', contract: c.id });
+      if (res.failed.length) {
+        const why = new Map();
+        for (const f of res.failed) why.set(offReason(f.reason), [...(why.get(offReason(f.reason)) || []), f.date]);
+        out.innerHTML = `<div class="hint bad"><strong>Officient weigerde ${plural(res.failed.length, 'dag', 'dagen')}</strong><ul class="warn-list">${[...why].map(([r, dates]) =>
+          `<li>${esc(r)}: ${dates.map(x => esc(dayName(x))).join(', ')}</li>`).join('')}</ul></div>${res.done ? `<p>${plural(res.done, 'dag', 'dagen')} wel aangepast.</p>` : ''}`;
+        go.hidden = true;
+        renderView();
+        return;
+      }
+      modal.close();
+      toast(`Geplande uren van ${p.name} in Officient gezet (${plural(res.done, 'dag', 'dagen')}).`);
+      renderView();
+    }).catch(e => { $('#cth-err', d).textContent = e.message; }));
+  }, { wide: true });
 }
 
 /* ------------------------------------------------------------ payslips */
@@ -3308,7 +3564,7 @@ const officientCall = body => rpc('officient', { token: S.token, ...body }, { au
 const OFFICIENT_RETURN = 'prikklok.officient';
 const OFFICIENT_STATE = 'prikklok.officient.state';
 const OFFICIENT_SCOPES = ['basics:read', 'personal.info:read', 'wages:read', 'weekly.schedules:read', 'contracts:read', 'documents.read',
-  'calendar:read', 'calendar:write'];
+  'calendar:read', 'calendar:write', 'contracts.write'];
 
 // Officient sends the manager back to the app with ?code=…&state=… (or an
 // error); keep it until the app has signed in, and clean up the address. If
@@ -3379,7 +3635,7 @@ function officientCard(o, link) {
     <form id="off-form" novalidate>
       <ol class="plain-list off-steps">
         <li>Meld je aan in Officient als beheerder. Klik rechtsboven op je avatar en dan op <a href="https://${esc(host)}/developer" target="_blank" rel="noopener">Developers</a>.</li>
-        <li>Maak een <strong>client app</strong>, bv. “Prikklok”. Geef deze rechten: <code>${OFFICIENT_SCOPES.join('</code>, <code>')}</code>. Alles is lezen, behalve <code>calendar:write</code>: daarmee kan de app de geklokte uren in de Officient-kalender zetten, pas als jij dat doet.</li>
+        <li>Maak een <strong>client app</strong>, bv. “Prikklok”. Geef deze rechten: <code>${OFFICIENT_SCOPES.join('</code>, <code>')}</code>. Alles is lezen, behalve <code>calendar:write</code> en <code>contracts.write</code>: daarmee zet de app de uren in de Officient-kalender en de studentencontracten bij de contracten, pas als jij dat doet.</li>
         <li>Vul als <strong>callback-URL</strong> in: <span class="copybox off-callback"><code id="off-cb">${esc(callback)}</code><button type="button" class="sm" id="off-copy">Kopiëren</button></span></li>
         <li>Kopieer de <strong>client ID</strong> en de <strong>client secret</strong> van die app hieronder.</li>
       </ol>

@@ -133,6 +133,11 @@ input[type="checkbox"] { width: 20px; height: 20px; min-height: 0; accent-color:
 
 .form-grid { display: grid; gap: 14px; grid-template-columns: repeat(auto-fit, minmax(160px, 1fr)); }
 .form-grid .wide { grid-column: 1 / -1; }
+.ct-form { grid-template-columns: repeat(3, minmax(0, 1fr)); }
+.ct-form .span2 { grid-column: span 2; }
+/* a student's row: up to four buttons, so on a phone they go under the name */
+@media (max-width: 760px) { .row.ct-row { grid-template-columns: minmax(0, 1fr); } .row.ct-row .row-actions { justify-content: flex-start; } }
+@media (max-width: 640px) { .ct-form { grid-template-columns: 1fr; } .ct-form .span2 { grid-column: auto; } }
 .form-actions { display: flex; gap: 10px; flex-wrap: wrap; justify-content: flex-end; margin-top: 18px; }
 .form-error { color: var(--bad); font-weight: 600; font-size: .9rem; margin-top: 12px; }
 .form-error:empty { display: none; }

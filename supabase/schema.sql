@@ -22,7 +22,8 @@ create table public.settings (
   timezone          text, -- set from the manager's device; standard shifts use it
   wage_codes        jsonb not null default '{}'::jsonb, -- Securex wage codes per contract type and kind of hours
   require_shift     boolean not null default true, -- staff can only check in during one of their shifts
-  clock_in_early_minutes int not null default 15 check (clock_in_early_minutes between 0 and 120)
+  clock_in_early_minutes int not null default 15 check (clock_in_early_minutes between 0 and 120),
+  contract_info     jsonb not null default '{}'::jsonb -- the employer's details on student contracts (Studentencontracten)
 );
 insert into public.settings (id) values (1);
 
@@ -1461,6 +1462,12 @@ create table public.contracts (
   uploaded_by  uuid references public.staff (id),
   created_at   timestamptz not null default now(),
   archived_at  timestamptz, -- removed; the file itself is cleared
+  -- a student contract the app wrote: what it was made from (kind 'student', function, hours, ...)
+  details      jsonb,
+  officient_contract_id  text,        -- its copy in the person's contracts in Officient
+  officient_sent_at      timestamptz,
+  signature_requested_at timestamptz, -- Officient e-mailed the student to sign it
+  officient_hours_at     timestamptz, -- the planned hours went into Officient's calendar
   check (ends_on is null or starts_on is null or ends_on >= starts_on)
 );
 create index contracts_staff_idx on public.contracts (staff_id);
@@ -2508,6 +2515,207 @@ begin
   v := app_private.current_manager(p_token);
   insert into public.payroll_exports (month, rows, minutes, created_by, kind)
   values (date_trunc('month', p_month)::date, greatest(coalesce(p_rows, 0), 0), greatest(coalesce(p_minutes, 0), 0), v.id, 'officient');
+end $$;
+
+
+-- Student contracts ----------------------------------------------------------
+-- A student works on a contract for a short period (a month). The app writes
+-- it on Securex's model (web/contract.js) from the profile and the planning,
+-- keeps it with the person's contracts, and can put it in Officient to sign,
+-- with the planned hours in Officient's calendar (Edge Function officient).
+
+-- What a student contract needs from the profile and is missing.
+create function app_private.contract_missing(s public.staff) returns json
+language sql stable set search_path = public as $$
+  select coalesce(json_agg(k), '[]'::json) from unnest(array[
+    case when s.birth_date is null then 'birth_date' end,
+    case when coalesce(s.street, '') = '' or coalesce(s.postcode, '') = '' or coalesce(s.city, '') = '' then 'address' end,
+    case when coalesce(s.iban, '') = '' then 'iban' end,
+    case when s.hourly_rate is null then 'hourly_rate' end]) k
+   where k is not null
+$$;
+
+-- One person's shifts in a period, in local time, for the schedule on the contract.
+create function app_private.contract_shifts(p_staff uuid, p_from date, p_to date) returns json
+language sql stable set search_path = public as $$
+  with tz as (select coalesce(timezone, 'UTC') as tz from public.settings where id = 1)
+  select coalesce(json_agg(json_build_object(
+      'date', (sh.starts_at at time zone tz.tz)::date, 'start', to_char(sh.starts_at at time zone tz.tz, 'HH24:MI'),
+      'end', to_char(sh.ends_at at time zone tz.tz, 'HH24:MI'), 'minutes', round(extract(epoch from (sh.ends_at - sh.starts_at)) / 60),
+      'label', sh.label) order by sh.starts_at), '[]'::json)
+    from public.shifts sh, tz
+   where sh.staff_id = p_staff and sh.cancelled_at is null
+     and (sh.starts_at at time zone tz.tz)::date between p_from and p_to
+$$;
+
+-- Minutes planned per day for one person in a period, split at local midnight.
+create function app_private.planned_by_day(p_staff uuid, p_from date, p_to date) returns json
+language sql stable set search_path = public as $$
+  with tz as (select coalesce(timezone, 'UTC') as tz from public.settings where id = 1),
+  b as (select p_from::timestamp at time zone tz.tz as a, (p_to + 1)::timestamp at time zone tz.tz as z, tz.tz from tz),
+  s as (select greatest(sh.starts_at, b.a) at time zone b.tz as li, least(sh.ends_at, b.z) at time zone b.tz as lo
+          from public.shifts sh, b
+         where sh.staff_id = p_staff and sh.cancelled_at is null and sh.ends_at > b.a and sh.starts_at < b.z),
+  d as (select g::date as day, extract(epoch from (least(s.lo, g + interval '1 day') - greatest(s.li, g))) / 60 as minutes
+          from s, generate_series(date_trunc('day', s.li), date_trunc('day', s.lo - interval '1 microsecond'), interval '1 day') g)
+  select coalesce((select json_object_agg(q.day, q.m) from (
+           select day::text as day, round(sum(minutes))::int as m from d group by day having round(sum(minutes)) > 0) q), '{}'::json)
+$$;
+
+-- What a contract was made from, keeping only what the app writes.
+create function app_private.clean_contract_details(p jsonb) returns jsonb
+language sql immutable set search_path = public as $$
+  select jsonb_strip_nulls(jsonb_build_object(
+    'kind', 'student',
+    'function', nullif(app_private.clean_text(p ->> 'function', 80), ''),
+    'tasks', nullif(app_private.clean_text(p ->> 'tasks', 300), ''),
+    'hours', app_private.json_num(p, 'hours'),
+    'regime', case when p ->> 'regime' in ('deeltijds', 'voltijds') then p ->> 'regime' end,
+    'option', case when p ->> 'option' in ('vast', 'vast4', 'vast_variabel', 'variabel') then p ->> 'option' end,
+    'weekly', app_private.json_num(p, 'weekly'),
+    'rate', app_private.json_num(p, 'rate'),
+    'contingent', case when p ->> 'contingent' in ('uren', 'dagen') then p ->> 'contingent' end,
+    'place', nullif(app_private.clean_text(p ->> 'place', 60), ''),
+    'sign_date', case when p ->> 'sign_date' ~ '^\d{4}-\d{2}-\d{2}$' then p ->> 'sign_date' end))
+$$;
+
+-- The students and their contract for one month, with the hours planned.
+create function public.mgr_student_contracts(p_token text, p_month date) returns json
+language plpgsql volatile security definer set search_path = public, extensions as $$
+declare v public.staff; v_month date := date_trunc('month', p_month)::date; v_end date; v_tz text;
+begin
+  v := app_private.current_manager(p_token);
+  if v_month is null then
+    raise exception using message = 'Pick a month.', errcode = 'P0001';
+  end if;
+  v_end := (v_month + interval '1 month' - interval '1 day')::date;
+  select coalesce(timezone, 'UTC') into v_tz from public.settings where id = 1;
+  perform app_private.ensure_template_shifts(v_month::timestamp at time zone v_tz, (v_end + 1)::timestamp at time zone v_tz);
+  return json_build_object('month', v_month, 'info', (select contract_info from public.settings where id = 1),
+    'students', coalesce((select json_agg(json_build_object(
+        'staff_id', st.id, 'name', st.name, 'avatar', st.avatar, 'officient_id', st.officient_id, 'email', st.email,
+        'planned_minutes', coalesce((select sum(round(extract(epoch from (sh.ends_at - sh.starts_at)) / 60)) from public.shifts sh
+                                      where sh.staff_id = st.id and sh.cancelled_at is null
+                                        and (sh.starts_at at time zone v_tz)::date between v_month and v_end), 0),
+        'planned_days', (select count(distinct (sh.starts_at at time zone v_tz)::date) from public.shifts sh
+                          where sh.staff_id = st.id and sh.cancelled_at is null
+                            and (sh.starts_at at time zone v_tz)::date between v_month and v_end),
+        'missing', app_private.contract_missing(st),
+        'contract', (select json_build_object('id', c.id, 'starts_on', c.starts_on, 'ends_on', c.ends_on, 'created_at', c.created_at,
+                              'hours', c.details -> 'hours', 'officient_contract_id', c.officient_contract_id,
+                              'officient_sent_at', c.officient_sent_at, 'signature_requested_at', c.signature_requested_at,
+                              'officient_hours_at', c.officient_hours_at)
+                       from public.contracts c
+                      where c.staff_id = st.id and c.archived_at is null and c.details ->> 'kind' = 'student'
+                        and c.starts_on <= v_end and coalesce(c.ends_on, c.starts_on) >= v_month
+                      order by c.created_at desc limit 1))
+        order by lower(st.name))
+      from public.staff st where st.active and not st.view_only and st.contract_type = 'student'), '[]'::json));
+end $$;
+
+-- Everything to write one student's contract for a period: the profile, the
+-- shifts planned, what the last contract said, and the employer's details.
+create function public.mgr_student_contract_draft(p_token text, p_staff_id uuid, p_from date, p_to date) returns json
+language plpgsql volatile security definer set search_path = public, extensions as $$
+declare v public.staff; s public.staff; v_tz text;
+begin
+  v := app_private.current_manager(p_token);
+  select * into s from public.staff where id = p_staff_id and active and not view_only;
+  if not found then
+    raise exception using message = 'Pick a team member.', errcode = 'P0001';
+  end if;
+  if p_from is null or p_to is null or p_to < p_from then
+    raise exception using message = 'The end date must be after the start date.', errcode = 'P0001';
+  end if;
+  if p_to - p_from > 366 then
+    raise exception using message = 'Pick a shorter period.', errcode = 'P0001';
+  end if;
+  select coalesce(timezone, 'UTC') into v_tz from public.settings where id = 1;
+  perform app_private.ensure_template_shifts(p_from::timestamp at time zone v_tz, (p_to + 1)::timestamp at time zone v_tz);
+  return json_build_object(
+    'student', json_build_object('id', s.id, 'name', s.name, 'birth_date', s.birth_date, 'street', s.street, 'postcode', s.postcode,
+                                 'city', s.city, 'iban', s.iban, 'email', s.email, 'hourly_rate', s.hourly_rate, 'officient_id', s.officient_id),
+    'shifts', app_private.contract_shifts(s.id, p_from, p_to),
+    'missing', app_private.contract_missing(s),
+    'last', (select c.details from public.contracts c
+              where c.staff_id = s.id and c.archived_at is null and c.details ->> 'kind' = 'student'
+              order by c.created_at desc limit 1),
+    'info', (select contract_info from public.settings where id = 1));
+end $$;
+
+-- Keeps a student contract the app wrote (a PDF), with what it was made
+-- from. p_replace: the contract it replaces, for the same person.
+create function public.mgr_save_student_contract(p_token text, p_staff_id uuid, p_from date, p_to date,
+                                                 p_details jsonb, p_data text, p_replace uuid) returns json
+language plpgsql security definer set search_path = public, extensions as $$
+declare v public.staff; s public.staff; v_bytes bytea; v_id uuid;
+begin
+  v := app_private.current_manager(p_token);
+  select * into s from public.staff where id = p_staff_id;
+  if not found then
+    raise exception using message = 'Pick a team member.', errcode = 'P0001';
+  end if;
+  if p_from is null or p_to is null or p_to < p_from then
+    raise exception using message = 'The end date must be after the start date.', errcode = 'P0001';
+  end if;
+  v_bytes := app_private.check_file('application/pdf', p_data);
+  if p_replace is not null then
+    update public.contracts set archived_at = now(), data = null
+     where id = p_replace and staff_id = p_staff_id and archived_at is null and details ->> 'kind' = 'student';
+  end if;
+  insert into public.contracts (staff_id, title, starts_on, ends_on, file_name, content_type, size_bytes, data, uploaded_by, details)
+  values (p_staff_id, 'Studentenovereenkomst ' || to_char(p_from, 'DD/MM') || ' – ' || to_char(p_to, 'DD/MM/YYYY'), p_from, p_to,
+          'studentenovereenkomst-' || trim(both '-' from lower(regexp_replace(s.name, '[^A-Za-z0-9]+', '-', 'g'))) || '-' || to_char(p_from, 'YYYY-MM') || '.pdf',
+          'application/pdf', length(v_bytes), v_bytes, v.id, app_private.clean_contract_details(p_details))
+  returning id into v_id;
+  return json_build_object('ok', true, 'id', v_id);
+end $$;
+
+-- The employer's details on student contracts.
+create function public.mgr_save_contract_info(p_token text, p_info jsonb) returns json
+language plpgsql security definer set search_path = public, extensions as $$
+declare v public.staff;
+begin
+  v := app_private.current_manager(p_token);
+  update public.settings
+     set contract_info = (select coalesce(jsonb_object_agg(k, app_private.clean_text(p_info ->> k, case when k = 'inspection' then 400 else 160 end)), '{}'::jsonb)
+                            from unnest(array['employer', 'employer_address', 'representative', 'work_address', 'notify', 'first_aid',
+                                              'first_aid_kit', 'prevention', 'prevention_phone', 'inspection', 'committee', 'place']) k
+                           where app_private.clean_text(p_info ->> k, 400) <> '')
+   where id = 1;
+  return json_build_object('ok', true, 'info', (select contract_info from public.settings where id = 1));
+end $$;
+
+-- For the Edge Function: a student contract to put in Officient, after the manager check.
+create function app_private.contract_for_officient(p_token text, p_id uuid) returns json
+language plpgsql set search_path = public, extensions as $$
+declare v public.staff; c public.contracts; s public.staff;
+begin
+  v := app_private.current_manager(p_token);
+  select * into c from public.contracts where id = p_id and archived_at is null and data is not null and details ->> 'kind' = 'student';
+  if not found then
+    raise exception using message = 'That contract isn''t available.', errcode = 'P0001';
+  end if;
+  select * into s from public.staff where id = c.staff_id;
+  if s.officient_id is null then
+    raise exception using message = 'This person isn''t linked with Officient yet.', errcode = 'P0001';
+  end if;
+  return json_build_object('id', c.id, 'staff_id', s.id, 'officient_id', s.officient_id, 'name', s.name, 'title', c.title,
+                           'data', encode(c.data, 'base64'), 'starts_on', c.starts_on, 'ends_on', c.ends_on,
+                           'officient_contract_id', c.officient_contract_id);
+end $$;
+
+-- For the Edge Function: what went into Officient for a student contract.
+create function app_private.contract_officient_done(p_id uuid, p_officient_id text, p_signature boolean, p_hours boolean) returns boolean
+language plpgsql set search_path = public as $$
+begin
+  update public.contracts
+     set officient_contract_id = coalesce(nullif(p_officient_id, ''), officient_contract_id),
+         officient_sent_at = case when nullif(p_officient_id, '') is not null then now() else officient_sent_at end,
+         signature_requested_at = case when p_signature then now() else signature_requested_at end,
+         officient_hours_at = case when p_hours then now() else officient_hours_at end
+   where id = p_id;
+  return found;
 end $$;
 
 revoke all on all functions in schema app_private from public, anon, authenticated;

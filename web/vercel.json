@@ -10,7 +10,7 @@
       ]
     },
     {
-      "source": "/(index.html|app.js|avatar.js|loonfiche.js|theme.js|config.js|styles.css)?",
+      "source": "/(index.html|app.js|avatar.js|loonfiche.js|contract.js|theme.js|config.js|styles.css)?",
       "headers": [{ "key": "Cache-Control", "value": "no-cache" }]
     },
     {

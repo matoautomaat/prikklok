@@ -18,11 +18,16 @@
   Cache-Control: no-cache
 /loonfiche.js
   Cache-Control: no-cache
+/contract.js
+  Cache-Control: no-cache
 /theme.js
   Cache-Control: no-cache
 /vendor/pdfjs/pdf.min.mjs
   Content-Type: text/javascript; charset=utf-8
   Cache-Control: public, max-age=604800
 /vendor/pdfjs/pdf.worker.min.mjs
+  Content-Type: text/javascript; charset=utf-8
+  Cache-Control: public, max-age=604800
+/vendor/pdf-lib/pdf-lib.esm.min.js
   Content-Type: text/javascript; charset=utf-8
   Cache-Control: public, max-age=604800
