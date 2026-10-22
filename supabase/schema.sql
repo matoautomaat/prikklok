@@ -1999,6 +1999,12 @@ begin
   if not found then
     return json_build_object('status', 'unmatched', 'name', v_name);
   end if;
+  -- a second Officient record for someone already handled in this run (an
+  -- earlier employment, say): only its documents count, the link and the
+  -- details stay with the first
+  if s.officient_id is distinct from v_oid and coalesce(p -> 'handled', '[]'::jsonb) ? s.id::text then
+    return json_build_object('status', 'matched', 'staff_id', s.id, 'name', s.name, 'changed', '{}'::text[], 'new_link', false);
+  end if;
   begin v_birth := nullif(p ->> 'birthdate', '')::date; exception when others then v_birth := null; end;
   begin v_start := nullif(p -> 'employment' ->> 'first_employment_date', '')::date; exception when others then v_start := null; end;
   begin v_rate := nullif(w ->> 'rate', '')::numeric; exception when others then v_rate := null; end;

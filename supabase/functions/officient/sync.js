@@ -64,7 +64,10 @@ export function makeOfficient({ db: query, fetch, api = OFFICIENT_API, wait = ms
     const report = { at: new Date().toISOString(), people: 0, matched: 0, linked: 0, updated: [], unmatched: [],
                      payslips: [], already: 0, no_month: 0, document_types: {}, more: false, skipped: 0, fields: {} };
     let downloads = 0;
-    const people = await pages(access, '/people/list');
+    // current records before archived ones, so a person's earlier employment
+    // never takes the link or the details from the current one
+    const people = (await pages(access, '/people/list')).sort((a, b) => Number(!!a.archived) - Number(!!b.archived));
+    const handled = [];
     report.people = people.length;
     // which fields Officient sends (names only), to see what to expect
     if (people[0]) report.fields.list = Object.keys(people[0]).slice(0, 40);
@@ -75,10 +78,11 @@ export function makeOfficient({ db: query, fetch, api = OFFICIENT_API, wait = ms
       const wage = await get(access, `/wages/${id}/current`);
       if (!report.fields.detail && detail !== p) report.fields.detail = Object.keys(detail).slice(0, 60);
       if (!report.fields.wage && wage) report.fields.wage = Object.keys(wage).slice(0, 40);
-      const r = await db('select app_private.officient_apply_person($1::text::jsonb) as r', [JSON.stringify({ ...p, ...detail, id, wage })]);
+      const r = await db('select app_private.officient_apply_person($1::text::jsonb) as r', [JSON.stringify({ ...p, ...detail, id, wage, handled })]);
       if (r && r.status === 'unmatched') { report.unmatched.push(r.name); continue; }
       if (!r || r.status !== 'matched') { report.skipped++; continue; }
       report.matched++;
+      if (!handled.includes(r.staff_id)) handled.push(r.staff_id);
       if (r.new_link) report.linked++;
       if (r.changed.length) report.updated.push({ name: r.name, changed: r.changed });
       for (const d of await pages(access, `/documents/employee/${id}/list`)) {
