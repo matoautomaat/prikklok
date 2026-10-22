@@ -66,6 +66,7 @@ const SERVER_NL = {
   'Pick a month.': 'Kies een maand.',
   'Pick a month in the next three months.': 'Kies een maand in de komende drie maanden.',
   'Pick who to send.': 'Duid aan voor wie je de uren stuurt.',
+  'Officient has no absence type "Gewettigde Afwezigheid" (Securex code GA) this year.': 'Officient heeft dit jaar geen afwezigheid "Gewettigde Afwezigheid" (Securex-code GA). Kijk de soorten na in Officient.',
   'That month has passed.': 'Die maand is al voorbij.',
   'Pick a role.': 'Kies een rol.',
   'Pick a shorter date range.': 'Kies een kortere periode.',
@@ -1762,7 +1763,7 @@ function securexCard(rep, m, monthInfo) {
       </div>
       <div class="off-compare">
         <div class="card-head"><h3>Vergelijken met Officient</h3><button class="sm" id="off-cal">Vergelijken</button></div>
-        <p class="muted small">Officient geeft zijn kalender door aan Securex. Hier zie je wat Officient voor deze maand heeft staan, per persoon en per dag (het weekrooster, min afwezigheden, plus overuren), naast de geklokte uren. Er wordt niets veranderd, niet in de app en niet in Officient.</p>
+        <p class="muted small">Officient geeft zijn kalender door aan Securex. Hier zie je wat Officient voor deze maand telt, per persoon en per dag, naast de geklokte uren. Vergelijken verandert niets; pas met <strong>Naar Officient sturen</strong> past de app Officient aan, na een overzicht van elke wijziging.</p>
         <div id="off-cal-out"></div>
       </div>
     </section>`,
@@ -1772,6 +1773,7 @@ function securexCard(rep, m, monthInfo) {
 // Officient's calendar for the month next to the hours clocked, per person and day.
 const OFF_KINDS = { time_off: 'afwezig', overtime: 'extra uren' };
 const HOURLY = ['student', 'flexi', 'extra'];
+const holidayLabel = date => holidaysBE(+date.slice(0, 4)).get(date) || 'Feestdag';
 function officientCompare(cal, rows) {
   const name = id => ((S.staff || []).find(p => p.id === id) || rows.find(x => x.staff_id === id) || {}).name || '?';
   const app = new Map();
@@ -1786,12 +1788,12 @@ function officientCompare(cal, rows) {
     const mine = app.get(p.staff_id) || new Map();
     const days = [...new Set([...off.keys(), ...mine.keys()])].sort().map(date => {
       const d = off.get(date);
-      return { date, app: mine.get(date) || 0, officient: d ? Math.max(0, d.scheduled - d.off + d.extra) : 0, events: d ? d.events : [] };
+      return { date, app: mine.get(date) || 0, officient: d ? (d.net ?? Math.max(0, d.scheduled - d.off + d.extra)) : 0,
+               events: d ? [...(d.holiday ? [holidayLabel(date)] : []), ...d.events] : [] };
     });
     const sum = k => days.reduce((a, d) => a + d[k], 0);
     return { id: p.staff_id, name: name(p.staff_id), days, app: sum('app'), officient: sum('officient'),
-             differ: days.filter(d => Math.abs(d.app - d.officient) >= 15),
-             clocked: days.filter(d => d.app > 0).length, unclocked: days.filter(d => d.officient > 0 && !d.app).length };
+             differ: days.filter(d => Math.abs(d.app - d.officient) >= 15) };
   }).filter(p => p.app || p.officient).sort((a, b) => a.name.localeCompare(b.name, 'nl'));
   officientCompare.people = people;
   const unlinked = [...app.keys()].filter(id => !linked.has(id)).map(name);
@@ -1807,52 +1809,113 @@ function officientCompare(cal, rows) {
           `<li>${esc(dayName(d.date))}: geklokt ${fmt.hours2(d.app)} · Officient ${fmt.hours2(d.officient)}${d.events.length ? ` <span class="muted">(${esc(d.events.join(', '))})</span>` : ''}</li>`).join('')}</ul></details>`
           : '<span class="muted">Geen</span>'}</td></tr>`).join('')}</tbody>
     </table></div>
-    <p class="muted small" style="margin-top:8px">Uren in decimalen. "In Officient" is per dag het weekrooster, min afwezigheden, plus overuren.</p>
-    ${people.some(p => p.clocked) ? '<div class="form-actions"><button class="primary sm" id="off-push">Naar Officient sturen…</button></div>' : ''}`
+    <p class="muted small" style="margin-top:8px">Uren in decimalen. "In Officient" is per dag het rooster, min afwezigheden, plus overuren. Een feestdag telt als 0: betaald, maar niet gewerkt.</p>
+    <div class="form-actions"><button class="primary sm" id="off-push">Naar Officient sturen…</button></div>`
       : '<p class="empty">Geen uren in Officient of in de app voor deze maand.</p>'}
     ${unlinked.length ? `<p class="hint warn">Geklokt, maar niet gekoppeld met Officient: ${unlinked.map(esc).join(', ')}.</p>` : ''}
     ${cal.types.length ? `<p class="muted small">Soorten in je Officient-kalender: ${cal.types.filter(t => t.active).map(t =>
       `${esc(t.name)} (${OFF_KINDS[t.interpretation] || esc(t.interpretation || '?')}${t.securex ? `, Securex-code ${esc(t.securex)}` : ''})`).join(', ')}.</p>` : ''}`;
 }
 
-// Write the month's clocked hours into Officient, after a look at what goes.
+// Officient's reasons for refusing a day, in Dutch where we know them.
+const offReason = r => /lock/i.test(r) ? 'de maand is al verwerkt en vergrendeld'
+  : /no contract is active/i.test(r) ? 'geen actief contract op die dag'
+  : /too much time off/i.test(r) ? 'er staat al te veel afwezigheid' : r;
+
+// Make Officient count the month's clocked hours, the way the manager did by
+// hand, after a look at every change.
 function pushHoursModal(m, people, sx, again) {
   const staff = id => (S.staff || []).find(p => p.id === id) || {};
-  const list = people.filter(p => p.clocked || p.unclocked);
+  const ym = toDateInput(m).slice(0, 7);
+  const dayName = date => fmt.day(new Date(date + 'T00:00'));
   const warn = [];
-  if (addMonths(m, 1) > now()) warn.push('De maand is nog niet voorbij. Je kan later opnieuw sturen; dan overschrijft de app dezelfde dagen.');
+  if (addMonths(m, 1) > now()) warn.push('De maand is nog niet voorbij. Je kan later opnieuw sturen; de app past dan aan wat veranderde, niets dubbel.');
   if (sx.pending) warn.push(`${plural(sx.pending, 'aanpassing wacht', 'aanpassingen wachten')} nog bij Aanvragen. Die uren gaan pas mee als je ze goedkeurt.`);
   if (sx.open) warn.push(`${plural(sx.open, 'persoon is', 'mensen zijn')} nog ingeklokt. Die shift gaat pas mee na het uitklokken.`);
   modal.open(`
-    <h2 id="modal-title">Uren naar Officient sturen · ${esc(fmt.month(m))}</h2>
-    <p>De app zet per dag de geklokte uren in de kalender van Officient, als gewerkte tijd. Daarna verstuur jij in Officient de prestaties naar Securex, zoals nu. Een maand die Securex al verwerkte, laat Officient niet meer aanpassen.</p>
+    <h2 id="modal-title">Uren naar Officient · ${esc(fmt.month(m))}</h2>
+    <p>Officient geeft zijn kalender door aan Securex. De app past die aan zoals jij dat nu met de hand doet, maar per dag: werkte iemand minder dan ingeroosterd, dan komt er voor de rest een <strong>Gewettigde Afwezigheid</strong>; werkte iemand meer, dan krijgt die dag meer uren. Feestdagen, verlof en ziekte blijven zoals ze zijn. Daarna verstuur jij in Officient de prestaties naar Securex, zoals nu.</p>
     ${warn.length ? `<div class="hint warn"><ul class="warn-list">${warn.map(w => `<li>${w}</li>`).join('')}</ul></div>` : ''}
-    <div class="table-wrap"><table class="push-table">
-      <thead><tr><th>Sturen</th><th>Naam</th><th class="num">Dagen</th><th class="num">Uren</th><th>Niet ingeklokt</th></tr></thead>
-      <tbody>${list.map(p => `<tr data-push="${p.id}">
-        <td><input type="checkbox" class="push-on" ${p.clocked ? 'checked' : ''} aria-label="${esc(p.name)} sturen"></td>
-        <td><strong>${esc(p.name)}</strong>${staff(p.id).contract_type ? ` <span class="muted small">${CONTRACT_SHORT[staff(p.id).contract_type]}</span>` : ''}</td>
-        <td class="num">${p.clocked}</td><td class="num">${fmt.hours2(p.app)}</td>
-        <td>${p.unclocked ? `<label class="check"><input type="checkbox" class="push-zero" ${HOURLY.includes(staff(p.id).contract_type) ? 'checked' : ''}> ${plural(p.unclocked, 'dag', 'dagen')} op 0</label>`
-          : '<span class="muted">geen</span>'}</td></tr>`).join('')}</tbody>
-    </table></div>
-    <p class="muted small">Op 0 zetten: dagen waarop Officient iemand ingeroosterd heeft, maar die niet ingeklokt heeft. Voor wie per uur betaald wordt, betekent dat: die dag niet gewerkt. Laat het uit als iemand vergat in te klokken.</p>
+    <div id="push-plan"><p class="muted">Officient wordt gelezen…</p></div>
     <p class="form-error" id="push-err"></p>
-    <div class="form-actions"><button type="button" data-close>Annuleren</button><button type="button" class="primary" id="push-go">Versturen</button></div>`, d => {
-    const go = $('#push-go', d);
+    <div class="form-actions"><button type="button" data-close>Annuleren</button><button type="button" class="primary" id="push-go" disabled>Versturen</button></div>`, async d => {
+    const out = $('#push-plan', d), go = $('#push-go', d);
+    let res;
+    try {
+      res = await officientCall({ action: 'hours', dry: true, month: ym, people: people.map(p => ({ staff_id: p.id, zero: true })) });
+    } catch (e) { out.innerHTML = `<p class="hint bad">${esc(e.message)}</p>`; return; }
+    const absence = res.absence || 'Gewettigde Afwezigheid';
+    const before = new Map(people.map(p => [p.id, p.officient]));
+    const list = res.people.filter(p => p.steps.length);
+    if (!list.length) { out.innerHTML = '<p class="hint info">Officient telt al wat er geklokt werd. Er is niets te veranderen.</p>'; return; }
+    const line = s => `<li>${esc(dayName(s.date))}: geklokt ${fmt.hours2(s.worked)} · Officient ${fmt.hours2(s.before)} → ${
+      s.action === 'raise' ? `de dag krijgt ${fmt.hours2(s.worked)} u`
+      : s.action === 'absent' ? `${fmt.hours2(s.minutes)} u ${esc(absence)}`
+      : s.action === 'clear' ? `${esc(absence)} eraf`
+      : `<span class="pill warn">niet aangepast</span> ${esc(s.why === 'holiday' ? holidayLabel(s.date) : s.why)}, kijk dit zelf na`}</li>`;
+    const active = (p, zero) => zero ? p.steps : p.steps.filter(s => !s.unclocked);
+    const summary = steps => {
+      const n = a => steps.filter(s => s.action === a).length, parts = [];
+      if (n('raise')) parts.push(`${plural(n('raise'), 'dag', 'dagen')} meer uren`);
+      if (n('absent')) parts.push(`${plural(n('absent'), 'dag', 'dagen')} afwezig`);
+      if (n('clear')) parts.push(`${plural(n('clear'), 'afwezigheid', 'afwezigheden')} eraf`);
+      if (n('skip')) parts.push(`${n('skip')} niet aangepast`);
+      return parts.length ? `<details><summary>${parts.join(' · ')}</summary><ul class="plain-list">${steps.map(line).join('')}</ul></details>` : '<span class="muted">Klopt al</span>';
+    };
+    out.innerHTML = `<div class="table-wrap"><table class="push-table">
+      <thead><tr><th>Sturen</th><th>Naam</th><th class="num">Geklokt</th><th class="num">Officient nu</th><th class="num">Daarna</th></tr></thead>
+      <tbody>${list.map(p => {
+        const unclocked = p.steps.filter(s => s.unclocked).length;
+        // the app only knows what was clocked: someone who hardly clocked would turn up absent everywhere
+        const cmp = people.find(x => x.id === p.staff_id) || { days: [] };
+        const clocked = cmp.days.filter(x => x.app > 0).length, planned = cmp.days.filter(x => x.officient > 0).length;
+        p.none = !clocked;
+        p.few = clocked && clocked < planned / 2;
+        return `<tr data-push="${p.staff_id}">
+        <td><input type="checkbox" class="push-on" aria-label="${esc(p.name)} sturen"></td>
+        <td><strong>${esc(p.name)}</strong>${p.contract_type ? ` <span class="muted small">${CONTRACT_SHORT[p.contract_type]}</span>` : ''}
+          ${p.none ? '<div class="hint warn small">Niets geklokt in de app deze maand: de app weet niet wat er gewerkt werd.</div>'
+            : unclocked ? `<label class="check small"><input type="checkbox" class="push-zero" ${HOURLY.includes(p.contract_type || staff(p.staff_id).contract_type) && !p.few ? 'checked' : ''}> ${plural(unclocked, 'dag', 'dagen')} zonder inklokken: afwezig</label>
+              ${p.few ? `<div class="hint warn small">Maar ${plural(clocked, 'dag', 'dagen')} geklokt, tegenover ${planned} ingeroosterd. Zet afwezig alleen aan als dat klopt.</div>` : ''}` : ''}</td>
+        <td class="num" data-label="Geklokt">${fmt.hours2(people.find(x => x.id === p.staff_id)?.app || 0)}</td>
+        <td class="num" data-label="Officient nu">${fmt.hours2(before.get(p.staff_id) || 0)}</td>
+        <td class="num push-after" data-label="Daarna"></td></tr>
+        <tr class="push-detail" data-detail="${p.staff_id}"><td colspan="5" class="push-what"></td></tr>`; }).join('')}</tbody>
+    </table></div>
+    <p class="muted small">Zonder inklokken: dagen waarop Officient iemand ingeroosterd heeft, zonder geklokte uren. Aan voor wie per uur werkt (die dag niet gewerkt); laat het uit als iemand vergat in te klokken.</p>`;
+    const update = tr => {
+      const p = list.find(x => x.staff_id === tr.dataset.push), zero = !!($('.push-zero', tr) || {}).checked;
+      const steps = p.none ? [] : active(p, zero), real = steps.filter(s => s.action !== 'skip');
+      $('.push-after', tr).textContent = fmt.hours2((before.get(p.staff_id) || 0) + real.reduce((a, s) => a + s.worked - s.before, 0));
+      $(`tr[data-detail="${p.staff_id}"] .push-what`, d).innerHTML = summary(steps);
+      const on = $('.push-on', tr);
+      on.disabled = !real.length;
+      if (!real.length) on.checked = false;
+      return real.length;
+    };
+    for (const tr of $$('tr[data-push]', d)) {
+      $('.push-on', tr).checked = update(tr) > 0;
+      const zero = $('.push-zero', tr);
+      if (zero) zero.addEventListener('change', () => { $('.push-on', tr).checked = update(tr) > 0; });
+    }
+    go.disabled = false;
     go.addEventListener('click', () => {
       const chosen = $$('tr[data-push]', d).filter(tr => $('.push-on', tr).checked)
         .map(tr => ({ staff_id: tr.dataset.push, zero: !!($('.push-zero', tr) || {}).checked }));
       if (!chosen.length) { $('#push-err', d).textContent = 'Duid minstens één persoon aan.'; return; }
       busy(go, async () => {
-        const r = await officientCall({ action: 'hours', month: toDateInput(m).slice(0, 7), people: chosen });
-        const ok = r.people.filter(p => p.written), bad = r.people.filter(p => p.failed.length);
+        const r = await officientCall({ action: 'hours', month: ym, people: chosen });
+        const ok = r.people.filter(p => p.done), bad = r.people.filter(p => p.failed.length);
         modal.close();
-        toast(ok.length ? `In Officient gezet: ${ok.map(p => `${p.name} (${plural(p.written, 'dag', 'dagen')})`).join(', ')}.` : 'Er werd niets veranderd.');
-        again(bad.length ? `<p class="hint bad">Officient weigerde ${bad.map(p => `${esc(p.name)}: ${plural(p.failed.length, 'dag', 'dagen')}${p.error ? ` (${esc(p.error)})` : ''}`).join('; ')}.</p>` : '');
+        toast(ok.length ? `In Officient aangepast: ${ok.map(p => `${p.name} (${plural(p.done, 'dag', 'dagen')})`).join(', ')}.` : 'Er werd niets veranderd.');
+        again(bad.length ? `<div class="hint bad"><strong>Officient weigerde</strong><ul class="warn-list">${bad.map(p => {
+          const why = new Map();
+          for (const f of p.failed) why.set(offReason(f.reason), [...(why.get(offReason(f.reason)) || []), f.date]);
+          return `<li>${esc(p.name)}: ${[...why].map(([r, dates]) => `${esc(r)} (${dates.map(x => esc(dayName(x))).join(', ')})`).join('; ')}</li>`;
+        }).join('')}</ul></div>` : '');
       }).catch(e => { $('#push-err', d).textContent = e.message; });
     });
-  });
+  }, { wide: true });
 }
 
 function bindSecurex(el, m, sx) {

@@ -160,77 +160,151 @@ export function makeOfficient({ db: query, fetch, readPayslip, api = OFFICIENT_A
     return report;
   }
 
+  // The kinds of events in Officient's calendar for a year, and the one for
+  // "Gewettigde Afwezigheid" (Securex code GA): what the app puts on scheduled
+  // time that wasn't worked, as the manager did by hand.
+  async function eventTypes(access, year) {
+    const types = ((await get(access, `/calendar/events/types/${year}`)) || []).map(t => ({
+      id: t.id, name: t.alias || t.name, interpretation: t.interpretation, active: !!Number(t.active),
+      securex: (t.integrations || []).filter(i => /securex/i.test(i.app || '')).map(i => i.code).join(', ') }));
+    const ga = types.find(t => t.active && t.securex.split(', ').includes('GA'))
+            || types.find(t => t.active && /gewettigde afwezigheid/i.test(t.name));
+    return { types, ga };
+  }
+
+  // One person's month in Officient, per day: the scheduled time, time off
+  // (Gewettigde Afwezigheid apart from the rest), overtime, a public holiday,
+  // and what Officient counts as worked (net). A holiday is paid, not worked.
+  async function monthDays(access, officientId, year, mon, ga) {
+    const cal = await get(access, `/calendar/${officientId}/${year}/${mon}`);
+    const holidays = new Map(((cal && cal.company_days_off) || []).map(h => [h.date, String(h.name || 'holiday')]));
+    const days = new Map();
+    for (const d of (cal && cal.time_off) || []) {
+      const scheduled = Number(d.scheduled_minutes) || 0;
+      const day = { date: d.date, scheduled, off: 0, extra: 0, other: 0, full_other: false, ga: null, events: [],
+                    holiday: holidays.get(d.date) || null };
+      for (const e of d.events || []) {
+        if (e.status && e.status !== 'approved') continue;
+        const all = e.duration_minutes === 'all_day', mins = all ? scheduled : Number(e.duration_minutes) || 0;
+        if (e.name) day.events.push(e.name);
+        if (e.type === 'overtime') { day.extra += mins; continue; }
+        if (e.type !== 'time_off' || Number(e.working)) continue;
+        day.off += mins;
+        if (ga && !day.ga && (String(e.custom_day_off_type_id) === String(ga.id) || e.name === ga.name)) day.ga = { id: e.id, minutes: mins };
+        else { day.other += mins; if (all) day.full_other = true; }
+      }
+      day.net = day.holiday ? day.extra : Math.max(0, scheduled - day.off) + day.extra;
+      days.set(d.date, day);
+    }
+    return days;
+  }
+
   // What Officient's calendar holds for one month (YYYY-MM), per linked person
-  // and day: the scheduled time, time off and overtime. Read only: the app
-  // compares it with the hours clocked.
+  // and day. Read only: the app compares it with the hours clocked.
   async function calendar(access, month) {
     const [year, mon] = month.split('-').map(Number);
-    const out = { month, people: [], types: [] };
-    try {
-      for (const t of (await get(access, `/calendar/events/types/${year}`)) || []) {
-        out.types.push({ name: t.alias || t.name, interpretation: t.interpretation, active: !!Number(t.active),
-                         securex: (t.integrations || []).filter(i => /securex/i.test(i.app || '')).map(i => i.code).join(', ') });
-      }
-      const people = await db(`select coalesce(json_agg(json_build_object('staff_id', id, 'officient_id', officient_id)), '[]'::json) as r
-                                 from public.staff where officient_id is not null`, []);
-      for (const p of people) {
-        const cal = await get(access, `/calendar/${p.officient_id}/${year}/${mon}`);
-        const days = [];
-        for (const d of (cal && cal.time_off) || []) {
-          const scheduled = Number(d.scheduled_minutes) || 0;
-          let off = 0, extra = 0;
-          const names = [];
-          for (const e of d.events || []) {
-            if (e.status && e.status !== 'approved') continue;
-            const mins = e.duration_minutes === 'all_day' ? scheduled : Number(e.duration_minutes) || 0;
-            if (e.type === 'overtime') extra += mins;
-            else if (e.type === 'time_off' && !Number(e.working)) off += mins;
-            if (e.name) names.push(e.name);
-          }
-          if (scheduled || off || extra) days.push({ date: d.date, scheduled, off, extra, events: names });
-        }
-        out.people.push({ staff_id: p.staff_id, days });
-      }
-    } catch (e) {
-      if (/answered 40[13]/.test(e.message)) throw new Error(NO_CALENDAR);
-      throw e;
+    const { types, ga } = await eventTypes(access, year);
+    const out = { month, people: [], types, absence: ga ? ga.name : null };
+    const people = await db(`select coalesce(json_agg(json_build_object('staff_id', id, 'officient_id', officient_id)), '[]'::json) as r
+                               from public.staff where officient_id is not null`, []);
+    for (const p of people) {
+      const days = [...(await monthDays(access, p.officient_id, year, mon, ga)).values()]
+        .filter(d => d.scheduled || d.off || d.extra)
+        .map(({ date, scheduled, off, extra, events, holiday, net }) => ({ date, scheduled, off, extra, events, holiday, net }));
+      out.people.push({ staff_id: p.staff_id, days });
     }
     return out;
   }
 
-  // Writes a month's clocked hours into Officient's calendar as the time
-  // worked per day. people: [{ staff_id, zero }]: every day the person
-  // clocked, and with zero also each day Officient has them scheduled but
-  // they didn't clock, as 0. The hours come from the database, not the app.
-  async function pushHours(access, month, people, appToken) {
+  // The changes that make Officient count the minutes clocked per day
+  // (clocked: { date: minutes }), the way the manager did by hand: less than
+  // Officient counts without Gewettigde Afwezigheid: that absence for the
+  // rest; more: the day's time worked raised (and the absence taken off).
+  // Days not clocked only with zero. Holidays and days fully off for another
+  // reason (vacation, sick) are never changed: they stay paid as they are,
+  // and time clocked on them is listed for the manager to look at.
+  function plan(days, clocked, zero) {
+    const out = [];
+    for (const date of [...new Set([...days.keys(), ...Object.keys(clocked)])].sort()) {
+      const d = days.get(date) || { scheduled: 0, other: 0, extra: 0, full_other: false, ga: null, holiday: null, net: 0, events: [] };
+      const worked = clocked[date] || 0;
+      if (!worked && !(d.scheduled || d.ga)) continue;
+      const step = { date, worked, before: d.net, unclocked: !worked };
+      if (d.holiday || d.full_other) {
+        if (worked) out.push({ ...step, action: 'skip', why: d.holiday ? 'holiday' : d.events.join(', ') });
+        continue;
+      }
+      const base = Math.max(0, d.scheduled - d.other) + d.extra;
+      if (worked > base) {
+        out.push({ ...step, action: 'raise', minutes: worked + d.other - d.extra, ga: d.ga && d.ga.id });
+        continue;
+      }
+      const absent = base - worked;
+      if (absent === (d.ga ? d.ga.minutes : 0)) continue;
+      out.push(absent ? { ...step, action: 'absent', minutes: absent, all: absent === d.scheduled && !d.other && !d.extra }
+                      : { ...step, action: 'clear', ga: d.ga.id });
+    }
+    return zero ? out : out.filter(s => !s.unclocked);
+  }
+
+  // Makes Officient's calendar count a month's clocked hours, for people:
+  // [{ staff_id, zero }]. With dry, only says what it would change (all
+  // days, with the ones not clocked marked). The hours come from the
+  // database, not from the app.
+  async function pushHours(access, month, people, appToken, dry) {
     const [year, mon] = month.split('-').map(Number);
     const clocked = await db('select app_private.clocked_by_day($1::date) as r', [`${month}-01`]);
-    const out = { month, people: [] };
-    let days = 0, minutes = 0;
+    const { ga } = await eventTypes(access, year);
+    if (!ga) throw new Error('Officient has no absence type "Gewettigde Afwezigheid" (Securex code GA) this year.');
+    const out = { month, absence: ga.name, people: [] };
+    let changed = 0, minutes = 0, failures = 0;
     for (const want of people) {
       const c = clocked.find(x => x.staff_id === (want && want.staff_id));
-      if (!c) continue;
-      const entries = Object.entries(c.days).map(([date, m]) => ({ date, duration_minutes: m }));
-      let zeroed = 0;
-      if (want.zero) {
-        const cal = await get(access, `/calendar/${c.officient_id}/${year}/${mon}`).catch(e => {
-          throw /answered 40[13]/.test(e.message) ? new Error(NO_CALENDAR) : e;
-        });
-        for (const d of (cal && cal.time_off) || []) {
-          if (Number(d.scheduled_minutes) > 0 && !(d.date in c.days)) { entries.push({ date: d.date, duration_minutes: 0 }); zeroed++; }
+      // nothing clocked: the app doesn't know what was worked, so it changes nothing
+      if (!c || (!dry && !Object.keys(c.days).length)) continue;
+      const steps = plan(await monthDays(access, c.officient_id, year, mon, ga), c.days, dry || !!want.zero);
+      const person = { staff_id: c.staff_id, name: c.name, contract_type: c.contract_type, steps, done: 0, failed: [] };
+      out.people.push(person);
+      if (dry) continue;
+      // a month Securex already processed is locked: once Officient says so, the rest of the person's days are not tried
+      let locked = null;
+      const call = async (s, method, path, body) => {
+        const r = locked ? { error: locked } : await send(access, method, path, body);
+        if (!r.error) return true;
+        if (/lock|vergrendel/i.test(r.error)) locked = r.error;
+        s.failed = true;
+        person.failed.push({ date: s.date, reason: r.error });
+        return false;
+      };
+      // more hours first: an absence on such a day only goes once the day has its hours
+      const raise = steps.filter(s => s.action === 'raise');
+      if (raise.length) {
+        const r = locked ? { error: locked } : await send(access, 'PATCH', `/calendar/${c.officient_id}/${year}/work/bulk`,
+                                                          raise.map(s => ({ date: s.date, duration_minutes: s.minutes })));
+        if (r.error && /lock|vergrendel/i.test(r.error)) locked = r.error;
+        const bad = r.error ? raise.map(s => ({ date: s.date, reason: r.error }))
+          : (Array.isArray(r.failed) ? r.failed : []).map(f => (typeof f === 'string' ? { date: f } : f || {}));
+        for (const s of raise) {
+          const f = bad.find(b => b.date === s.date);
+          if (f) { s.failed = true; person.failed.push({ date: s.date, reason: String(f.reason || 'Officient refused.') }); }
         }
       }
-      if (!entries.length) continue;
-      entries.sort((a, b) => a.date.localeCompare(b.date));
-      const res = await send(access, 'PATCH', `/calendar/${c.officient_id}/${year}/work/bulk`, entries);
-      const failed = res.error ? entries.map(e => e.date)
-        : (Array.isArray(res.failed) ? res.failed : []).map(f => (typeof f === 'string' ? f : f && f.date) || JSON.stringify(f));
-      const done = entries.filter(e => !failed.includes(e.date));
-      days += done.length;
-      minutes += done.reduce((a, e) => a + e.duration_minutes, 0);
-      out.people.push({ staff_id: c.staff_id, name: c.name, written: done.length, zeroed, failed, error: res.error || null });
+      for (const s of steps) {
+        if (s.ga && !s.failed && (s.action === 'clear' || s.action === 'raise')) await call(s, 'DELETE', `/calendar/${c.officient_id}/events/${s.ga}`);
+      }
+      for (const s of steps.filter(s => s.action === 'absent')) {
+        const [y, m, d] = s.date.split('-').map(Number);
+        await call(s, 'PUT', `/calendar/${c.officient_id}/${y}/${m}/${d}/events/set`,
+                   { type: 'custom', custom_day_off_type_id: String(ga.id), start_time_minutes: 540, duration_minutes: s.all ? 'all_day' : s.minutes });
+      }
+      person.done = steps.filter(s => s.action !== 'skip' && !s.failed).length;
+      changed += person.done;
+      failures += person.failed.length;
+      minutes += Object.values(c.days).reduce((a, m) => a + m, 0);
     }
-    if (days) await db('select app_private.officient_record_push($1, $2::date, $3, $4) as r', [appToken, `${month}-01`, days, minutes]);
+    if (!dry && out.people.length && (changed || !failures)) {
+      await db('select app_private.officient_record_push($1, $2::date, $3, $4) as r', [appToken, `${month}-01`, changed, minutes]);
+    }
     return out;
   }
 
@@ -238,8 +312,8 @@ export function makeOfficient({ db: query, fetch, readPayslip, api = OFFICIENT_A
   // action 'sync': a manager pressing "Nu ophalen", or the nightly job (cron);
   // action 'read': read payslips uploaded by hand, right after the upload;
   // action 'calendar': Officient's calendar for a month (month: YYYY-MM);
-  // action 'hours': write a month's clocked hours into it (month, people).
-  async function run({ action, token: appToken, code, state, cron, month, people }) {
+  // action 'hours': make it count a month's clocked hours (month, people; dry: only the plan).
+  async function run({ action, token: appToken, code, state, cron, month, people, dry }) {
     const job = { spent: 0 };
     if (action === 'calendar' || action === 'hours') {
       if (!/^\d{4}-(0[1-9]|1[0-2])$/.test(month || '')) throw new Error('Pick a month.');
@@ -251,7 +325,9 @@ export function makeOfficient({ db: query, fetch, readPayslip, api = OFFICIENT_A
           await db('select app_private.officient_save_token($1, false) as r', [t.refresh_token]);
         }
         return { ok: true, ...(action === 'calendar' ? await calendar(t.access_token, month)
-                                                      : await pushHours(t.access_token, month, people, appToken)) };
+                                                      : await pushHours(t.access_token, month, people, appToken, !!dry)) };
+      } catch (e) {
+        throw /answered 40[13]/.test(e.message) ? new Error(NO_CALENDAR) : e;
       } finally {
         await db('update app_private.officient set sync_started_at = null where id = 1 returning true as r', []);
       }
