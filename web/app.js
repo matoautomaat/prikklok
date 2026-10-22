@@ -64,6 +64,9 @@ const SERVER_NL = {
   'People needed must be between 1 and 20.': 'Het aantal personen moet tussen 1 en 20 liggen.',
   'Pick a date range up to a year long.': 'Kies een periode van maximaal een jaar.',
   'Pick a month.': 'Kies een maand.',
+  'Pick a month in the next three months.': 'Kies een maand in de komende drie maanden.',
+  'Pick who to send.': 'Duid aan voor wie je de uren stuurt.',
+  'That month has passed.': 'Die maand is al voorbij.',
   'Pick a role.': 'Kies een rol.',
   'Pick a shorter date range.': 'Kies een kortere periode.',
   'Pick a team member.': 'Kies een medewerker.',
@@ -745,7 +748,7 @@ function updateBadges() {
 const VIEWS = {
   clock: viewClock, shifts: viewShifts, hours: viewHours, profile: viewProfile, ranking: viewRanking,
   today: viewToday, schedule: viewSchedule, monthly: viewMonthly, requests: viewRequests, team: viewTeam, member: viewMember,
-  family: viewFamily, famstaff: viewFamilyStaff,
+  family: viewFamily, famstaff: viewFamilyStaff, availability: viewAvailability,
 };
 
 // #profile works for everyone (managers reach it through their picture);
@@ -756,10 +759,14 @@ function route() {
   const tabs = tabsFor().map(t => t[0]);
   let v = location.hash.replace('#', ''), tab = v;
   const member = v.match(/^team\/([0-9a-f-]{36})$/);
+  const availMonth = v.match(/^availability\/(\d{4}-\d{2})$/);
+  if (availMonth) v = tab = 'availability';
   if (member && isManager()) { S.memberId = member[1]; v = 'member'; tab = 'team'; }
   else if ((v === 'family' || v === 'famstaff') && isManager()) tab = 'team';
+  else if (v === 'availability' && tabs.includes('shifts')) tab = 'shifts';
   else if (!tabs.includes(v)) { v = tabs[0]; tab = v; }
   if (S.view !== v) S.month = null;
+  if (availMonth && v === 'availability') S.month = new Date(availMonth[1] + '-01T00:00');
   S.view = v;
   $$('[data-tab]').forEach(b => b.setAttribute('aria-current', b.dataset.tab === tab ? 'page' : 'false'));
   const mb = $('#bnav-more');
@@ -1221,7 +1228,10 @@ function ownShift(s) {
 async function viewShifts(el, current) {
   S.month = S.month || startOfMonth(now());
   const m = S.month;
-  const shifts = await rpc('list_shifts', { p_from: m.toISOString(), p_to: addMonths(m, 1).toISOString() });
+  const [shifts, avail] = await Promise.all([
+    rpc('list_shifts', { p_from: m.toISOString(), p_to: addMonths(m, 1).toISOString() }),
+    rpc('my_availability', { p_month: toDateInput(nextMonth()) }),
+  ]);
   if (!current()) return;
   const t = now();
   const open = shifts.filter(s => !s.staff_id && new Date(s.ends_at) > t);
@@ -1238,10 +1248,165 @@ async function viewShifts(el, current) {
       <div class="stat"><span class="v">${mine.length}</span><span class="k">Jouw shiften</span></div>
       <div class="stat"><span class="v">${fmt.dur(mineMins)}</span><span class="k">Gepland voor jou</span></div>
     </div>
+    ${availabilityCard(avail)}
     <section class="card cal-card">${calendarHTML(shifts, m)}</section>
     ${horizonNote(m)}`;
   bindMonthNav(el);
   bindCalendar(el, shifts, false);
+  $('#av-open', el).addEventListener('click', () => { S.month = nextMonth(); location.hash = 'availability'; });
+}
+
+/* -------------------------------------------------------- availability */
+
+const availLink = m => `${location.origin}${location.pathname}#availability/${toDateInput(m).slice(0, 7)}`;
+const availMessage = m => `Hoi! Wil je in de app doorgeven wanneer je in ${fmt.monthName(m)} kan werken? ${availLink(m)}`;
+// A Belgian number as WhatsApp wants it: 0471 12 34 56 -> 32471123456.
+function waNumber(phone) {
+  let d = String(phone || '').replace(/[^\d+]/g, '');
+  if (d.startsWith('+')) d = d.slice(1); else if (d.startsWith('00')) d = d.slice(2); else if (d.startsWith('0')) d = '32' + d.slice(1);
+  return /^\d{8,15}$/.test(d) ? d : null;
+}
+
+// Planning: who handed in when they can work this month, and per day who can.
+function availabilityPanel(av, shifts, m) {
+  const expected = av.people.filter(p => !p.fixed && p.role !== 'manager');
+  if (!expected.length) return '';
+  const done = expected.filter(p => p.submitted_at), missing = expected.filter(p => !p.submitted_at);
+  const planned = new Map();
+  for (const x of shifts) if (x.staff_id) {
+    const d = toDateInput(new Date(x.starts_at));
+    if (!planned.has(d)) planned.set(d, new Set());
+    planned.get(d).add(x.staff_id);
+  }
+  const dayHTML = date => `
+    <div class="av-day"><span class="av-date">${esc(fmt.day(new Date(date + 'T00:00')))}</span>
+      ${av.slots[date].map(sl => {
+        const who = done.filter(p => p.days[date] && p.days[date].s.includes(sl.label));
+        return `<div class="av-slot"><span class="av-label">${esc(sl.label)}</span>${who.length ? who.map(p =>
+          `<span class="av-name${planned.has(date) && planned.get(date).has(p.staff_id) ? ' is-planned' : ''}">${esc(p.name)}${p.days[date].n ? ` <em>${esc(p.days[date].n)}</em>` : ''}</span>`).join('')
+          : '<span class="muted">niemand</span>'}</div>`;
+      }).join('')}
+    </div>`;
+  const notes = done.filter(p => p.note);
+  return `
+    <section class="card avail-mgr" id="avail-panel">
+      <div class="card-head"><h2>Beschikbaarheid</h2><span class="pill ${missing.length ? 'warn' : 'on'}">${done.length} van ${expected.length} doorgegeven</span></div>
+      <p class="muted small" style="margin-top:6px">Studenten en deeltijdsen geven in de app door wanneer ze kunnen werken. Bij het toewijzen van een shift staan wie kan bovenaan.</p>
+      ${missing.length ? `<div class="av-missing"><span class="small">Nog niet doorgegeven:</span>${missing.map(p => {
+        const wa = waNumber(p.phone);
+        return `<span class="av-person">${esc(p.name)}${wa ? ` <a class="sm-link" href="https://wa.me/${wa}?text=${encodeURIComponent(availMessage(m))}" target="_blank" rel="noopener">WhatsApp</a>` : ''}</span>`;
+      }).join('')}</div>` : ''}
+      <div class="form-actions" style="justify-content:flex-start"><button class="sm" id="av-copy">Herinnering kopiëren</button>
+        ${done.length ? `<button class="sm" id="av-toggle">${S.availOpen ? 'Verbergen' : 'Per dag bekijken'}</button>` : ''}</div>
+      <div class="av-grid" id="av-grid" ${S.availOpen && done.length ? '' : 'hidden'}>
+        ${notes.length ? `<p class="small"><strong>Opmerkingen:</strong> ${notes.map(p => `${esc(p.name)}: “${esc(p.note)}”`).join(' · ')}</p>` : ''}
+        <div class="av-days">${Object.keys(av.slots).sort().map(dayHTML).join('')}</div>
+        <p class="muted small">Vet: staat die dag al op de planning.</p>
+      </div>
+    </section>`;
+}
+
+function bindAvailabilityPanel(el, av, m) {
+  const copy = $('#av-copy', el);
+  if (copy) copy.addEventListener('click', async () => {
+    try { await navigator.clipboard.writeText(availMessage(m)); toast('Bericht gekopieerd. Plak het in WhatsApp of een sms.'); }
+    catch { await modal.confirm({ title: 'Herinnering', body: esc(availMessage(m)), ok: 'Sluiten' }); }
+  });
+  const toggle = $('#av-toggle', el);
+  if (toggle) toggle.addEventListener('click', () => {
+    S.availOpen = !S.availOpen;
+    $('#av-grid', el).hidden = !S.availOpen;
+    toggle.textContent = S.availOpen ? 'Verbergen' : 'Per dag bekijken';
+  });
+}
+
+const nextMonth = () => addMonths(startOfMonth(now()), 1);
+const availDays = a => Object.values(a.days).filter(d => d.s && d.s.length).length;
+
+// On Shiften: hand in when you can work next month.
+function availabilityCard(a) {
+  const name = fmt.monthName(new Date(a.month + 'T00:00'));
+  return `
+    <section class="card avail-card">
+      <div class="card-head"><h2>Wanneer kan je werken in ${name}?</h2>
+        ${a.submitted_at ? `<span class="pill on">Doorgegeven op ${fmt.short(a.submitted_at)}</span>` : '<span class="pill warn">Nog niet doorgegeven</span>'}</div>
+      <p class="muted small" style="margin-top:6px">${a.submitted_at
+        ? `Je gaf ${plural(availDays(a), 'dag', 'dagen')} door. Iets veranderd? Pas het aan; je verantwoordelijke ziet het meteen.`
+        : 'Duid aan op welke dagen je de middag of de avond kan werken. Daarmee maakt je verantwoordelijke de planning.'}</p>
+      <div class="form-actions"><button class="${a.submitted_at ? '' : 'primary'}" id="av-open">${a.submitted_at ? 'Aanpassen' : 'Beschikbaarheid doorgeven'}</button></div>
+    </section>`;
+}
+
+async function viewAvailability(el, current) {
+  const first = startOfMonth(now()), last = addMonths(first, 3);
+  if (!S.month || S.month < first || S.month > last) S.month = nextMonth();
+  const m = S.month;
+  const a = await rpc('my_availability', { p_month: toDateInput(m) });
+  if (!current()) return;
+  const days = JSON.parse(JSON.stringify(a.days));
+  const dates = Object.keys(a.slots).sort();
+  const weekdays = [1, 2, 3, 4, 5, 6, 0].filter(wd => dates.some(d => new Date(d + 'T00:00').getDay() === wd));
+  const labelsOn = wd => [...new Set(dates.filter(d => new Date(d + 'T00:00').getDay() === wd).flatMap(d => a.slots[d].map(x => x.label)))];
+  const has = (date, label) => !!(days[date] && days[date].s.includes(label));
+  const dayRow = date => `
+    <div class="avail-day" data-date="${date}">
+      <span class="avail-date">${esc(fmt.day(new Date(date + 'T00:00')))}</span>
+      <span class="avail-slots">${a.slots[date].map(sl => `<button type="button" class="chip${has(date, sl.label) ? ' is-on' : ''}" data-slot="${esc(sl.label)}" aria-pressed="${has(date, sl.label)}">${esc(sl.label)}${sl.start ? ` <span class="avail-time">${sl.start}–${sl.end}</span>` : ''}</button>`).join('')}</span>
+      <input class="avail-note" maxlength="120" placeholder="Opmerking, bv. vanaf 18u" value="${esc((days[date] && days[date].n) || '')}" aria-label="Opmerking voor ${esc(fmt.day(new Date(date + 'T00:00')))}">
+    </div>`;
+  el.innerHTML = `
+    <div class="view-head">
+      <div><button class="link back" id="back">‹ Shiften</button><h1>Beschikbaarheid</h1>
+        <p>Tik op <strong>Middag</strong> of <strong>Avond</strong> op elke dag dat je kan werken. Kan je maar een deel? Zet het erbij, bv. "vanaf 18u".</p></div>
+      ${periodBar(fmt.month(m), a.submitted_at ? `Doorgegeven op ${fmt.short(a.submitted_at)}` : 'Nog niet doorgegeven', 'mo-prev', 'mo-next')}
+    </div>
+    <section class="card">
+      ${dates.length ? `
+      <div class="avail-quick"><span class="muted small">Elke week hetzelfde? Tik hier om alle dagen van die weekdag aan of uit te zetten.</span>
+        <div class="avail-quick-rows">${weekdays.map(wd => `<div class="avail-quick-row"><span>Elke ${DAY_NAMES[wd]}</span>${labelsOn(wd).map(l => `<button type="button" class="chip sm" data-all-wd="${wd}" data-all-slot="${esc(l)}">${esc(l)}</button>`).join('')}</div>`).join('')}</div></div>
+      <div class="avail-days">${dates.map(dayRow).join('')}</div>` : '<p class="empty">Er zijn geen open shiften in deze maand.</p>'}
+      <div class="field" style="margin-top:14px"><label for="av-note">Opmerking voor de planning (optioneel)</label>
+        <textarea id="av-note" rows="2" maxlength="500" placeholder="bv. examens tot 15 januari">${esc(a.note)}</textarea></div>
+      <p class="form-error" id="av-err"></p>
+      <div class="form-actions" style="justify-content:space-between"><span class="muted small" id="av-count"></span>
+        <button class="primary" id="av-save">${a.submitted_at ? 'Opnieuw doorgeven' : 'Doorgeven'}</button></div>
+    </section>`;
+  const count = () => { $('#av-count', el).textContent = `${plural(Object.values(days).filter(d => d.s.length).length, 'dag', 'dagen')} aangeduid`; };
+  const set = (date, label, on) => {
+    const d = days[date] || (days[date] = { s: [], n: '' });
+    d.s = on ? [...new Set([...d.s, label])] : d.s.filter(x => x !== label);
+    const b = $(`.avail-day[data-date="${date}"] [data-slot="${CSS.escape(label)}"]`, el);
+    if (b) { b.classList.toggle('is-on', on); b.setAttribute('aria-pressed', on); }
+  };
+  count();
+  $('#back', el).addEventListener('click', () => { S.month = null; location.hash = 'shifts'; });
+  $('#mo-prev', el).disabled = m <= first;
+  $('#mo-next', el).disabled = m >= last;
+  $('#mo-prev', el).addEventListener('click', () => { S.month = addMonths(m, -1); renderView(); });
+  $('#mo-next', el).addEventListener('click', () => { S.month = addMonths(m, 1); renderView(); });
+  $$('.avail-day', el).forEach(row => {
+    const date = row.dataset.date;
+    $$('[data-slot]', row).forEach(b => b.addEventListener('click', () => { set(date, b.dataset.slot, !has(date, b.dataset.slot)); count(); }));
+    $('.avail-note', row).addEventListener('input', ev => { (days[date] || (days[date] = { s: [], n: '' })).n = ev.target.value; });
+  });
+  $$('[data-all-wd]', el).forEach(b => b.addEventListener('click', () => {
+    const wd = Number(b.dataset.allWd), label = b.dataset.allSlot;
+    const these = dates.filter(d => new Date(d + 'T00:00').getDay() === wd && a.slots[d].some(x => x.label === label));
+    const on = !these.every(d => has(d, label));
+    these.forEach(d => set(d, label, on));
+    count();
+  }));
+  const save = $('#av-save', el);
+  save.addEventListener('click', async () => {
+    const n = Object.values(days).filter(d => d.s.length).length;
+    if (!n && !(await modal.confirm({ title: `Niet beschikbaar in ${fmt.monthName(m)}?`, body: 'Je hebt geen enkele dag aangeduid. Je verantwoordelijke ziet dan dat je deze maand niet kan.', ok: 'Ja, doorgeven' }))) return;
+    busy(save, async () => {
+      await rpc('save_my_availability', { p_month: toDateInput(m), p_days: days, p_note: $('#av-note', el).value });
+      toast(`Doorgegeven voor ${fmt.monthName(m)}. Je kan het nog aanpassen.`);
+      S.month = null;
+      location.hash = 'shifts';
+    }).catch(e => { $('#av-err', el).textContent = e.message; });
+  });
 }
 
 async function loadStaff(force = false) {
@@ -1250,21 +1415,46 @@ async function loadStaff(force = false) {
 }
 const workers = () => (S.staff || []).filter(p => p.role !== 'viewer');
 const activeStaff = () => workers().filter(p => p.active);
-function staffOptions(selected, { openLabel = 'Open' } = {}) {
-  return `<option value="">${esc(openLabel)}</option>` +
-    activeStaff().map(p => `<option value="${p.id}" ${p.id === selected ? 'selected' : ''}>${esc(p.name)}</option>`).join('');
+// shift: when given, people are grouped by whether they said they can work it.
+function staffOptions(selected, { openLabel = 'Open', shift = null } = {}) {
+  const opt = (p, extra = '') => `<option value="${p.id}" ${p.id === selected ? 'selected' : ''}>${esc(p.name)}${extra}</option>`;
+  const people = activeStaff();
+  const can = shift && availabilityFor(shift);
+  if (!can) return `<option value="">${esc(openLabel)}</option>` + people.map(p => opt(p)).join('');
+  const groups = [['yes', 'Kan werken'], ['unknown', 'Gaf (nog) niets door'], ['no', 'Kan niet volgens de beschikbaarheid']];
+  return `<option value="">${esc(openLabel)}</option>` + groups.map(([k, label]) => {
+    const list = people.filter(p => can(p.id).state === k);
+    return list.length ? `<optgroup label="${label}">${list.map(p => { const c = can(p.id); return opt(p, c.note ? ` (${esc(c.note)})` : ''); }).join('')}</optgroup>` : '';
+  }).join('');
+}
+
+// For a shift in the month the planning shows: per person 'yes', 'no' or
+// 'unknown' (handed nothing in, or a fixed worker), with their note of that day.
+function availabilityFor(shift) {
+  const av = S.avail, a = new Date(shift.starts_at), date = toDateInput(a);
+  if (!av || av.month !== toDateInput(startOfMonth(a))) return null;
+  const slots = (av.slots[date] || []).filter(sl => sl.label === shift.label
+    || (sl.start && sl.start < toTimeInput(new Date(shift.ends_at)) && sl.end > toTimeInput(a)));
+  return id => {
+    const p = av.people.find(x => x.staff_id === id);
+    if (!p || !p.submitted_at) return { state: 'unknown' };
+    const d = p.days[date];
+    return { state: d && slots.some(sl => d.s.includes(sl.label)) ? 'yes' : 'no', note: d && d.n };
+  };
 }
 const daysText = days => [...days].sort((a, b) => ((a + 6) % 7) - ((b + 6) % 7)).map(d => DAY_SHORT[d]).join(', ');
 
 async function viewSchedule(el, current) {
   S.month = S.month || startOfMonth(now());
   const m = S.month;
-  const [shifts, templates] = await Promise.all([
+  const [shifts, templates, avail] = await Promise.all([
     rpc('list_shifts', { p_from: m.toISOString(), p_to: addMonths(m, 1).toISOString() }),
     rpc('mgr_templates'),
+    rpc('mgr_availability', { p_month: toDateInput(m) }),
     loadStaff(),
   ]);
   if (!current()) return;
+  S.avail = avail;
   const t = now();
   const filled = shifts.filter(s => s.staff_id).length;
   const openAhead = shifts.filter(s => !s.staff_id && new Date(s.ends_at) > t).length;
@@ -1275,8 +1465,10 @@ async function viewSchedule(el, current) {
       ${periodBar(fmt.month(m), sameDay(m, startOfMonth(t)) ? 'Deze maand' : '', 'mo-prev', 'mo-next')}
     </div>
     ${monthChips()}
+    ${availabilityPanel(avail, shifts, m)}
     <section class="card cal-card">
-      <div class="cal-toolbar"><span class="muted small">Gebruik + op een dag voor een extra shift.</span><button class="primary sm" id="add-shift">+ Shift toevoegen</button></div>
+      <div class="cal-toolbar"><span class="muted small">Gebruik + op een dag voor een extra shift.</span>
+        <span class="toolbar"><button class="sm" id="print-plan">Afdrukken</button><button class="primary sm" id="add-shift">+ Shift toevoegen</button></span></div>
       ${calendarHTML(shifts, m, { manager: true })}
     </section>
     ${horizonNote(m)}
@@ -1296,6 +1488,9 @@ async function viewSchedule(el, current) {
     </section>`;
   bindMonthNav(el);
   bindCalendar(el, shifts, true);
+  bindAvailabilityPanel(el, avail, m);
+  $('#print-plan', el).addEventListener('click', () => printSchedule({ m, shifts,
+    fixed: byPerson(fixedTps).map(([name, list]) => ({ name, text: fixedText(list) })) }));
   $('#add-shift', el).addEventListener('click', () => addShiftModal(toDateInput(sameDay(m, startOfMonth(t)) ? t : m)));
   $('#add-template', el).addEventListener('click', () => templateModal(null));
   $$('[data-template]', el).forEach(b => b.addEventListener('click', () => templateModal(templates.find(x => x.id === b.dataset.template))));
@@ -1419,7 +1614,7 @@ function editShift(s) {
     ${s.released ? `<p class="hint info">${esc(s.released.name)} gaf deze shift terug op ${esc(fmt.when(s.released.at))}: “${esc(s.released.reason)}”</p>` : ''}
     <form id="es-form" novalidate>
       <div class="form-grid">
-        <div class="field wide"><label for="es-staff">Wie werkt</label><select id="es-staff">${staffOptions(s.staff_id, { openLabel: 'Open – het personeel kan hem opnemen' })}
+        <div class="field wide"><label for="es-staff">Wie werkt</label><select id="es-staff">${staffOptions(s.staff_id, { openLabel: 'Open – het personeel kan hem opnemen', shift: s })}
           ${s.staff_id && !activeStaff().some(p => p.id === s.staff_id) ? `<option value="${s.staff_id}" selected>${esc(s.staff_name)}</option>` : ''}</select></div>
         <div class="field wide"><label for="es-date">Datum</label>${dateField('es-date', a, addMonths(startOfMonth(a), -1), addDays(addMonths(startOfMonth(a), 2), -1))}</div>
         <div class="field"><label for="es-start">Begint</label>${timeField('es-start', toTimeInput(a))}</div>
@@ -1540,10 +1735,12 @@ function securexCard(rep, m, monthInfo) {
   return {
     rows,
     list,
+    open,
+    pending,
     html: `
     <section class="card" id="securex-card">
       <div class="card-head"><h2>Naar Securex</h2>
-        <span class="pill ${done ? 'on' : ''}">${done ? `Gedownload op ${fmt.short(done)} om ${fmt.time(done)}${monthInfo.exported_by ? ` door ${esc(monthInfo.exported_by)}` : ''}` : 'Nog niet gedownload'}</span></div>
+        <span class="pill ${done ? 'on' : ''}">${done ? `${monthInfo.exported_kind === 'officient' ? 'Naar Officient gestuurd' : 'Gedownload'} op ${fmt.short(done)} om ${fmt.time(done)}${monthInfo.exported_by ? ` door ${esc(monthInfo.exported_by)}` : ''}` : 'Nog niet verstuurd'}</span></div>
       <p class="muted small" style="margin-top:6px">Eén regel per gewerkte shift, met werknemersnummer en looncode, zodat Securex niets moet overtypen. Zon- en feestdagen staan apart. Download het bestand na het einde van de maand en upload het in MySecurex (Isypass Web) of mail het naar je dossierbeheerder.</p>
       ${rows.length ? (warnings.length
         ? `<div class="hint warn" style="margin-top:12px"><strong>Controleer dit eerst</strong><ul class="warn-list">${warnings.map(w => `<li>${w}</li>`).join('')}</ul></div>`
@@ -1574,6 +1771,7 @@ function securexCard(rep, m, monthInfo) {
 
 // Officient's calendar for the month next to the hours clocked, per person and day.
 const OFF_KINDS = { time_off: 'afwezig', overtime: 'extra uren' };
+const HOURLY = ['student', 'flexi', 'extra'];
 function officientCompare(cal, rows) {
   const name = id => ((S.staff || []).find(p => p.id === id) || rows.find(x => x.staff_id === id) || {}).name || '?';
   const app = new Map();
@@ -1592,8 +1790,10 @@ function officientCompare(cal, rows) {
     });
     const sum = k => days.reduce((a, d) => a + d[k], 0);
     return { id: p.staff_id, name: name(p.staff_id), days, app: sum('app'), officient: sum('officient'),
-             differ: days.filter(d => Math.abs(d.app - d.officient) >= 15) };
+             differ: days.filter(d => Math.abs(d.app - d.officient) >= 15),
+             clocked: days.filter(d => d.app > 0).length, unclocked: days.filter(d => d.officient > 0 && !d.app).length };
   }).filter(p => p.app || p.officient).sort((a, b) => a.name.localeCompare(b.name, 'nl'));
+  officientCompare.people = people;
   const unlinked = [...app.keys()].filter(id => !linked.has(id)).map(name);
   const h = mins => mins ? fmt.hours2(mins) : '<span class="muted">–</span>';
   const dayName = date => fmt.day(new Date(date + 'T00:00'));
@@ -1607,24 +1807,68 @@ function officientCompare(cal, rows) {
           `<li>${esc(dayName(d.date))}: geklokt ${fmt.hours2(d.app)} · Officient ${fmt.hours2(d.officient)}${d.events.length ? ` <span class="muted">(${esc(d.events.join(', '))})</span>` : ''}</li>`).join('')}</ul></details>`
           : '<span class="muted">Geen</span>'}</td></tr>`).join('')}</tbody>
     </table></div>
-    <p class="muted small" style="margin-top:8px">Uren in decimalen. "In Officient" is per dag het weekrooster, min afwezigheden, plus overuren.</p>`
+    <p class="muted small" style="margin-top:8px">Uren in decimalen. "In Officient" is per dag het weekrooster, min afwezigheden, plus overuren.</p>
+    ${people.some(p => p.clocked) ? '<div class="form-actions"><button class="primary sm" id="off-push">Naar Officient sturen…</button></div>' : ''}`
       : '<p class="empty">Geen uren in Officient of in de app voor deze maand.</p>'}
     ${unlinked.length ? `<p class="hint warn">Geklokt, maar niet gekoppeld met Officient: ${unlinked.map(esc).join(', ')}.</p>` : ''}
     ${cal.types.length ? `<p class="muted small">Soorten in je Officient-kalender: ${cal.types.filter(t => t.active).map(t =>
       `${esc(t.name)} (${OFF_KINDS[t.interpretation] || esc(t.interpretation || '?')}${t.securex ? `, Securex-code ${esc(t.securex)}` : ''})`).join(', ')}.</p>` : ''}`;
 }
 
+// Write the month's clocked hours into Officient, after a look at what goes.
+function pushHoursModal(m, people, sx, again) {
+  const staff = id => (S.staff || []).find(p => p.id === id) || {};
+  const list = people.filter(p => p.clocked || p.unclocked);
+  const warn = [];
+  if (addMonths(m, 1) > now()) warn.push('De maand is nog niet voorbij. Je kan later opnieuw sturen; dan overschrijft de app dezelfde dagen.');
+  if (sx.pending) warn.push(`${plural(sx.pending, 'aanpassing wacht', 'aanpassingen wachten')} nog bij Aanvragen. Die uren gaan pas mee als je ze goedkeurt.`);
+  if (sx.open) warn.push(`${plural(sx.open, 'persoon is', 'mensen zijn')} nog ingeklokt. Die shift gaat pas mee na het uitklokken.`);
+  modal.open(`
+    <h2 id="modal-title">Uren naar Officient sturen · ${esc(fmt.month(m))}</h2>
+    <p>De app zet per dag de geklokte uren in de kalender van Officient, als gewerkte tijd. Daarna verstuur jij in Officient de prestaties naar Securex, zoals nu. Een maand die Securex al verwerkte, laat Officient niet meer aanpassen.</p>
+    ${warn.length ? `<div class="hint warn"><ul class="warn-list">${warn.map(w => `<li>${w}</li>`).join('')}</ul></div>` : ''}
+    <div class="table-wrap"><table class="push-table">
+      <thead><tr><th>Sturen</th><th>Naam</th><th class="num">Dagen</th><th class="num">Uren</th><th>Niet ingeklokt</th></tr></thead>
+      <tbody>${list.map(p => `<tr data-push="${p.id}">
+        <td><input type="checkbox" class="push-on" ${p.clocked ? 'checked' : ''} aria-label="${esc(p.name)} sturen"></td>
+        <td><strong>${esc(p.name)}</strong>${staff(p.id).contract_type ? ` <span class="muted small">${CONTRACT_SHORT[staff(p.id).contract_type]}</span>` : ''}</td>
+        <td class="num">${p.clocked}</td><td class="num">${fmt.hours2(p.app)}</td>
+        <td>${p.unclocked ? `<label class="check"><input type="checkbox" class="push-zero" ${HOURLY.includes(staff(p.id).contract_type) ? 'checked' : ''}> ${plural(p.unclocked, 'dag', 'dagen')} op 0</label>`
+          : '<span class="muted">geen</span>'}</td></tr>`).join('')}</tbody>
+    </table></div>
+    <p class="muted small">Op 0 zetten: dagen waarop Officient iemand ingeroosterd heeft, maar die niet ingeklokt heeft. Voor wie per uur betaald wordt, betekent dat: die dag niet gewerkt. Laat het uit als iemand vergat in te klokken.</p>
+    <p class="form-error" id="push-err"></p>
+    <div class="form-actions"><button type="button" data-close>Annuleren</button><button type="button" class="primary" id="push-go">Versturen</button></div>`, d => {
+    const go = $('#push-go', d);
+    go.addEventListener('click', () => {
+      const chosen = $$('tr[data-push]', d).filter(tr => $('.push-on', tr).checked)
+        .map(tr => ({ staff_id: tr.dataset.push, zero: !!($('.push-zero', tr) || {}).checked }));
+      if (!chosen.length) { $('#push-err', d).textContent = 'Duid minstens één persoon aan.'; return; }
+      busy(go, async () => {
+        const r = await officientCall({ action: 'hours', month: toDateInput(m).slice(0, 7), people: chosen });
+        const ok = r.people.filter(p => p.written), bad = r.people.filter(p => p.failed.length);
+        modal.close();
+        toast(ok.length ? `In Officient gezet: ${ok.map(p => `${p.name} (${plural(p.written, 'dag', 'dagen')})`).join(', ')}.` : 'Er werd niets veranderd.');
+        again(bad.length ? `<p class="hint bad">Officient weigerde ${bad.map(p => `${esc(p.name)}: ${plural(p.failed.length, 'dag', 'dagen')}${p.error ? ` (${esc(p.error)})` : ''}`).join('; ')}.</p>` : '');
+      }).catch(e => { $('#push-err', d).textContent = e.message; });
+    });
+  });
+}
+
 function bindSecurex(el, m, sx) {
   const ym = `${m.getFullYear()}-${pad(m.getMonth() + 1)}`;
   const cal = $('#off-cal', el);
-  cal.addEventListener('click', () => busy(cal, async () => {
+  const compare = async (note = '') => {
     const out = $('#off-cal-out', el);
     try {
-      out.innerHTML = officientCompare(await officientCall({ action: 'calendar', month: ym }), sx.rows);
+      out.innerHTML = note + officientCompare(await officientCall({ action: 'calendar', month: ym }), sx.rows);
+      const push = $('#off-push', out);
+      if (push) push.addEventListener('click', () => pushHoursModal(m, officientCompare.people, sx, n => busy(cal, () => compare(n)).catch(() => {})));
     } catch (e) {
       out.innerHTML = `<p class="hint bad">${esc(e.message)}</p>`;
     }
-  }));
+  };
+  cal.addEventListener('click', () => busy(cal, () => compare()));
   $('#wage-codes', el).addEventListener('click', wageCodesModal);
   const totals = $('#sx-totals', el);
   totals.addEventListener('click', () => downloadCsv(`securex-totalen-${ym}.csv`, [
@@ -3259,6 +3503,48 @@ const famSignOut = () => isViewer() ? `<button type="button" class="signout-wide
 
 const DAY_NAMES_ZH = ['星期日', '星期一', '星期二', '星期三', '星期四', '星期五', '星期六'];
 
+/* ------------------------------------------------------------ printing */
+
+// One A4 page with the month's schedule, for on the wall: a row per day, a
+// column per part of the day, open places in red. fixed: [{name, text}] for
+// the fixed workers, who are not in the calendar. t: (nl, zh) => text.
+function printSchedule({ m, shifts, fixed = [], t = nl => nl }) {
+  const zh = t('nl', 'zh') === 'zh';
+  const start = new Map();
+  for (const x of shifts) {
+    const part = shiftPart(x), h = new Date(x.starts_at).getHours() * 60 + new Date(x.starts_at).getMinutes();
+    start.set(part, Math.min(start.get(part) ?? h, h));
+  }
+  const parts = [...start.keys()].sort((a, b) => start.get(a) - start.get(b));
+  const partName = p => p === 'Middag' ? t('Middag', '午班') : p === 'Avond' ? t('Avond', '晚班') : p;
+  const dayName = d => zh ? `${d.getMonth() + 1}月${d.getDate()}日 ${DAY_NAMES_ZH[d.getDay()].replace('星期', '周')}` : fmt.day(d);
+  const cell = list => list.map(x => x.open
+    ? `<div class="print-open">${t('OPEN', '空缺')}${x.count > 1 ? ` ×${x.count}` : ''} <span>${fmt.range(x.starts_at, x.ends_at)}</span></div>`
+    : `<div>${esc(x.staff_name)} <span>${fmt.range(x.starts_at, x.ends_at)}</span></div>`).join('');
+  const rows = [];
+  for (let d = new Date(m); d < addMonths(m, 1); d = addDays(d, 1)) {
+    const today = dayEntries(shifts.filter(x => sameDay(x.starts_at, d)));
+    rows.push(`<tr class="${[0, 5, 6].includes(d.getDay()) ? 'print-weekend' : ''}"><th>${esc(dayName(d))}</th>${today.length
+      ? parts.map(p => `<td>${cell(today.filter(x => shiftPart(x) === p))}</td>`).join('')
+      : `<td class="print-closed" colspan="${Math.max(parts.length, 1)}">${t('Gesloten', '休息')}</td>`}</tr>`);
+  }
+  const area = document.createElement('div');
+  area.id = 'print-area';
+  area.setAttribute('lang', zh ? 'zh-CN' : 'nl');
+  area.innerHTML = `
+    <h1>${esc(t('Planning', '排班'))} ${esc(zh ? fam.month(m) : fmt.month(m))} · ${esc(S.settings.business_name)}</h1>
+    ${fixed.length ? `<p class="print-fixed"><strong>${t('Vaste werknemers', '固定员工')}:</strong> ${fixed.map(f => `${esc(f.name)}${f.text ? ` (${esc(f.text)})` : ''}`).join(' · ')}</p>` : ''}
+    <table class="print-table"><thead><tr><th>${t('Dag', '日期')}</th>${parts.map(p => `<th>${esc(partName(p))}</th>`).join('')}</tr></thead>
+      <tbody>${rows.join('')}</tbody></table>
+    <p class="print-foot">${t('Afgedrukt op', '打印于')} ${esc(fmt.short(now()))} ${esc(fmt.time(now()))}</p>`;
+  document.getElementById('print-area')?.remove();
+  document.body.append(area);
+  document.body.classList.add('printing');
+  const done = () => { document.body.classList.remove('printing'); area.remove(); window.removeEventListener('afterprint', done); };
+  window.addEventListener('afterprint', done);
+  window.print();
+}
+
 // A fixed worker's weekly hours in words: "elke dag behalve dinsdag · 11:30 – 14:30 en 17:00 – 22:30".
 function fixedText(list, t = nl => nl) {
   if (!list || !list.length) return '';
@@ -3341,8 +3627,39 @@ function famDayHTML(shifts, day, people) {
       </div>`).join('')}</div>` : `<p class="empty">${L('Geen shiften op deze dag.', '这天没有班次。')}</p>`}`;
 }
 
+// Today in the family view: per shift who came and when, who is late, who is
+// not there yet, and open places; fixed workers too.
+function famTodayHTML(d) {
+  const t = now(), grace = (d.grace_minutes || 0) * 60000;
+  const rows = d.shifts.map(sh => {
+    const a = new Date(sh.starts_at), b = new Date(sh.ends_at);
+    if (!sh.staff_id) return { sh, cls: 'bad', text: L('Open, nog niemand', '空缺，还没人') };
+    const mine = d.entries.filter(e => e.staff_id === sh.staff_id);
+    const e = mine.find(x => new Date(x.clock_in) < b && (!x.clock_out || new Date(x.clock_out) > a)) || null;
+    if (e && e.clock_out) return { sh, cls: 'done', text: L(`Gewerkt ${fmt.time(e.clock_in)} – ${fmt.time(e.clock_out)}`, `已上班 ${fmt.time(e.clock_in)} – ${fmt.time(e.clock_out)}`) };
+    if (e) return new Date(e.clock_in) - a > grace
+      ? { sh, cls: 'warn', text: L(`Te laat: binnen sinds ${fmt.time(e.clock_in)}`, `迟到：${fmt.time(e.clock_in)}到`) }
+      : { sh, cls: 'good', text: L(`Binnen sinds ${fmt.time(e.clock_in)}`, `${fmt.time(e.clock_in)}已到`) };
+    if (t < a) return { sh, cls: 'wait', text: L(`Begint om ${fmt.time(a)}`, `${fmt.time(a)}开始`) };
+    return { sh, cls: 'bad', text: t < b ? L('Nog niet ingeklokt', '还没打卡') : L('Niet ingeklokt', '没有打卡') };
+  });
+  const planned = new Set(d.shifts.map(x => x.staff_id));
+  const extra = d.entries.filter(e => !planned.has(e.staff_id));
+  return `
+    <section class="card fam-today" lang="${langAttr()}">
+      <h2>${L('Vandaag', '今天')} · ${esc(fam.day(t))}</h2>
+      ${rows.length ? `<div class="fam-today-list">${rows.map(r => `
+        <div class="fam-today-row is-${r.cls}">
+          <span class="fam-today-time">${fmt.range(r.sh.starts_at, r.sh.ends_at)}</span>
+          <span class="fam-today-name">${r.sh.staff_id ? esc(r.sh.staff_name) : '—'}${r.sh.fixed ? ` <span class="muted small">${L('vast', '固定')}</span>` : ''}</span>
+          <span class="fam-today-state">${esc(r.text)}</span>
+        </div>`).join('')}</div>` : `<p class="empty">${L('Vandaag geen shiften.', '今天没有班次。')}</p>`}
+      ${extra.length ? `<p class="small" style="margin-top:8px">${L('Ook ingeklokt zonder shift', '没有排班也打了卡')}: ${extra.map(e => `${esc(e.staff_name)} (${fmt.time(e.clock_in)})`).join(', ')}</p>` : ''}
+    </section>`;
+}
+
 async function viewFamily(el, current) {
-  const { m, r } = await familyData();
+  const [{ m, r }, today] = await Promise.all([familyData(), rpc('family_today')]);
   if (!current()) return;
   el.setAttribute('lang', langAttr());
   const t = now();
@@ -3355,15 +3672,19 @@ async function viewFamily(el, current) {
   const working = new Set(shifts.filter(s => s.staff_id && new Date(s.ends_at) > t).map(s => s.staff_id)).size;
   el.innerHTML = `
     ${familyHead(m, L('Kalender', '排班'))}
+    ${famTodayHTML(today)}
     <div class="stats stats-3 fam-stats">
       <div class="stat ${openCount ? 'alert' : 'good'}"><span class="v">${openCount}</span><span class="k">${L('Open shiften, nog niemand', '空缺班次，还没人')}</span></div>
       <div class="stat"><span class="v">${shifts.filter(s => s.staff_id).length}</span><span class="k">${L('Shiften met iemand', '有人的班次')}</span></div>
       <div class="stat"><span class="v">${working}</span><span class="k">${L('Mensen die nog komen werken', '还要来上班的人')}</span></div>
     </div>
-    <section class="card cal-card">${famCalendarHTML(shifts, m, people, day)}</section>
+    <section class="card cal-card">${famCalendarHTML(shifts, m, people, day)}
+      <div class="form-actions"><button type="button" class="sm" id="fam-print">${L('Afdrukken', '打印')}</button></div></section>
     <section class="card fam-daypanel" id="fam-day" lang="${langAttr()}">${famDayHTML(shifts, day, people)}</section>
     ${famSignOut()}`;
   bindFamilyHead(el, m);
+  $('#fam-print', el).addEventListener('click', () => printSchedule({ m, shifts, t: L,
+    fixed: people.filter(p => p.active && p.fixed && p.fixed.length).map(p => ({ name: p.name, text: fixedText(p.fixed, L) })) }));
   // phones: a tap on a day shows it below the calendar
   $('.cal-grid', el).addEventListener('click', ev => {
     const cell = ev.target.closest('.cal-cell[data-day]');

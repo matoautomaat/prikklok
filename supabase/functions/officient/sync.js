@@ -10,6 +10,7 @@ export const OFFICIENT_API = 'https://api.officient.io/1.0';
 const PAYSLIP_TYPE = /salary ?slip|pay ?slip|loonbrie|loonfiche|fiche de paie|bulletin de paie/i;
 const PAYSLIP_NAME = /loonbrie|loonfiche|payslip|pay slip|fiche de paie|bulletin de paie/i;
 const MAX_DOWNLOADS = 60; // per run; the next night picks up the rest
+const NO_CALENDAR = 'Officient gives no access to the calendar yet. Add calendar:read and calendar:write to the Prikklok app in Officient, then connect again.';
 // Reading PDFs is the heavy part: an Edge Function gets 2 seconds of CPU per
 // request, so one run reads for about this long and leaves the rest for the next.
 const READ_BUDGET_MS = 900;
@@ -39,12 +40,15 @@ export function makeOfficient({ db: query, fetch, readPayslip, api = OFFICIENT_A
 
   // Officient allows 30 calls every 5 seconds.
   let calls = [];
+  async function slot() {
+    const t = Date.now();
+    calls = calls.filter(x => t - x < 5000);
+    if (calls.length >= 25) await wait(5000 - (t - calls[0]) + 50);
+    calls.push(Date.now());
+  }
   async function get(access, path) {
     for (let attempt = 0; attempt < 4; attempt++) {
-      const t = Date.now();
-      calls = calls.filter(x => t - x < 5000);
-      if (calls.length >= 25) await wait(5000 - (t - calls[0]) + 50);
-      calls.push(Date.now());
+      await slot();
       const res = await fetch(api + path, { headers: { Authorization: `Bearer ${access}` } });
       if (res.status === 429) { await wait(5000); continue; }
       if (res.status === 400 || res.status === 404) return null;
@@ -54,6 +58,22 @@ export function makeOfficient({ db: query, fetch, readPayslip, api = OFFICIENT_A
     }
     throw new Error('Officient is busy. Try again later.');
   }
+  // A change in Officient. Officient's refusal (eg a month already processed)
+  // comes back as { error }, so one person doesn't stop the others.
+  async function send(access, method, path, body) {
+    for (let attempt = 0; attempt < 4; attempt++) {
+      await slot();
+      const res = await fetch(api + path, { method, headers: { Authorization: `Bearer ${access}`, 'Content-Type': 'application/json' },
+                                            body: JSON.stringify(body) });
+      if (res.status === 429) { await wait(5000); continue; }
+      const data = await res.json().catch(() => ({}));
+      if (res.status === 401 || res.status === 403) throw new Error(NO_CALENDAR);
+      if (!res.ok) return { error: String(data.reason_phrase || `Officient answered ${res.status}.`) };
+      return data;
+    }
+    throw new Error('Officient is busy. Try again later.');
+  }
+
   async function pages(access, path) {
     const out = [];
     for (let page = 0; page < 50; page++) {
@@ -172,29 +192,66 @@ export function makeOfficient({ db: query, fetch, readPayslip, api = OFFICIENT_A
         out.people.push({ staff_id: p.staff_id, days });
       }
     } catch (e) {
-      if (/answered 40[13]/.test(e.message)) {
-        throw new Error('Officient gives no access to the calendar yet. Add calendar:read and calendar:write to the Prikklok app in Officient, then connect again.');
-      }
+      if (/answered 40[13]/.test(e.message)) throw new Error(NO_CALENDAR);
       throw e;
     }
+    return out;
+  }
+
+  // Writes a month's clocked hours into Officient's calendar as the time
+  // worked per day. people: [{ staff_id, zero }]: every day the person
+  // clocked, and with zero also each day Officient has them scheduled but
+  // they didn't clock, as 0. The hours come from the database, not the app.
+  async function pushHours(access, month, people, appToken) {
+    const [year, mon] = month.split('-').map(Number);
+    const clocked = await db('select app_private.clocked_by_day($1::date) as r', [`${month}-01`]);
+    const out = { month, people: [] };
+    let days = 0, minutes = 0;
+    for (const want of people) {
+      const c = clocked.find(x => x.staff_id === (want && want.staff_id));
+      if (!c) continue;
+      const entries = Object.entries(c.days).map(([date, m]) => ({ date, duration_minutes: m }));
+      let zeroed = 0;
+      if (want.zero) {
+        const cal = await get(access, `/calendar/${c.officient_id}/${year}/${mon}`).catch(e => {
+          throw /answered 40[13]/.test(e.message) ? new Error(NO_CALENDAR) : e;
+        });
+        for (const d of (cal && cal.time_off) || []) {
+          if (Number(d.scheduled_minutes) > 0 && !(d.date in c.days)) { entries.push({ date: d.date, duration_minutes: 0 }); zeroed++; }
+        }
+      }
+      if (!entries.length) continue;
+      entries.sort((a, b) => a.date.localeCompare(b.date));
+      const res = await send(access, 'PATCH', `/calendar/${c.officient_id}/${year}/work/bulk`, entries);
+      const failed = res.error ? entries.map(e => e.date)
+        : (Array.isArray(res.failed) ? res.failed : []).map(f => (typeof f === 'string' ? f : f && f.date) || JSON.stringify(f));
+      const done = entries.filter(e => !failed.includes(e.date));
+      days += done.length;
+      minutes += done.reduce((a, e) => a + e.duration_minutes, 0);
+      out.people.push({ staff_id: c.staff_id, name: c.name, written: done.length, zeroed, failed, error: res.error || null });
+    }
+    if (days) await db('select app_private.officient_record_push($1, $2::date, $3, $4) as r', [appToken, `${month}-01`, days, minutes]);
     return out;
   }
 
   // action 'connect': right after the manager signed in at Officient (code, state);
   // action 'sync': a manager pressing "Nu ophalen", or the nightly job (cron);
   // action 'read': read payslips uploaded by hand, right after the upload;
-  // action 'calendar': Officient's calendar for a month (month: YYYY-MM).
-  async function run({ action, token: appToken, code, state, cron, month }) {
+  // action 'calendar': Officient's calendar for a month (month: YYYY-MM);
+  // action 'hours': write a month's clocked hours into it (month, people).
+  async function run({ action, token: appToken, code, state, cron, month, people }) {
     const job = { spent: 0 };
-    if (action === 'calendar') {
+    if (action === 'calendar' || action === 'hours') {
       if (!/^\d{4}-(0[1-9]|1[0-2])$/.test(month || '')) throw new Error('Pick a month.');
+      if (action === 'hours' && !(Array.isArray(people) && people.length)) throw new Error('Pick who to send.');
       const cfg = await db('select app_private.officient_begin($1, null, null) as r', [appToken || '']);
       try {
         const t = await token(cfg, { grant_type: 'refresh_token', refresh_token: cfg.refresh_token });
         if (t.refresh_token && t.refresh_token !== cfg.refresh_token) {
           await db('select app_private.officient_save_token($1, false) as r', [t.refresh_token]);
         }
-        return { ok: true, ...(await calendar(t.access_token, month)) };
+        return { ok: true, ...(action === 'calendar' ? await calendar(t.access_token, month)
+                                                      : await pushHours(t.access_token, month, people, appToken)) };
       } finally {
         await db('update app_private.officient set sync_started_at = null where id = 1 returning true as r', []);
       }

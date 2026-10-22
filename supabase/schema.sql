@@ -1366,7 +1366,8 @@ begin
       'payslips', (select count(*) from public.payslips p where p.month = r.month and p.archived_at is null),
       'exported_at', (select max(x.created_at) from public.payroll_exports x where x.month = r.month),
       'exported_by', (select st.name from public.payroll_exports x join public.staff st on st.id = x.created_by
-                       where x.month = r.month order by x.created_at desc limit 1))
+                       where x.month = r.month order by x.created_at desc limit 1),
+      'exported_kind', (select x.kind from public.payroll_exports x where x.month = r.month order by x.created_at desc limit 1))
       order by r.month desc)
     from (
       select date_trunc('month', e.clock_in at time zone v_tz)::date as month,
@@ -1388,7 +1389,8 @@ create table public.payroll_exports (
   rows       int not null,
   minutes    numeric(12, 1) not null,
   created_by uuid references public.staff (id),
-  created_at timestamptz not null default now()
+  created_at timestamptz not null default now(),
+  kind       text not null default 'file' check (kind in ('file', 'officient')) -- the file downloaded, or the hours written into Officient
 );
 create index payroll_exports_month_idx on public.payroll_exports (month);
 create index payroll_exports_created_by_idx on public.payroll_exports (created_by);
@@ -2329,6 +2331,183 @@ begin
   end if;
   perform app_private.payslip_month_totals(p.staff_id, p.month);
   return 'read';
+end $$;
+
+
+-- ------------------------------------------------------------ availability
+
+-- When students and part-timers can work, per month: per day the open
+-- services they can take (by the label of the standard shift, eg Middag,
+-- Avond) and a note, eg "vanaf 18u". Handed in from the app; the manager
+-- plans with it.
+create table public.availability (
+  staff_id     uuid not null references public.staff (id),
+  month        date not null check (extract(day from month) = 1),
+  days         jsonb not null default '{}'::jsonb, -- {"2026-11-03": {"s": ["Middag", "Avond"], "n": "vanaf 18u"}}
+  note         text not null default '',
+  submitted_at timestamptz,
+  updated_at   timestamptz not null default now(),
+  primary key (staff_id, month)
+);
+create index availability_month_idx on public.availability (month);
+alter table public.availability enable row level security;
+revoke all on public.availability from anon, authenticated;
+
+-- The open services of each day in a month, from the standard shifts that are
+-- open to anyone: {"2026-11-03": [{"label": "Middag", "start": "11:30", "end": "14:30"}, ...]}.
+-- Without any, each day has one service: "Beschikbaar".
+create function app_private.month_slots(p_month date) returns jsonb
+language plpgsql stable set search_path = public as $$
+declare v_month date := date_trunc('month', p_month)::date; v jsonb;
+begin
+  if not exists (select 1 from public.shift_templates where staff_id is null and archived_at is null) then
+    return (select jsonb_object_agg(d::date::text, '[{"label": "Beschikbaar"}]'::jsonb)
+              from generate_series(v_month, v_month + interval '1 month' - interval '1 day', interval '1 day') d);
+  end if;
+  select coalesce(jsonb_object_agg(day, slots), '{}'::jsonb) into v from (
+    select x.day::text as day, jsonb_agg(jsonb_build_object('label', x.label, 'start', to_char(x.st, 'HH24:MI'), 'end', to_char(x.en, 'HH24:MI'))
+                                   order by x.st) as slots
+      from (select d::date as day, coalesce(nullif(t.label, ''), 'Shift') as label, min(t.start_time) as st, max(t.end_time) as en
+              from generate_series(v_month, v_month + interval '1 month' - interval '1 day', interval '1 day') d
+              join public.shift_templates t on t.staff_id is null and t.archived_at is null
+                                           and extract(dow from d)::int = any(t.weekdays)
+             group by 1, 2) x
+     group by x.day) y;
+  return v;
+end $$;
+
+create function public.my_availability(p_token text, p_month date) returns json
+language plpgsql stable security definer set search_path = public, extensions as $$
+declare v public.staff; v_month date := date_trunc('month', p_month)::date; a public.availability;
+begin
+  v := app_private.current_staff(p_token);
+  if v_month is null then
+    raise exception using message = 'Pick a month.', errcode = 'P0001';
+  end if;
+  select * into a from public.availability where staff_id = v.id and month = v_month;
+  return json_build_object('month', v_month, 'slots', app_private.month_slots(v_month),
+                           'days', coalesce(a.days, '{}'::jsonb), 'note', coalesce(a.note, ''), 'submitted_at', a.submitted_at);
+end $$;
+
+-- p_days: {"2026-11-03": {"s": ["Middag"], "n": "vanaf 12u"}}; days outside the
+-- month and services that day doesn't have are left out.
+create function public.save_my_availability(p_token text, p_month date, p_days jsonb, p_note text) returns json
+language plpgsql security definer set search_path = public, extensions as $$
+declare v public.staff; v_month date := date_trunc('month', p_month)::date; v_tz text; v_slots jsonb; v_clean jsonb := '{}'::jsonb;
+        d record; v_day date; v_s jsonb; v_n text; v_at timestamptz;
+begin
+  v := app_private.current_staff(p_token);
+  select coalesce(timezone, 'UTC') into v_tz from public.settings where id = 1;
+  if v_month is null or v_month < date_trunc('month', now() at time zone v_tz)::date then
+    raise exception using message = 'That month has passed.', errcode = 'P0001';
+  end if;
+  if v_month > date_trunc('month', now() at time zone v_tz)::date + interval '3 months' then
+    raise exception using message = 'Pick a month in the next three months.', errcode = 'P0001';
+  end if;
+  v_slots := app_private.month_slots(v_month);
+  if jsonb_typeof(p_days) = 'object' then
+    for d in select key, value from jsonb_each(p_days) loop
+      begin v_day := d.key::date; exception when others then continue; end;
+      if date_trunc('month', v_day)::date <> v_month or jsonb_typeof(d.value) <> 'object' then continue; end if;
+      select coalesce(jsonb_agg(distinct x), '[]'::jsonb) into v_s
+        from jsonb_array_elements_text(case when jsonb_typeof(d.value -> 's') = 'array' then d.value -> 's' else '[]'::jsonb end) x
+       where x in (select sl ->> 'label' from jsonb_array_elements(coalesce(v_slots -> v_day::text, '[]'::jsonb)) sl);
+      v_n := app_private.clean_text(d.value ->> 'n', 120);
+      if jsonb_array_length(v_s) > 0 or v_n <> '' then
+        v_clean := v_clean || jsonb_build_object(v_day::text, jsonb_build_object('s', v_s, 'n', v_n));
+      end if;
+    end loop;
+  end if;
+  insert into public.availability (staff_id, month, days, note, submitted_at, updated_at)
+  values (v.id, v_month, v_clean, app_private.clean_text(p_note, 500), now(), now())
+  on conflict (staff_id, month) do update
+     set days = excluded.days, note = excluded.note, submitted_at = now(), updated_at = now()
+  returning submitted_at into v_at;
+  return json_build_object('ok', true, 'submitted_at', v_at, 'days', v_clean);
+end $$;
+
+-- Everyone who works (not the family accounts), with what they handed in.
+create function public.mgr_availability(p_token text, p_month date) returns json
+language plpgsql stable security definer set search_path = public, extensions as $$
+declare v public.staff; v_month date := date_trunc('month', p_month)::date;
+begin
+  v := app_private.current_manager(p_token);
+  if v_month is null then
+    raise exception using message = 'Pick a month.', errcode = 'P0001';
+  end if;
+  return json_build_object('month', v_month, 'slots', app_private.month_slots(v_month),
+    'people', coalesce((select json_agg(json_build_object(
+        'staff_id', st.id, 'name', st.name, 'avatar', st.avatar, 'role', app_private.role_of(st), 'contract_type', st.contract_type, 'phone', st.phone,
+        'fixed', exists (select 1 from public.shift_templates tp where tp.staff_id = st.id and tp.archived_at is null),
+        'submitted_at', a.submitted_at, 'days', coalesce(a.days, '{}'::jsonb), 'note', coalesce(a.note, ''))
+        order by lower(st.name))
+      from public.staff st left join public.availability a on a.staff_id = st.id and a.month = v_month
+     where st.active and not st.view_only), '[]'::json));
+end $$;
+
+-- Today for the family view: every shift of today, fixed workers too, and
+-- when each person clocked in and out.
+create function public.family_today(p_token text) returns json
+language plpgsql volatile security definer set search_path = public, extensions as $$
+declare v public.staff; v_tz text; v_from timestamptz; v_to timestamptz;
+begin
+  v := app_private.current_account(p_token);
+  if not v.view_only and v.role <> 'manager' then
+    raise exception using message = 'Only managers can do that.', errcode = 'P0001';
+  end if;
+  select coalesce(timezone, 'UTC') into v_tz from public.settings where id = 1;
+  v_from := date_trunc('day', now() at time zone v_tz) at time zone v_tz;
+  v_to := v_from + interval '1 day';
+  perform app_private.ensure_template_shifts(v_from, v_to);
+  return json_build_object(
+    'grace_minutes', (select grace_minutes from public.settings where id = 1),
+    'shifts', coalesce((select json_agg(json_build_object(
+        'id', sh.id, 'starts_at', sh.starts_at, 'ends_at', sh.ends_at, 'label', sh.label,
+        'staff_id', sh.staff_id, 'staff_name', st.name, 'avatar', st.avatar,
+        'fixed', app_private.is_fixed_shift(sh.template_id, sh.staff_id))
+        order by sh.starts_at, st.name nulls last)
+      from public.shifts sh left join public.staff st on st.id = sh.staff_id
+     where sh.cancelled_at is null and sh.starts_at < v_to and sh.ends_at > v_from), '[]'::json),
+    'entries', coalesce((select json_agg(json_build_object(
+        'staff_id', e.staff_id, 'staff_name', st.name, 'clock_in', e.clock_in, 'clock_out', e.clock_out) order by e.clock_in)
+      from public.time_entries e join public.staff st on st.id = e.staff_id
+     where e.deleted_at is null and e.clock_in < v_to and coalesce(e.clock_out, now()) > v_from), '[]'::json));
+end $$;
+
+
+-- -------------------------------------------- clocked hours to Officient
+
+-- The minutes clocked per local day in a month, for each person linked to
+-- Officient (an entry over midnight counts on both days), with what still
+-- needs a look: someone still clocked in, or a change that waits.
+create function app_private.clocked_by_day(p_month date) returns json
+language sql stable set search_path = public as $$
+  with tz as (select coalesce(timezone, 'UTC') as tz from public.settings where id = 1),
+  bounds as (select date_trunc('month', p_month)::timestamp at time zone tz.tz as a,
+                    (date_trunc('month', p_month) + interval '1 month')::timestamp at time zone tz.tz as b, tz.tz from tz),
+  e as (select t.staff_id, greatest(t.clock_in, bounds.a) at time zone bounds.tz as li, least(t.clock_out, bounds.b) at time zone bounds.tz as lo
+          from public.time_entries t, bounds
+         where t.deleted_at is null and t.clock_out is not null and t.clock_out > bounds.a and t.clock_in < bounds.b),
+  d as (select e.staff_id, g::date as day, extract(epoch from (least(e.lo, g + interval '1 day') - greatest(e.li, g))) / 60 as minutes
+          from e, generate_series(date_trunc('day', e.li), date_trunc('day', e.lo - interval '1 microsecond'), interval '1 day') g)
+  select coalesce(json_agg(json_build_object(
+      'staff_id', st.id, 'officient_id', st.officient_id, 'name', st.name, 'contract_type', st.contract_type,
+      'days', coalesce((select json_object_agg(q.day, q.m) from (
+                select d.day::text as day, round(sum(d.minutes))::int as m from d where d.staff_id = st.id group by d.day having round(sum(d.minutes)) > 0) q), '{}'::json),
+      'open', (select count(*) from public.time_entries t where t.staff_id = st.id and t.clock_out is null and t.deleted_at is null),
+      'pending', (select count(*) from public.time_edits x where x.staff_id = st.id and x.status = 'pending'))
+      order by lower(st.name)), '[]'::json)
+    from public.staff st where st.officient_id is not null
+$$;
+
+-- Notes that a manager wrote a month's hours into Officient.
+create function app_private.officient_record_push(p_token text, p_month date, p_rows int, p_minutes numeric) returns void
+language plpgsql set search_path = public as $$
+declare v public.staff;
+begin
+  v := app_private.current_manager(p_token);
+  insert into public.payroll_exports (month, rows, minutes, created_by, kind)
+  values (date_trunc('month', p_month)::date, greatest(coalesce(p_rows, 0), 0), greatest(coalesce(p_minutes, 0), 0), v.id, 'officient');
 end $$;
 
 revoke all on all functions in schema app_private from public, anon, authenticated;
