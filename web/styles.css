@@ -859,3 +859,8 @@ button.cal-shift.is-group { cursor: pointer; }
 }
 .fam-card a[href^="tel:"] { white-space: nowrap; }
 .fam-fixed { min-width: 14em; }
+.off-steps { margin-top: 12px; }
+.off-steps code, .off-report code { font-size: .85em; overflow-wrap: anywhere; }
+.off-callback { display: inline-flex; margin-top: 6px; max-width: 100%; }
+.off-report { margin-top: 12px; }
+.off-unmatched { color: var(--warn); }

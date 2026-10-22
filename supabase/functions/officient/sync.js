@@ -1,0 +1,140 @@
+// Reads Exact Officient (the HR platform behind Securex) for the Prikklok app:
+// people, their wage and contract hours, and payslip PDFs. Shared by the
+// Edge Function (index.ts) and the local tests, so it only needs fetch and a
+// db(text, params) that returns the first row's "r" column.
+
+export const OFFICIENT_API = 'https://api.officient.io/1.0';
+const PAYSLIP = /loon|payslip|pay slip|fiche|bulletin|salaris|salaire/i;
+const MAX_DOWNLOADS = 60; // per run; the next night picks up the rest
+
+export function makeOfficient({ db, fetch, api = OFFICIENT_API, wait = ms => new Promise(r => setTimeout(r, ms)) }) {
+  async function token(cfg, body) {
+    const res = await fetch(`${api}/token`, {
+      method: 'POST',
+      headers: { 'Content-Type': 'application/json' },
+      body: JSON.stringify({ client_id: cfg.client_id, client_secret: cfg.client_secret, ...body }),
+    });
+    const data = await res.json().catch(() => ({}));
+    if (!res.ok || !data.access_token) {
+      throw new Error(res.status >= 400 && res.status < 500
+        ? 'Officient refused the connection. Connect again under Team.'
+        : `Officient answered ${res.status}.`);
+    }
+    return data;
+  }
+
+  // Officient allows 30 calls every 5 seconds.
+  let calls = [];
+  async function get(access, path) {
+    for (let attempt = 0; attempt < 4; attempt++) {
+      const t = Date.now();
+      calls = calls.filter(x => t - x < 5000);
+      if (calls.length >= 25) await wait(5000 - (t - calls[0]) + 50);
+      calls.push(Date.now());
+      const res = await fetch(api + path, { headers: { Authorization: `Bearer ${access}` } });
+      if (res.status === 429) { await wait(5000); continue; }
+      if (res.status === 400 || res.status === 404) return null;
+      if (!res.ok) throw new Error(`Officient answered ${res.status} for ${path.split('?')[0]}.`);
+      const body = await res.json().catch(() => null);
+      return body ? body.data : null;
+    }
+    throw new Error('Officient is busy. Try again later.');
+  }
+  async function pages(access, path) {
+    const out = [];
+    for (let page = 0; page < 50; page++) {
+      const data = await get(access, `${path}?page=${page}`);
+      if (!Array.isArray(data) || !data.length) break;
+      out.push(...data);
+      if (data.length < 30) break;
+    }
+    return out;
+  }
+
+  async function sync(access) {
+    const report = { at: new Date().toISOString(), people: 0, matched: 0, linked: 0, updated: [], unmatched: [],
+                     payslips: [], already: 0, document_types: {}, more: false };
+    let downloads = 0;
+    const people = await pages(access, '/people/list');
+    report.people = people.length;
+    for (const p of people) {
+      const detail = (await get(access, `/people/${p.id}/detail`)) || p;
+      const wage = await get(access, `/wages/${p.id}/current`);
+      const r = await db('select app_private.officient_apply_person($1::jsonb) as r', [JSON.stringify({ ...detail, id: p.id, wage })]);
+      if (r.status === 'unmatched') { report.unmatched.push(r.name); continue; }
+      if (r.status !== 'matched') continue;
+      report.matched++;
+      if (r.new_link) report.linked++;
+      if (r.changed.length) report.updated.push({ name: r.name, changed: r.changed });
+      for (const d of await pages(access, `/documents/employee/${p.id}/list`)) {
+        const type = d.document_type || '—';
+        report.document_types[type] = (report.document_types[type] || 0) + 1;
+        if (!PAYSLIP.test(`${d.document_type || ''} ${d.filename || ''}`) || !/\.pdf$/i.test(d.filename || '')) continue;
+        const ref = `officient:${d.id}`, month = monthOf(d);
+        if (!month) continue;
+        const known = await db('select app_private.officient_payslip_known($1, $2::uuid, $3::date) as r', [ref, r.staff_id, month]);
+        if (known === 'already') report.already++;
+        if (known) continue;
+        if (downloads >= MAX_DOWNLOADS) { report.more = true; continue; }
+        downloads++;
+        const dl = await get(access, `/documents/${d.id}/download`);
+        if (!dl || !dl.download_url) continue;
+        const file = await fetch(dl.download_url);
+        if (!file.ok) continue;
+        const data = toBase64(new Uint8Array(await file.arrayBuffer()));
+        const res = await db('select app_private.officient_add_payslip($1::uuid, $2::date, $3, $4, $5) as r',
+          [r.staff_id, month, d.filename, data, ref]);
+        if (res === 'added') report.payslips.push({ name: r.name, month, file: d.filename });
+        else if (res === 'already') report.already++;
+      }
+    }
+    return report;
+  }
+
+  // action 'connect': right after the manager signed in at Officient (code, state);
+  // action 'sync': a manager pressing "Nu ophalen", or the nightly job (cron).
+  async function run({ action, token: appToken, code, state, cron }) {
+    const connect = action === 'connect';
+    const cfg = await db('select app_private.officient_begin($1, $2, $3) as r',
+      [cron ? null : appToken || '', cron || null, connect ? state || '' : null]);
+    if (cfg.skip) return { skipped: true };
+    try {
+      let t;
+      if (connect) {
+        if (!code) throw new Error('Officient sent no code back. Connect again.');
+        t = await token(cfg, { grant_type: 'authorization_code', code });
+        if (!t.refresh_token) throw new Error('Officient gave no lasting access. Connect again.');
+        await db('select app_private.officient_save_token($1, true) as r', [t.refresh_token]);
+      } else {
+        t = await token(cfg, { grant_type: 'refresh_token', refresh_token: cfg.refresh_token });
+        if (t.refresh_token && t.refresh_token !== cfg.refresh_token) {
+          await db('select app_private.officient_save_token($1, false) as r', [t.refresh_token]);
+        }
+      }
+      const report = await sync(t.access_token);
+      await db('select app_private.officient_finish($1::jsonb, null) as r', [JSON.stringify(report)]);
+      return { ok: true, report };
+    } catch (e) {
+      await db('select app_private.officient_finish(null, $1) as r', [String(e.message || e)]);
+      throw e;
+    }
+  }
+
+  return { run, sync };
+}
+
+// Securex names payslips like "Loonbrief - 01-09-2026 - 30-09-2026 - NAME.pdf";
+// otherwise the month before the upload.
+export function monthOf(doc) {
+  const m = String(doc.filename || '').match(/(\d{2})[-._](\d{2})[-._](\d{4})/);
+  if (m && +m[2] >= 1 && +m[2] <= 12) return `${m[3]}-${m[2]}-01`;
+  const u = String(doc.date_uploaded || '').match(/^(\d{4})-(\d{2})/);
+  if (u) return new Date(Date.UTC(+u[1], +u[2] - 2, 1)).toISOString().slice(0, 10);
+  return null;
+}
+
+function toBase64(bytes) {
+  let s = '';
+  for (let i = 0; i < bytes.length; i += 0x8000) s += String.fromCharCode(...bytes.subarray(i, i + 0x8000));
+  return btoa(s);
+}

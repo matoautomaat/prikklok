@@ -45,8 +45,16 @@ const SERVER_NL = {
   'Enter a check-out time.': 'Vul een uitkloktijd in.',
   'Enter a name (up to 60 characters).': 'Vul een naam in (maximaal 60 tekens).',
   'Enter start and end times like 17:30.': 'Vul een begin- en einduur in, bijvoorbeeld 17:30.',
+  'Fill in the client ID and client secret from Officient first.': 'Vul eerst de client ID en de client secret van Officient in.',
+  'Fill in the client ID and client secret from Officient.': 'Vul de client ID en de client secret van Officient in.',
   'Grace period must be between 0 and 120 minutes.': 'De speling moet tussen 0 en 120 minuten liggen.',
   'Number of people must be between 1 and 20.': 'Het aantal personen moet tussen 1 en 20 liggen.',
+  'Officient gave no lasting access. Connect again.': 'Officient gaf geen blijvende toegang. Koppel opnieuw.',
+  'Officient is already being read. Try again in a few minutes.': 'De app haalt al gegevens op bij Officient. Probeer het over enkele minuten opnieuw.',
+  'Officient is busy. Try again later.': 'Officient is druk bezet. Probeer het later opnieuw.',
+  "Officient isn't connected yet.": 'Officient is nog niet gekoppeld.',
+  'Officient refused the connection. Connect again under Team.': 'Officient weigerde de koppeling. Koppel opnieuw bij Team.',
+  'Officient sent no code back. Connect again.': 'Officient stuurde geen code terug. Koppel opnieuw.',
   "One entry can't be longer than 24 hours.": 'Eén registratie mag niet langer dan 24 uur zijn.',
   'Only managers can do that.': 'Alleen een verantwoordelijke kan dat doen.',
   'PIN must be 4 to 8 digits.': 'De pincode moet 4 tot 8 cijfers hebben.',
@@ -67,6 +75,7 @@ const SERVER_NL = {
   'That file is empty.': 'Dat bestand is leeg.',
   'That file is over 4 MB. Save it as a smaller PDF and try again.': 'Dat bestand is groter dan 4 MB. Bewaar het als een kleinere pdf en probeer opnieuw.',
   "That isn't one of your shifts.": 'Dat is geen shift van jou.',
+  'The Officient sign-in took too long or came from elsewhere. Connect again.': 'Het aanmelden bij Officient duurde te lang of kwam van elders. Koppel opnieuw.',
   'This account can only look at the overview.': 'Dit account kan alleen het overzicht bekijken.',
   "That name and PIN don't match.": 'Naam en pincode komen niet overeen.',
   "That payslip isn't available.": 'Die loonfiche is niet beschikbaar.',
@@ -115,6 +124,7 @@ const SERVER_NL_PATTERNS = [
   [/^Too many wrong PINs\. Try again in (\d+) min, or ask your manager to reset your PIN\.$/, 'Te vaak een verkeerde pincode. Probeer opnieuw over $1 min, of vraag je verantwoordelijke om een nieuwe pincode.'],
   [/^Your shift starts at (\d\d:\d\d)\. You can check in from (\d\d:\d\d)\.$/, 'Je shift begint om $1. Je kan inklokken vanaf $2.'],
   [/^That item unlocks at level (\d+)\.$/, 'Dat krijg je pas vanaf level $1.'],
+  [/^Officient answered (\d+)( for .*)?\.$/, 'Officient gaf een fout ($1). Probeer het later opnieuw.'],
 ];
 function tr(msg) {
   if (!msg) return msg;
@@ -129,13 +139,13 @@ class AppError extends Error {
   constructor(message, code) { super(message); this.code = code; }
 }
 
-async function rpc(fn, args = {}, { auth = true } = {}) {
+async function rpc(fn, args = {}, { auth = true, path = `/rest/v1/rpc/${fn}` } = {}) {
   const body = auth ? { p_token: S.token, ...args } : args;
   const headers = { 'Content-Type': 'application/json', apikey: CFG.key };
   if (CFG.key.startsWith('ey')) headers.Authorization = 'Bearer ' + CFG.key;
   let res;
   try {
-    res = await fetch(`${CFG.url}/rest/v1/rpc/${fn}`, { method: 'POST', headers, body: JSON.stringify(body) });
+    res = await fetch(`${CFG.url}${path}`, { method: 'POST', headers, body: JSON.stringify(body) });
   } catch {
     throw new AppError('Kan de server niet bereiken. Controleer je verbinding en probeer opnieuw.', 'network');
   }
@@ -718,6 +728,7 @@ function renderShell() {
   $('#me-btn').addEventListener('click', () => { location.hash = 'profile'; });
   updateBadges();
   route();
+  finishOfficient();
   if (isManager() && !S.settings.timezone) {
     const tz = Intl.DateTimeFormat().resolvedOptions().timeZone;
     if (tz) quiet(rpc('mgr_set_timezone', { p_tz: tz }).then(() => { S.settings.timezone = tz; renderView(); }));
@@ -2428,7 +2439,7 @@ const payOptions = sel => `<option value="">Niet ingevuld</option>${Object.entri
   .map(([k, [l]]) => `<option value="${k}" ${k === sel ? 'selected' : ''}>${l}</option>`).join('')}`;
 
 async function viewTeam(el, current) {
-  const staff = await loadStaff(true);
+  const [staff, off] = await Promise.all([loadStaff(true), rpc('mgr_officient_status')]);
   if (!current()) return;
   const link = location.origin + location.pathname;
   const st = S.settings;
@@ -2492,7 +2503,8 @@ async function viewTeam(el, current) {
         <p class="form-error" id="st-err"></p>
         <div class="form-actions"><button type="submit" class="primary">Instellingen opslaan</button></div>
       </form>
-    </section>`;
+    </section>
+    ${officientCard(off, link)}`;
 
   $('#copy-link', el).addEventListener('click', async () => {
     try { await navigator.clipboard.writeText(link); toast('Link gekopieerd.'); }
@@ -2536,6 +2548,7 @@ async function viewTeam(el, current) {
     toast('Tijdzone bijgewerkt.');
     renderView();
   }).catch(() => {}));
+  bindOfficient(el, off, link);
   const sf = $('#settings-form', el);
   sf.addEventListener('submit', async ev => {
     ev.preventDefault();
@@ -2645,7 +2658,7 @@ async function viewMember(el, current) {
     <div class="view-head"><div class="hello">
       ${personPic(p, 'xl')}
       <div><button class="link back" id="back">‹ Team</button><h1>${esc(p.name)}</h1>
-        <p class="lvl-line">${levelPill(xp)} <span>${esc(levelTitle(xp.level))}</span> <span class="muted">· ${ROLE_NL[p.role]}${p.active ? '' : ' · Inactief'}</span> ${payPill(p.pay_method)}</p></div>
+        <p class="lvl-line">${levelPill(xp)} <span>${esc(levelTitle(xp.level))}</span> <span class="muted">· ${ROLE_NL[p.role]}${p.active ? '' : ' · Inactief'}</span> ${payPill(p.pay_method)}${p.officient_id ? ' <span class="pill">Officient</span>' : ''}</p></div>
     </div></div>
     ${p.locked ? '<p class="hint bad">Geblokkeerd na te veel verkeerde pincodes. Stel hieronder een nieuwe pincode in om te deblokkeren.</p>' : ''}
     <div class="grid-2">
@@ -2690,6 +2703,7 @@ async function viewMember(el, current) {
     <section class="card">
       <div class="card-head"><h2>Vaste uren</h2>${p.active ? '<button class="sm" id="add-fixed">+ Vaste uren toevoegen</button>' : ''}</div>
       <p class="muted small" style="margin-top:6px">Werkt ${esc(first)} elke week op dezelfde momenten? Dan kan ${esc(first)} tijdens die uren inklokken. Vaste uren staan niet in de kalender: die is voor studenten en deeltijdsen.</p>
+      ${p.contract_minutes && contractText(p.contract_minutes) ? `<p class="small" style="margin-top:6px">Contracturen volgens Officient: <strong>${esc(contractText(p.contract_minutes))}</strong></p>` : ''}
       ${mine.length ? `<div class="rows">${mine.map(tp => `
         <div class="row"><div class="row-main"><span class="row-title">${esc(tp.label || 'Shift')}</span>
           <span class="row-sub">${daysText(tp.weekdays)} · <span class="time">${tp.start_time} – ${tp.end_time}</span></span></div>
@@ -2822,6 +2836,157 @@ async function viewMember(el, current) {
 
 const fileType = f => f ? (f.type || (/\.pdf$/i.test(f.name) ? 'application/pdf' : '')).replace(/^image\/jpg$/, 'image/jpeg') : '';
 const okFileType = t => ['application/pdf', 'image/png', 'image/jpeg'].includes(t);
+
+/* ------------------------------------------------------ Exact Officient */
+
+// The link with Exact Officient runs as a Supabase Edge Function: it signs in
+// at Officient with the manager's own API app, and every night fetches the
+// staff's details, wages, contract hours and new payslips.
+const officientCall = body => rpc('officient', { token: S.token, ...body }, { auth: false, path: '/functions/v1/officient' });
+const OFFICIENT_RETURN = 'prikklok.officient';
+const OFFICIENT_SCOPES = ['basics:read', 'personal.info:read', 'wages:read', 'weekly.schedules:read', 'contracts:read', 'documents.read'];
+
+// Officient sends the manager back to the app with ?code=…&state=…; keep it
+// until the app has signed in, and clean up the address.
+(function catchOfficientReturn() {
+  const q = new URLSearchParams(location.search);
+  if (!q.get('state') || !(q.get('code') || q.get('error'))) return;
+  store.set(OFFICIENT_RETURN, JSON.stringify({ code: q.get('code'), state: q.get('state'), error: q.get('error') }));
+  history.replaceState(null, '', location.pathname + '#team');
+})();
+
+async function finishOfficient() {
+  const raw = store.get(OFFICIENT_RETURN);
+  if (!raw || !isManager()) return;
+  store.set(OFFICIENT_RETURN, null);
+  let back;
+  try { back = JSON.parse(raw); } catch { return; }
+  if (back.error || !back.code) { toast('Koppelen met Officient geannuleerd.', 'error'); return; }
+  toast('Bezig met koppelen en ophalen bij Officient…');
+  try {
+    const r = await officientCall({ action: 'connect', code: back.code, state: back.state });
+    toast(`Gekoppeld met Officient. ${officientSummary(r.report)}`);
+  } catch (e) {
+    if (e.code !== 'auth') toast(e.message, 'error');
+  }
+  await loadStaff(true).catch(() => {});
+  if (S.view === 'team') renderView();
+}
+
+const officientSummary = r => r
+  ? `${r.matched} van ${plural(r.people, 'persoon', 'mensen')} gevonden, ${r.updated.length} bijgewerkt, ${plural(r.payslips.length, 'nieuwe loonbrief', 'nieuwe loonbrieven')}.`
+  : '';
+
+function officientReport(r) {
+  if (!r) return '';
+  const types = Object.entries(r.document_types || {});
+  return `
+    <ul class="plain-list off-report">
+      <li><strong>${r.matched}</strong> van de ${plural(r.people, 'persoon', 'mensen')} in Officient gevonden in de app${r.linked ? `, waarvan ${r.linked} nieuw gekoppeld` : ''}.</li>
+      ${r.updated.length ? `<li>Bijgewerkt: ${r.updated.map(u => `${esc(u.name)} <span class="muted">(${esc(u.changed.join(', '))})</span>`).join(', ')}.</li>` : '<li>Geen gegevens gewijzigd.</li>'}
+      ${r.payslips.length ? `<li>Nieuwe loonbrieven: ${r.payslips.map(x => `${esc(x.name)} – ${esc(fmt.month(new Date(x.month + 'T00:00')))}`).join(', ')}.</li>` : '<li>Geen nieuwe loonbrieven.</li>'}
+      ${r.already ? `<li>${plural(r.already, 'loonbrief stond', 'loonbrieven stonden')} er al (zelf geüpload).</li>` : ''}
+      ${r.more ? '<li>Er zijn nog meer loonbrieven; die komen bij de volgende ophaling.</li>' : ''}
+      ${r.unmatched.length ? `<li class="off-unmatched">In Officient, maar niet in de app: <strong>${r.unmatched.map(esc).join(', ')}</strong>. Voeg ze toe bij <em>Persoon toevoegen</em> met dezelfde naam; de volgende ophaling vult hun gegevens aan.</li>` : ''}
+      <li class="muted">Documenten in Officient: ${types.length ? types.map(([k, n]) => `${esc(k)} (${n})`).join(', ') : 'geen'}.</li>
+    </ul>`;
+}
+
+function officientCard(o, link) {
+  const callback = link;
+  const appForm = `
+    <form id="off-form" novalidate>
+      <ol class="plain-list off-steps">
+        <li>Meld je aan in Officient als beheerder. Klik rechtsboven op je avatar en dan op <a href="https://app.officient.io/developer" target="_blank" rel="noopener">Developers</a>.</li>
+        <li>Maak een <strong>client app</strong>, bv. “Prikklok”. Geef alleen <strong>leesrechten</strong>: <code>${OFFICIENT_SCOPES.join('</code>, <code>')}</code>.</li>
+        <li>Vul als <strong>callback-URL</strong> in: <span class="copybox off-callback"><code id="off-cb">${esc(callback)}</code><button type="button" class="sm" id="off-copy">Kopiëren</button></span></li>
+        <li>Kopieer de <strong>client ID</strong> en de <strong>client secret</strong> van die app hieronder.</li>
+      </ol>
+      <div class="form-grid" style="margin-top:12px">
+        <div class="field"><label for="off-id">Client ID</label><input id="off-id" maxlength="200" autocomplete="off" spellcheck="false" value="${esc(o.client_id || '')}"></div>
+        <div class="field"><label for="off-secret">Client secret</label><input id="off-secret" type="password" maxlength="200" autocomplete="off" spellcheck="false"></div>
+      </div>
+      <p class="muted small">De client secret wordt enkel op de server bewaard. De app toont hem nooit meer.</p>
+      <p class="form-error" id="off-err"></p>
+      <div class="form-actions">${o.configured ? '<button type="button" id="off-cancel">Annuleren</button>' : ''}<button type="submit" class="primary">App-gegevens opslaan</button></div>
+    </form>`;
+  let body;
+  if (!o.configured) body = appForm;
+  else if (!o.connected) body = `
+    <p>De app-gegevens zijn bewaard (client ID <code>${esc(o.client_id)}</code>). Koppel nu: je meldt je aan bij Officient en keurt de toegang goed.</p>
+    ${o.last_error ? `<p class="hint bad">${esc(tr(o.last_error))}</p>` : ''}
+    <div class="form-actions" style="justify-content:space-between"><button type="button" class="link" id="off-edit">Andere app-gegevens</button><button type="button" class="primary" id="off-connect">Koppelen met Officient</button></div>
+    <div id="off-edit-box" hidden>${appForm}</div>`;
+  else body = `
+    <p>Elke nacht haalt de app de gegevens van je personeel uit Officient (adres, rekeningnummer, uurloon, contracturen) en de nieuwe loonbrieven.
+      ${o.last_sync_at ? `Laatst opgehaald: <strong>${esc(fmt.when(o.last_sync_at))}</strong>.` : 'Nog niet opgehaald.'}</p>
+    ${o.last_error ? `<p class="hint bad">Het laatste ophalen lukte niet: ${esc(tr(o.last_error))}</p>` : ''}
+    ${officientReport(o.last_report)}
+    <div class="form-actions" style="justify-content:space-between"><button type="button" class="danger" id="off-disconnect">Ontkoppelen</button>
+      <button type="button" class="primary" id="off-sync" ${o.syncing ? 'disabled' : ''}>${o.syncing ? 'Bezig met ophalen…' : 'Nu ophalen'}</button></div>`;
+  return `
+    <section class="card" id="officient">
+      <div class="card-head"><h2>Exact Officient</h2>${o.connected ? '<span class="pill on">Gekoppeld</span>' : o.configured ? '<span class="pill warn">Nog niet gekoppeld</span>' : ''}</div>
+      <p class="muted small" style="margin-top:6px">Officient is het HR-platform van Securex. Gekoppeld vult de app je personeel en de loonbrieven vanzelf aan.</p>
+      ${body}
+    </section>`;
+}
+
+function bindOfficient(el, o, link) {
+  const card = $('#officient', el);
+  const form = $('#off-form', card);
+  if (form) {
+    const copy = $('#off-copy', form);
+    copy.addEventListener('click', async () => {
+      try { await navigator.clipboard.writeText(link); toast('Callback-URL gekopieerd.'); }
+      catch { const r = document.createRange(); r.selectNodeContents($('#off-cb', form)); const sel = getSelection(); sel.removeAllRanges(); sel.addRange(r); }
+    });
+    form.addEventListener('submit', async ev => {
+      ev.preventDefault();
+      const err = $('#off-err', form); err.textContent = '';
+      const id = $('#off-id', form).value.trim(), secret = $('#off-secret', form).value.trim();
+      if (!id || !secret) { err.textContent = 'Vul de client ID en de client secret in.'; return; }
+      await busy($('button[type=submit]', form), async () => {
+        await rpc('mgr_officient_save_app', { p_client_id: id, p_client_secret: secret });
+        toast('App-gegevens bewaard. Koppel nu met Officient.');
+        renderView();
+      }).catch(e => { err.textContent = e.message; });
+    });
+    const cancel = $('#off-cancel', form);
+    if (cancel) cancel.addEventListener('click', () => { $('#off-edit-box', card).hidden = true; });
+  }
+  const edit = $('#off-edit', card);
+  if (edit) edit.addEventListener('click', () => { $('#off-edit-box', card).hidden = false; $('#off-id', card).focus(); });
+  const connect = $('#off-connect', card);
+  if (connect) connect.addEventListener('click', () => busy(connect, async () => {
+    const a = await rpc('mgr_officient_authorize');
+    location.href = `https://app.officient.io/authorize?client_id=${encodeURIComponent(a.client_id)}&state=${encodeURIComponent(a.state)}`;
+  }).catch(() => {}));
+  const sync = $('#off-sync', card);
+  if (sync) sync.addEventListener('click', () => busy(sync, async () => {
+    const r = await officientCall({ action: 'sync' });
+    toast(`Opgehaald. ${officientSummary(r.report)}`);
+    await loadStaff(true);
+    renderView();
+  }).catch(() => renderView()));
+  const off = $('#off-disconnect', card);
+  if (off) off.addEventListener('click', async () => {
+    const ok = await modal.confirm({ title: 'Ontkoppelen van Officient?', body: 'De app haalt dan niets meer op. Wat al in de app staat, blijft.', ok: 'Ontkoppelen', danger: true });
+    if (!ok) return;
+    busy(null, async () => { await rpc('mgr_officient_disconnect'); toast('Ontkoppeld van Officient.'); renderView(); }).catch(() => {});
+  });
+}
+
+// contract hours from Officient, eg "20u per week (ma 4u, wo 4u, …)"
+const OFF_DAYS = [['monday', 1], ['tuesday', 2], ['wednesday', 3], ['thursday', 4], ['friday', 5], ['saturday', 6], ['sunday', 0]];
+function contractText(mins) {
+  if (!mins) return '';
+  const days = OFF_DAYS.filter(([k]) => Number(mins[k]) > 0);
+  const total = days.reduce((a, [k]) => a + Number(mins[k]), 0);
+  if (!total) return '';
+  const h = m => `${num(Math.round(m / 6) / 10, m % 60 ? 1 : 0)}u`;
+  return `${h(total)} per week (${days.map(([k, d]) => `${DAY_SHORT[d]} ${h(Number(mins[k]))}`).join(', ')})`;
+}
 
 /* ------------------------------------------------- family (view only) */
 

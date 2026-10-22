@@ -54,7 +54,9 @@ create table public.staff (
   xp_bonus        int not null default 0 check (xp_bonus between 0 and 100000), -- XP a manager gave, on top of the work
   -- a family account (the app calls its role 'viewer'): it only sees the month overview, never works shifts
   view_only       boolean not null default false,
-  pay_method      text check (pay_method in ('cash', 'registered')) -- paid in cash, or registered on the payroll
+  pay_method      text check (pay_method in ('cash', 'registered')), -- paid in cash, or registered on the payroll
+  officient_id    int unique, -- the same person in Exact Officient, once linked
+  contract_minutes jsonb -- contract hours per weekday from Officient, eg {"monday": 240, ...}
 );
 create unique index staff_name_key on public.staff (lower(name));
 
@@ -1181,8 +1183,10 @@ create table public.payslips (
   created_at   timestamptz not null default now(),
   archived_at  timestamptz, -- replaced or removed; the file itself is cleared
   gross_pay    numeric(10, 2), -- read from the payslip when it is uploaded
-  net_pay      numeric(10, 2)
+  net_pay      numeric(10, 2),
+  source_ref   text -- eg 'officient:45262' when fetched from Officient
 );
+create unique index payslips_source_ref_key on public.payslips (source_ref) where source_ref is not null;
 create unique index payslips_one_per_month on public.payslips (staff_id, month) where archived_at is null;
 create index payslips_staff_idx on public.payslips (staff_id, month);
 create index payslips_uploaded_by_idx on public.payslips (uploaded_by);
@@ -1616,7 +1620,7 @@ begin
     'person', json_build_object('id', s.id, 'name', s.name, 'role', app_private.role_of(s), 'hourly_rate', s.hourly_rate,
       'active', s.active, 'locked', coalesce(s.locked_until > now(), false), 'contract_type', s.contract_type,
       'payroll_id', s.payroll_id, 'created_at', s.created_at, 'avatar', s.avatar, 'xp_bonus', s.xp_bonus,
-      'pay_method', s.pay_method),
+      'pay_method', s.pay_method, 'officient_id', s.officient_id, 'contract_minutes', s.contract_minutes),
     'profile', app_private.profile_json(s),
     'xp', app_private.xp_json(s.id),
     'contracts', app_private.contracts_json(s.id),
@@ -1810,3 +1814,250 @@ begin
                and e.clock_in >= p_from and e.clock_in < p_to) w on true
          where not st.view_only and (st.active or coalesce(w.times, 0) > 0)) r), '[]'::json));
 end $$;
+
+-- ------------------------------------------------------- Exact Officient
+
+-- The link with Exact Officient, the HR platform behind Securex: the
+-- manager's own API app and the long-lived refresh token. Only the
+-- 'officient' Edge Function reads the secrets; the app never gets them back.
+create table app_private.officient (
+  id              int primary key default 1 check (id = 1),
+  client_id       text,
+  client_secret   text,
+  refresh_token   text,
+  oauth_state     text,
+  oauth_state_at  timestamptz,
+  cron_secret     text not null default encode(extensions.gen_random_bytes(24), 'hex'),
+  connected_at    timestamptz,
+  sync_started_at timestamptz,
+  last_sync_at    timestamptz,
+  last_report     jsonb,
+  last_error      text
+);
+insert into app_private.officient (id) values (1);
+revoke all on app_private.officient from public, anon, authenticated;
+
+create function public.mgr_officient_status(p_token text) returns json
+language plpgsql stable security definer set search_path = public, extensions as $$
+declare v public.staff; o app_private.officient;
+begin
+  v := app_private.current_manager(p_token);
+  select * into o from app_private.officient where id = 1;
+  return json_build_object(
+    'configured', o.client_id is not null and o.client_secret is not null, 'client_id', o.client_id,
+    'connected', o.refresh_token is not null, 'connected_at', o.connected_at,
+    'syncing', coalesce(o.sync_started_at > now() - interval '5 minutes', false),
+    'last_sync_at', o.last_sync_at, 'last_report', o.last_report, 'last_error', o.last_error,
+    'linked', (select count(*) from public.staff where officient_id is not null));
+end $$;
+
+-- The client ID and secret of the app the manager made under Developers in Officient.
+create function public.mgr_officient_save_app(p_token text, p_client_id text, p_client_secret text) returns json
+language plpgsql security definer set search_path = public, extensions as $$
+declare v public.staff; v_id text := btrim(coalesce(p_client_id, '')); v_secret text := btrim(coalesce(p_client_secret, ''));
+begin
+  v := app_private.current_manager(p_token);
+  if v_id = '' or v_secret = '' or length(v_id) > 200 or length(v_secret) > 200 then
+    raise exception using message = 'Fill in the client ID and client secret from Officient.', errcode = 'P0001';
+  end if;
+  update app_private.officient
+     set client_id = v_id, client_secret = v_secret, refresh_token = null, connected_at = null, last_error = null
+   where id = 1;
+  return json_build_object('ok', true);
+end $$;
+
+-- Starts signing in at Officient: the app sends the manager there with this state.
+create function public.mgr_officient_authorize(p_token text) returns json
+language plpgsql security definer set search_path = public, extensions as $$
+declare v public.staff; o app_private.officient; v_state text := encode(extensions.gen_random_bytes(16), 'hex');
+begin
+  v := app_private.current_manager(p_token);
+  select * into o from app_private.officient where id = 1 for update;
+  if o.client_id is null or o.client_secret is null then
+    raise exception using message = 'Fill in the client ID and client secret from Officient first.', errcode = 'P0001';
+  end if;
+  update app_private.officient set oauth_state = v_state, oauth_state_at = now() where id = 1;
+  return json_build_object('client_id', o.client_id, 'state', v_state);
+end $$;
+
+create function public.mgr_officient_disconnect(p_token text) returns json
+language plpgsql security definer set search_path = public, extensions as $$
+declare v public.staff;
+begin
+  v := app_private.current_manager(p_token);
+  update app_private.officient
+     set refresh_token = null, connected_at = null, oauth_state = null, sync_started_at = null, last_error = null
+   where id = 1;
+  return json_build_object('ok', true);
+end $$;
+
+-- The rest is for the Edge Function, which connects as the database owner.
+
+-- Who may read Officient now: a manager (from the app), or the nightly job
+-- with its secret. Returns what the function needs to talk to Officient,
+-- or skip when the nightly job finds nothing connected.
+create function app_private.officient_begin(p_token text, p_cron text, p_state text) returns json
+language plpgsql set search_path = public, extensions as $$
+declare o app_private.officient;
+begin
+  select * into o from app_private.officient where id = 1 for update;
+  if p_cron is not null then
+    if p_cron is distinct from o.cron_secret then
+      raise exception using message = 'Not allowed.', errcode = '28000';
+    end if;
+    if o.refresh_token is null or o.client_secret is null then
+      return json_build_object('skip', true);
+    end if;
+  else
+    perform app_private.current_manager(p_token);
+  end if;
+  if o.client_id is null or o.client_secret is null then
+    raise exception using message = 'Fill in the client ID and client secret from Officient first.', errcode = 'P0001';
+  end if;
+  if p_state is not null then
+    if o.oauth_state is null or o.oauth_state <> p_state or o.oauth_state_at < now() - interval '30 minutes' then
+      raise exception using message = 'The Officient sign-in took too long or came from elsewhere. Connect again.', errcode = 'P0001';
+    end if;
+    update app_private.officient set oauth_state = null where id = 1;
+  elsif o.refresh_token is null then
+    raise exception using message = 'Officient isn''t connected yet.', errcode = 'P0001';
+  end if;
+  if o.sync_started_at > now() - interval '5 minutes' then
+    raise exception using message = 'Officient is already being read. Try again in a few minutes.', errcode = 'P0001';
+  end if;
+  update app_private.officient set sync_started_at = now() where id = 1;
+  return json_build_object('client_id', o.client_id, 'client_secret', o.client_secret, 'refresh_token', o.refresh_token);
+end $$;
+
+create function app_private.officient_save_token(p_refresh text, p_new boolean) returns void
+language sql set search_path = public as $$
+  update app_private.officient
+     set refresh_token = p_refresh, connected_at = case when p_new then now() else connected_at end
+   where id = 1
+$$;
+
+create function app_private.officient_finish(p_report jsonb, p_error text) returns void
+language sql set search_path = public as $$
+  update app_private.officient
+     set sync_started_at = null, last_error = p_error,
+         last_sync_at = case when p_error is null then now() else last_sync_at end,
+         last_report = coalesce(p_report, last_report)
+   where id = 1
+$$;
+
+-- One person from Officient onto the same person in the app: by the link made
+-- earlier, else the national register number, else the name. Official details
+-- (national number, birth date, IBAN, address, start date, hourly rate,
+-- contract hours) follow Officient; phone, e-mail and emergency contact are
+-- only filled in when the app has none, so what staff typed themselves stays.
+create function app_private.officient_apply_person(p jsonb) returns json
+language plpgsql set search_path = public, extensions as $$
+declare
+  v_oid   int := nullif(p ->> 'id', '')::int;
+  v_first text := btrim(coalesce(p ->> 'first_name', ''));
+  v_last  text := btrim(coalesce(p ->> 'last_name', ''));
+  v_name  text := coalesce(nullif(btrim(coalesce(p ->> 'name', '')), ''), btrim(v_first || ' ' || v_last));
+  v_nid   text := nullif(regexp_replace(coalesce(p ->> 'national_number', ''), '\D', '', 'g'), '');
+  v_iban  text := nullif(upper(regexp_replace(coalesce(p ->> 'bank_account_iban', ''), '\s', '', 'g')), '');
+  v_mail  text := nullif(lower(btrim(coalesce(nullif(p ->> 'personal_email', ''), p ->> 'email', ''))), '');
+  w       jsonb := p -> 'wage';
+  v_type  text := w ->> 'type';
+  v_rate  numeric;
+  v_kind  text := lower(coalesce(w -> 'custom_payroll_data' ->> 'contract_type', w ->> 'contract_type', ''));
+  v_birth date; v_start date;
+  s public.staff; n public.staff;
+  v_changed text[] := '{}';
+begin
+  if v_oid is null then
+    return json_build_object('status', 'skipped');
+  end if;
+  select * into s from public.staff where officient_id = v_oid;
+  if not found and v_nid is not null then
+    select * into s from public.staff where national_id = v_nid limit 1;
+  end if;
+  if not found then
+    select * into s from public.staff
+     where lower(name) in (lower(v_name), lower(btrim(v_first || ' ' || v_last)), lower(btrim(v_last || ' ' || v_first)))
+     order by active desc limit 1;
+  end if;
+  if not found then
+    return json_build_object('status', 'unmatched', 'name', v_name);
+  end if;
+  begin v_birth := nullif(p ->> 'birthdate', '')::date; exception when others then v_birth := null; end;
+  begin v_start := nullif(p -> 'employment' ->> 'first_employment_date', '')::date; exception when others then v_start := null; end;
+  begin v_rate := nullif(w ->> 'rate', '')::numeric; exception when others then v_rate := null; end;
+  if v_nid is not null and not app_private.valid_national_id(v_nid) then v_nid := null; end if;
+  if v_iban is not null and (v_iban !~ '^[A-Z]{2}[0-9]{2}[A-Z0-9]{8,30}$' or not app_private.valid_iban(v_iban)) then v_iban := null; end if;
+  if v_mail is not null and v_mail !~ '^[^@\s]+@[^@\s]+\.[^@\s]+$' then v_mail := null; end if;
+  update public.staff set
+    officient_id    = v_oid,
+    national_id     = coalesce(v_nid, national_id),
+    birth_date      = coalesce(v_birth, birth_date),
+    iban            = coalesce(v_iban, iban),
+    street          = coalesce(nullif(app_private.clean_text(concat_ws(' ', p -> 'address' ->> 'line_1', nullif(p -> 'address' ->> 'line_2', '')), 120), ''), street),
+    postcode        = coalesce(nullif(app_private.clean_text(p -> 'address' ->> 'zipcode', 10), ''), postcode),
+    city            = coalesce(nullif(app_private.clean_text(p -> 'address' ->> 'city', 80), ''), city),
+    start_date      = coalesce(v_start, start_date),
+    phone           = coalesce(phone, nullif(app_private.clean_text(p ->> 'phone', 30), '')),
+    email           = coalesce(email, left(v_mail, 120)),
+    emergency_name  = coalesce(emergency_name, nullif(app_private.clean_text(p -> 'emergency_contact' ->> 'name', 80), '')),
+    emergency_phone = coalesce(emergency_phone, nullif(app_private.clean_text(p -> 'emergency_contact' ->> 'phone', 30), '')),
+    hourly_rate     = case when v_type like '%hourly' and v_rate between 0 and 10000 then round(v_rate, 2) else hourly_rate end,
+    contract_minutes = case when jsonb_typeof(w -> 'weekly_time_engagement_minutes') = 'object'
+                            then w -> 'weekly_time_engagement_minutes' else contract_minutes end,
+    contract_type   = case when v_kind like '%flexi%' then 'flexi' when v_kind like '%student%' then 'student' else contract_type end
+   where id = s.id
+  returning * into n;
+  if n.national_id is distinct from s.national_id then v_changed := array_append(v_changed, 'rijksregisternummer'); end if;
+  if n.birth_date is distinct from s.birth_date then v_changed := array_append(v_changed, 'geboortedatum'); end if;
+  if n.iban is distinct from s.iban then v_changed := array_append(v_changed, 'rekeningnummer'); end if;
+  if row(n.street, n.postcode, n.city) is distinct from row(s.street, s.postcode, s.city) then v_changed := array_append(v_changed, 'adres'); end if;
+  if n.start_date is distinct from s.start_date then v_changed := array_append(v_changed, 'in dienst sinds'); end if;
+  if n.phone is distinct from s.phone then v_changed := array_append(v_changed, 'telefoon'); end if;
+  if n.email is distinct from s.email then v_changed := array_append(v_changed, 'e-mail'); end if;
+  if row(n.emergency_name, n.emergency_phone) is distinct from row(s.emergency_name, s.emergency_phone) then v_changed := array_append(v_changed, 'noodcontact'); end if;
+  if n.hourly_rate is distinct from s.hourly_rate then v_changed := array_append(v_changed, 'uurloon'); end if;
+  if n.contract_minutes is distinct from s.contract_minutes then v_changed := array_append(v_changed, 'contracturen'); end if;
+  if n.contract_type is distinct from s.contract_type then v_changed := array_append(v_changed, 'statuut'); end if;
+  return json_build_object('status', 'matched', 'staff_id', n.id, 'name', n.name, 'changed', v_changed,
+                           'new_link', s.officient_id is distinct from v_oid);
+end $$;
+
+-- Before downloading: 'exists' when fetched before, 'already' when that month
+-- has a payslip uploaded by hand (now marked as the same one), else null.
+create function app_private.officient_payslip_known(p_ref text, p_staff uuid, p_month date) returns text
+language plpgsql set search_path = public as $$
+begin
+  if exists (select 1 from public.payslips where source_ref = p_ref) then
+    return 'exists';
+  end if;
+  update public.payslips set source_ref = p_ref
+   where staff_id = p_staff and month = date_trunc('month', p_month)::date and archived_at is null and source_ref is null;
+  if found then
+    return 'already';
+  end if;
+  return null;
+end $$;
+
+-- A payslip PDF fetched from Officient. One uploaded by hand for the same
+-- month stays; it is only marked as the same document.
+create function app_private.officient_add_payslip(p_staff uuid, p_month date, p_file_name text, p_data text, p_ref text) returns text
+language plpgsql set search_path = public, extensions as $$
+declare v_bytes bytea;
+begin
+  if exists (select 1 from public.payslips where source_ref = p_ref) then
+    return 'exists';
+  end if;
+  if exists (select 1 from public.payslips where staff_id = p_staff and month = p_month and archived_at is null) then
+    update public.payslips set source_ref = p_ref
+     where staff_id = p_staff and month = p_month and archived_at is null and source_ref is null;
+    return 'already';
+  end if;
+  v_bytes := app_private.check_file('application/pdf', p_data);
+  insert into public.payslips (staff_id, month, file_name, content_type, size_bytes, data, source_ref)
+  values (p_staff, date_trunc('month', p_month)::date, coalesce(nullif(app_private.clean_text(p_file_name, 120), ''), 'loonbrief.pdf'),
+          'application/pdf', length(v_bytes), v_bytes, p_ref);
+  return 'added';
+end $$;
+
+revoke all on all functions in schema app_private from public, anon, authenticated;
