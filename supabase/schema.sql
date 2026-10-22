@@ -76,7 +76,8 @@ create table public.shift_templates (
   end_time    time not null check (end_time <> start_time),
   people      int  not null default 1 check (people between 1 and 20),
   archived_at timestamptz,
-  created_at  timestamptz not null default now()
+  created_at  timestamptz not null default now(),
+  staff_id    uuid references public.staff (id) -- a fixed worker's own hours; null = open for anyone
 );
 -- Closed on Tuesday. Weekdays: Middag 11:30-14:30 and Avond 17:30-21:30;
 -- Friday to Sunday the evening runs until 22:30 and Sunday lunch until 15:00.
@@ -294,9 +295,12 @@ $$;
 -- Creates the shifts that standard shift patterns call for, from today up to
 -- 92 days ahead, in the business's time zone. Safe to call repeatedly: a day
 -- that already has its pattern shift (even one a manager removed) is skipped.
+-- A fixed worker's pattern puts the shift on their name, unless they already
+-- work then or no longer work here.
 create function app_private.ensure_template_shifts(p_from timestamptz, p_to timestamptz) returns void
 language plpgsql set search_path = public as $$
 declare v_tz text; v_today date; d date; v_last date; t public.shift_templates; i int;
+        v_start timestamptz; v_end timestamptz;
 begin
   select timezone into v_tz from public.settings where id = 1;
   if v_tz is null or p_from is null or p_to is null
@@ -307,13 +311,20 @@ begin
   d := greatest(v_today, (p_from at time zone v_tz)::date);
   v_last := least(v_today + 92, ((p_to - interval '1 second') at time zone v_tz)::date);
   while d <= v_last loop
-    for t in select * from public.shift_templates
-              where archived_at is null and extract(dow from d)::int = any(weekdays) loop
+    for t in select tp.* from public.shift_templates tp
+               left join public.staff s on s.id = tp.staff_id
+              where tp.archived_at is null and extract(dow from d)::int = any(tp.weekdays)
+                and (tp.staff_id is null or (s.active and not s.view_only)) loop
+      v_start := (d + t.start_time) at time zone v_tz;
+      v_end := ((case when t.end_time > t.start_time then d else d + 1 end) + t.end_time) at time zone v_tz;
+      if t.staff_id is not null then
+        continue when exists (select 1 from public.shifts where template_id = t.id and template_day = d)
+                   or exists (select 1 from public.shifts where staff_id = t.staff_id and cancelled_at is null
+                                                            and starts_at < v_end and ends_at > v_start);
+      end if;
       for i in 1..t.people loop
-        insert into public.shifts (starts_at, ends_at, label, template_id, template_day, template_slot)
-        values ((d + t.start_time) at time zone v_tz,
-                ((case when t.end_time > t.start_time then d else d + 1 end) + t.end_time) at time zone v_tz,
-                t.label, t.id, d, i)
+        insert into public.shifts (starts_at, ends_at, label, template_id, template_day, template_slot, staff_id)
+        values (v_start, v_end, t.label, t.id, d, i, t.staff_id)
         on conflict (template_id, template_day, template_slot) where template_id is not null do nothing;
       end loop;
     end loop;
@@ -728,7 +739,11 @@ begin
        where staff_id = p_id and token_hash <> app_private.hash_token(coalesce(p_token, ''));
     end if;
     if not v_active or v_view then
-      update public.shifts set staff_id = null where staff_id = p_id and starts_at > now();
+      update public.shift_templates set archived_at = now() where staff_id = p_id and archived_at is null;
+      update public.shifts set cancelled_at = now()
+       where staff_id = p_id and starts_at > now() and cancelled_at is null
+         and template_id in (select id from public.shift_templates where staff_id = p_id);
+      update public.shifts set staff_id = null where staff_id = p_id and starts_at > now() and cancelled_at is null;
     end if;
   end if;
   return json_build_object('ok', true, 'id', v_id);
@@ -1056,15 +1071,29 @@ declare v public.staff;
 begin
   v := app_private.current_manager(p_token);
   return coalesce((select json_agg(json_build_object(
-      'id', id, 'label', label, 'weekdays', weekdays, 'start_time', to_char(start_time, 'HH24:MI'),
-      'end_time', to_char(end_time, 'HH24:MI'), 'people', people) order by start_time, label)
-    from public.shift_templates where archived_at is null), '[]'::json);
+      'id', tp.id, 'label', tp.label, 'weekdays', tp.weekdays, 'start_time', to_char(tp.start_time, 'HH24:MI'),
+      'end_time', to_char(tp.end_time, 'HH24:MI'), 'people', tp.people,
+      'staff_id', tp.staff_id, 'staff_name', st.name, 'staff_avatar', st.avatar)
+      order by st.name nulls first, tp.start_time, tp.label)
+    from public.shift_templates tp left join public.staff st on st.id = tp.staff_id
+   where tp.archived_at is null and (tp.staff_id is null or (st.active and not st.view_only))), '[]'::json);
 end $$;
 
+-- Kept for app versions from before fixed workers' hours.
 create function public.mgr_save_template(p_token text, p_id uuid, p_label text, p_weekdays jsonb,
                                          p_start text, p_end text, p_people int) returns json
 language plpgsql security definer set search_path = public, extensions as $$
-declare v public.staff; v_days int[]; v_start time; v_end time; v_id uuid;
+begin
+  return public.mgr_save_shift_template(p_token, p_id, p_label, p_weekdays, p_start, p_end, p_people,
+    (select staff_id from public.shift_templates where id = p_id));
+end $$;
+
+-- A weekly pattern: open for anyone (p_staff_id null), or one fixed worker's own hours.
+create function public.mgr_save_shift_template(p_token text, p_id uuid, p_label text, p_weekdays jsonb,
+                                               p_start text, p_end text, p_people int, p_staff_id uuid) returns json
+language plpgsql security definer set search_path = public, extensions as $$
+declare v public.staff; v_days int[]; v_start time; v_end time; v_id uuid; v_old uuid;
+        v_people int := case when p_staff_id is null then p_people else 1 end;
 begin
   v := app_private.current_manager(p_token);
   if jsonb_typeof(p_weekdays) is distinct from 'array' then
@@ -1083,38 +1112,46 @@ begin
   if v_start is null or v_end is null or v_start = v_end then
     raise exception using message = 'Start and end can''t be the same time.', errcode = 'P0001';
   end if;
-  if p_people is null or p_people not between 1 and 20 then
+  if v_people is null or v_people not between 1 and 20 then
     raise exception using message = 'People needed must be between 1 and 20.', errcode = 'P0001';
   end if;
+  if p_staff_id is not null and not exists (select 1 from public.staff where id = p_staff_id and active and not view_only) then
+    raise exception using message = 'Pick an active team member.', errcode = 'P0001';
+  end if;
   if p_id is null then
-    insert into public.shift_templates (label, weekdays, start_time, end_time, people)
-    values (app_private.clean_text(p_label, 60), v_days, v_start, v_end, p_people)
+    insert into public.shift_templates (label, weekdays, start_time, end_time, people, staff_id)
+    values (app_private.clean_text(p_label, 60), v_days, v_start, v_end, v_people, p_staff_id)
     returning id into v_id;
   else
+    select staff_id into v_old from public.shift_templates where id = p_id and archived_at is null for update;
     update public.shift_templates
        set label = app_private.clean_text(p_label, 60), weekdays = v_days,
-           start_time = v_start, end_time = v_end, people = p_people
+           start_time = v_start, end_time = v_end, people = v_people, staff_id = p_staff_id
      where id = p_id and archived_at is null
     returning id into v_id;
     if v_id is null then
       raise exception using message = 'That standard shift no longer exists.', errcode = 'P0001';
     end if;
-    -- Upcoming open shifts from this pattern are archived and detached so they
-    -- get recreated with the new settings. Shifts someone already took stay as they are.
+    -- Upcoming shifts from this pattern that are still open, or still on the
+    -- fixed worker's name, are archived and detached so they get recreated
+    -- with the new settings. Shifts someone else took stay as they are.
     update public.shifts set cancelled_at = now(), template_id = null
-     where template_id = p_id and staff_id is null and cancelled_at is null and starts_at > now();
+     where template_id = p_id and cancelled_at is null and starts_at > now()
+       and (staff_id is null or staff_id is not distinct from v_old);
   end if;
   return json_build_object('ok', true, 'id', v_id);
 end $$;
 
 create function public.mgr_archive_template(p_token text, p_id uuid) returns json
 language plpgsql security definer set search_path = public, extensions as $$
-declare v public.staff;
+declare v public.staff; v_staff uuid;
 begin
   v := app_private.current_manager(p_token);
-  update public.shift_templates set archived_at = now() where id = p_id and archived_at is null;
+  update public.shift_templates set archived_at = now() where id = p_id and archived_at is null
+  returning staff_id into v_staff;
   update public.shifts set cancelled_at = now()
-   where template_id = p_id and staff_id is null and cancelled_at is null and starts_at > now();
+   where template_id = p_id and cancelled_at is null and starts_at > now()
+     and (staff_id is null or staff_id is not distinct from v_staff);
   return json_build_object('ok', true);
 end $$;
 

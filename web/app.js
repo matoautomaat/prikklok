@@ -1003,28 +1003,50 @@ function horizonNote(m) {
 }
 
 // One day's shifts, with identical open slots folded into one entry.
-function dayEntries(list) {
+// One day's shifts for display: open places at the same time are counted
+// together. With group, people working the same shift are listed together
+// too (x.people), so a day with five fixed workers stays readable. Your own
+// shift always stays on its own.
+const personOf = s => ({ id: s.staff_id, name: s.staff_name, avatar: s.staff_avatar });
+function dayEntries(list, { group = false } = {}) {
   const out = [];
   for (const s of list) {
+    const same = o => o.starts_at === s.starts_at && o.ends_at === s.ends_at && o.label === s.label;
     if (!s.staff_id) {
-      const same = out.find(o => o.open && o.starts_at === s.starts_at && o.ends_at === s.ends_at && o.label === s.label);
-      if (same) { same.count++; continue; }
+      const g = out.find(o => o.open && same(o));
+      if (g) { g.count++; continue; }
       out.push({ ...s, open: true, count: 1 });
+    } else if (group && !s.mine) {
+      const g = out.find(o => o.people && same(o));
+      if (g) { g.people.push(personOf(s)); continue; }
+      out.push({ ...s, open: false, count: 1, people: [personOf(s)] });
     } else {
       out.push({ ...s, open: false, count: 1 });
     }
   }
   return out;
 }
+const isGroup = x => x.people && x.people.length > 1;
+const miniPic = p => p.avatar ? `<span class="cal-pic">${Avatar.head(p.avatar)}</span>` : `<span class="cal-pic cal-initials">${esc(initials(p.name))}</span>`;
+// several people on one shift: their pictures in a row and their names
+const groupWho = people => `<span class="cal-group"><span class="cal-pics">${people.slice(0, 3).map(miniPic).join('')}${people.length > 3 ? `<span class="cal-more">+${people.length - 3}</span>` : ''}</span><b class="cal-names">${people.map(p => esc(p.name)).join(', ')}</b></span>`;
 
 // The part of the day: the shift's own name, or Middag / Avond from its start time.
 const shiftPart = s => s.label || (new Date(s.starts_at).getHours() < 16 ? 'Middag' : 'Avond');
 const partClass = part => /middag/i.test(part) ? ' is-day' : /avond/i.test(part) ? ' is-eve' : '';
 
-function calEntry(x, manager, t) {
+function calEntry(x, manager, t, day) {
   const past = new Date(x.ends_at) <= t;
   const time = `${fmt.time(x.starts_at)} – ${fmt.time(x.ends_at)}`;
   const part = shiftPart(x);
+  if (isGroup(x)) {
+    const inner = `<span class="cal-line"><span class="cal-tag${partClass(part)}"><span class="tag-full">${esc(part)}</span><span class="tag-short" aria-hidden="true">${esc(part.charAt(0))}</span></span><span class="t">${time}</span></span>
+      ${groupWho(x.people)}`;
+    const title = esc(`${part}, ${time}: ${x.people.map(p => p.name).join(', ')}`);
+    return manager
+      ? `<button type="button" class="cal-shift is-group${past ? ' is-past' : ''}" data-group-day="${toDateInput(day)}" title="${title}">${inner}</button>`
+      : `<span class="cal-shift is-group${past ? ' is-past' : ''}" title="${title}">${inner}</span>`;
+  }
   const who = x.open ? `Open${x.count > 1 ? ` ×${x.count}` : ''}` : esc(x.staff_name) + (x.mine && !manager ? ' (jij)' : '');
   const pic = x.open ? '' : x.staff_avatar ? `<span class="cal-pic">${Avatar.head(x.staff_avatar)}</span>` : `<span class="cal-pic cal-initials">${esc(initials(x.staff_name))}</span>`;
   const cls = `cal-shift${x.open ? ' is-open' : ''}${x.mine && !manager ? ' is-mine' : ''}${past ? ' is-past' : ''}`;
@@ -1041,7 +1063,7 @@ function calEntry(x, manager, t) {
 function calendarHTML(shifts, month, { manager = false } = {}) {
   const t = now(), first = startOfMonth(month);
   const days = new Date(first.getFullYear(), first.getMonth() + 1, 0).getDate();
-  const byDay = Array.from({ length: days }, (_, i) => dayEntries(shifts.filter(s => sameDay(s.starts_at, addDays(first, i)))));
+  const byDay = Array.from({ length: days }, (_, i) => dayEntries(shifts.filter(s => sameDay(s.starts_at, addDays(first, i))), { group: true }));
   const addBtn = d => manager ? `<button type="button" class="cal-add" data-add-day="${toDateInput(d)}" aria-label="Shift toevoegen op ${fmt.dayLong(d)}">+</button>` : '';
   const cells = [];
   for (let i = 0; i < weekdayIndex(first); i++) cells.push('<div class="cal-cell is-blank"></div>');
@@ -1049,7 +1071,7 @@ function calendarHTML(shifts, month, { manager = false } = {}) {
     const d = addDays(first, i);
     cells.push(`<div class="cal-cell${sameDay(d, t) ? ' is-today' : ''}${d < startOfDay(t) ? ' is-before' : ''}${list.length ? ' has-shifts' : ''}" data-day="${toDateInput(d)}">
       <div class="cal-day"><span class="cal-num">${i + 1}</span>${addBtn(d)}</div>
-      ${list.map(x => calEntry(x, manager, t)).join('')}
+      ${list.map(x => calEntry(x, manager, t, d)).join('')}
     </div>`);
   });
   while (cells.length % 7) cells.push('<div class="cal-cell is-blank"></div>');
@@ -1114,6 +1136,8 @@ function bindCalendar(el, shifts, manager) {
     }
     const add = ev.target.closest('[data-add-day]');
     if (add) { addShiftModal(add.dataset.addDay); return; }
+    const grp = ev.target.closest('[data-group-day]');
+    if (grp) { daySheet(grp.dataset.groupDay, shifts, manager); return; }
     const b = ev.target.closest('[data-shift]');
     const s = b && shifts.find(x => x.id === b.dataset.shift);
     if (!s) return;
@@ -1230,6 +1254,7 @@ async function viewSchedule(el, current) {
   const t = now();
   const filled = shifts.filter(s => s.staff_id).length;
   const openAhead = shifts.filter(s => !s.staff_id && new Date(s.ends_at) > t).length;
+  const openTps = templates.filter(tp => !tp.staff_id), fixedTps = templates.filter(tp => tp.staff_id);
   el.innerHTML = `
     <div class="view-head">
       <div><h1>Planning</h1><p>${plural(shifts.length, 'shift', 'shiften')} · ${filled} ingevuld · ${openAhead} nog open. Klik op een shift om iemand toe te wijzen of hem aan te passen.</p></div>
@@ -1243,13 +1268,17 @@ async function viewSchedule(el, current) {
     ${horizonNote(m)}
     <section class="card">
       <div class="card-head"><h2>Vaste shiften</h2><button class="sm" id="add-template">+ Vaste shift toevoegen</button></div>
-      <p class="muted small" style="margin-top:6px">Deze komen elke week terug. Ze verschijnen vanzelf in de kalender, tot 3 maanden op voorhand, als open shiften die het personeel kan opnemen.</p>
-      ${templates.length ? `<div class="rows">${templates.map(tp => `
-        <div class="row">
-          <div class="row-main"><span class="row-title">${esc(tp.label || 'Shift')}</span>
-            <span class="row-sub">${daysText(tp.weekdays)} · <span class="time">${tp.start_time} – ${tp.end_time}</span> · ${plural(tp.people, 'persoon', 'personen')}</span></div>
-          <div class="row-actions"><button class="sm" data-template="${tp.id}">Wijzigen</button></div>
-        </div>`).join('')}</div>` : '<p class="empty">Nog geen vaste shiften.</p>'}
+      <p class="muted small" style="margin-top:6px">Deze komen elke week terug en verschijnen vanzelf in de kalender, tot 3 maanden op voorhand.</p>
+      <h3 class="tp-head">Open, voor wie wil</h3>
+      ${openTps.length ? `<div class="rows">${openTps.map(templateRow).join('')}</div>` : '<p class="empty">Geen open vaste shiften.</p>'}
+      <h3 class="tp-head">Vaste werknemers</h3>
+      <p class="muted small">Hun uren staan elke week meteen op hun naam. Kunnen ze een keer niet, dan geven ze die shift terug.</p>
+      ${fixedTps.length ? `<div class="rows">${byPerson(fixedTps).map(([name, list]) => `
+        <div class="row tp-person">
+          <div class="person">${personPic({ name, avatar: list[0].staff_avatar })}
+            <div class="row-main"><span class="row-title">${esc(name)}</span>
+              ${list.map(tp => `<span class="row-sub tp-line"><span>${esc(tp.label || 'Shift')} · ${daysText(tp.weekdays)} · <span class="time">${tp.start_time} – ${tp.end_time}</span></span><button class="link" data-template="${tp.id}">Wijzigen</button></span>`).join('')}</div></div>
+        </div>`).join('')}</div>` : '<p class="empty">Nog geen vaste uren. Kies bij "+ Vaste shift toevoegen" een werknemer, of doe het bij Team → (persoon).</p>'}
     </section>`;
   bindMonthNav(el);
   bindCalendar(el, shifts, true);
@@ -1298,19 +1327,36 @@ function addShiftModal(dateStr) {
   });
 }
 
-function templateModal(tp) {
-  const days = tp ? tp.weekdays : [];
+const templateRow = tp => `
+  <div class="row">
+    <div class="row-main"><span class="row-title">${esc(tp.label || 'Shift')}</span>
+      <span class="row-sub">${daysText(tp.weekdays)} · <span class="time">${tp.start_time} – ${tp.end_time}</span> · ${plural(tp.people, 'persoon', 'personen')}</span></div>
+    <div class="row-actions"><button class="sm" data-template="${tp.id}">Wijzigen</button></div>
+  </div>`;
+function byPerson(tps) {
+  const map = new Map();
+  for (const tp of tps) { if (!map.has(tp.staff_name)) map.set(tp.staff_name, []); map.get(tp.staff_name).push(tp); }
+  return [...map.entries()];
+}
+
+// A weekly pattern: open for anyone, or a fixed worker's own hours.
+function templateModal(tp, { staffId = null } = {}) {
+  const days = tp ? tp.weekdays : staffId ? [1, 3, 4, 5, 6, 0] : [];
+  const who = tp ? tp.staff_id || '' : staffId || '';
   modal.open(`
-    <h2 id="modal-title">${tp ? `“${esc(tp.label || 'Shift')}” wijzigen` : 'Vaste shift toevoegen'}</h2>
-    <p>Komt elke week terug.${tp ? ' Wijzigingen gelden voor de komende open shiften. Shiften die al opgenomen zijn, blijven zoals ze zijn.' : ''}</p>
+    <h2 id="modal-title">${tp ? `“${esc(tp.label || 'Shift')}” wijzigen` : who ? 'Vaste uren toevoegen' : 'Vaste shift toevoegen'}</h2>
+    <p>Komt elke week terug.${tp ? ' Wijzigingen gelden voor de komende shiften die nog open zijn of nog op de naam van de vaste werknemer staan.' : ''}</p>
     <form id="tp-form" novalidate>
       <div class="form-grid">
+        <div class="field wide"><label for="tp-staff">Voor wie</label><select id="tp-staff">
+          <option value="">Open – het personeel kan hem opnemen</option>
+          ${activeStaff().map(p => `<option value="${p.id}" ${p.id === who ? 'selected' : ''}>${esc(p.name)} (vaste uren)</option>`).join('')}</select></div>
         <div class="field wide"><label for="tp-label">Naam</label><input id="tp-label" maxlength="60" value="${esc(tp ? tp.label : '')}" placeholder="bv. Avond"></div>
         <div class="field wide"><label>Dagen</label><div class="days">${WEEK_ORDER.map(i => `
           <label><input type="checkbox" name="tpday" value="${i}" ${days.includes(i) ? 'checked' : ''}><span>${DAY_SHORT[i]}</span></label>`).join('')}</div></div>
         <div class="field"><label for="tp-start">Begint</label>${timeField('tp-start', tp ? tp.start_time : '17:30')}</div>
         <div class="field"><label for="tp-end">Eindigt</label>${timeField('tp-end', tp ? tp.end_time : '22:30')}</div>
-        <div class="field"><label for="tp-people">Aantal personen</label><input id="tp-people" type="number" min="1" max="20" value="${tp ? tp.people : 1}"></div>
+        <div class="field" ${who ? 'hidden' : ''}><label for="tp-people">Aantal personen</label><input id="tp-people" type="number" min="1" max="20" value="${tp ? tp.people : 1}"></div>
       </div>
       <p class="form-error" id="tp-err"></p>
       <div class="form-actions" style="justify-content:${tp ? 'space-between' : 'flex-end'}">
@@ -1318,6 +1364,8 @@ function templateModal(tp) {
         <span class="toolbar"><button type="button" data-close>Annuleren</button><button type="submit" class="primary">Opslaan</button></span>
       </div>
     </form>`, d => {
+    const staffSel = $('#tp-staff', d);
+    staffSel.addEventListener('change', () => { $('#tp-people', d).closest('.field').hidden = !!staffSel.value; });
     $('#tp-form', d).addEventListener('submit', async ev => {
       ev.preventDefault();
       const err = $('#tp-err', d);
@@ -1328,12 +1376,12 @@ function templateModal(tp) {
       const btn = $('button[type=submit]', d);
       btn.disabled = true;
       try {
-        await rpc('mgr_save_template', {
+        await rpc('mgr_save_shift_template', {
           p_id: tp ? tp.id : null, p_label: $('#tp-label', d).value, p_weekdays: picked,
-          p_start: start, p_end: end, p_people: Number($('#tp-people', d).value) || 1,
+          p_start: start, p_end: end, p_people: Number($('#tp-people', d).value) || 1, p_staff_id: staffSel.value || null,
         });
         modal.close();
-        toast('Vaste shift opgeslagen.');
+        toast(staffSel.value ? 'Vaste uren opgeslagen.' : 'Vaste shift opgeslagen.');
         renderView();
       } catch (e) { err.textContent = e.message; btn.disabled = false; }
     });
@@ -1341,7 +1389,7 @@ function templateModal(tp) {
     if (rm) rm.addEventListener('click', async () => {
       const ok = await modal.confirm({
         title: `“${tp.label || 'Shift'}” stopzetten?`, danger: true, ok: 'Stopzetten',
-        body: 'De komende open shiften ervan verdwijnen uit de kalender. Shiften die al opgenomen zijn, blijven.',
+        body: tp.staff_id ? `De komende shiften ervan verdwijnen uit de kalender, ook die op naam van ${esc(tp.staff_name)}.` : 'De komende open shiften ervan verdwijnen uit de kalender. Shiften die al opgenomen zijn, blijven.',
       });
       if (!ok) return;
       busy(null, async () => { await rpc('mgr_archive_template', { p_id: tp.id }); toast('Vaste shift stopgezet.'); renderView(); }).catch(() => {});
@@ -2588,9 +2636,10 @@ function familyMember(el, r) {
 
 async function viewMember(el, current) {
   const id = S.memberId;
-  const [r] = await Promise.all([rpc('mgr_get_staff', { p_id: id }), loadStaff()]);
+  const [r, templates] = await Promise.all([rpc('mgr_get_staff', { p_id: id }), rpc('mgr_templates'), loadStaff()]);
   if (!current()) return;
   const p = r.person, pr = r.profile, xp = r.xp, self = p.id === S.me.id, first = p.name.split(' ')[0];
+  const mine = templates.filter(tp => tp.staff_id === p.id);
   if (p.role === 'viewer') return familyMember(el, r);
   el.innerHTML = `
     <div class="view-head"><div class="hello">
@@ -2639,6 +2688,15 @@ async function viewMember(el, current) {
       </section>
     </div>
     <section class="card">
+      <div class="card-head"><h2>Vaste uren</h2>${p.active ? '<button class="sm" id="add-fixed">+ Vaste uren toevoegen</button>' : ''}</div>
+      <p class="muted small" style="margin-top:6px">Werkt ${esc(first)} elke week op dezelfde momenten? Dan staan die shiften vanzelf op ${esc(first)}s naam in de kalender, en kan ${esc(first)} dan inklokken.</p>
+      ${mine.length ? `<div class="rows">${mine.map(tp => `
+        <div class="row"><div class="row-main"><span class="row-title">${esc(tp.label || 'Shift')}</span>
+          <span class="row-sub">${daysText(tp.weekdays)} · <span class="time">${tp.start_time} – ${tp.end_time}</span></span></div>
+          <div class="row-actions"><button class="sm" data-template="${tp.id}">Wijzigen</button></div></div>`).join('')}</div>`
+        : '<p class="empty">Geen vaste uren. Shiften neemt die persoon zelf op of krijgt ze van jou.</p>'}
+    </section>
+    <section class="card">
       <div class="card-head"><h2>Persoonlijke gegevens</h2><button class="sm" id="from-slip">Invullen vanuit een loonfiche</button></div>
       <p class="muted small" style="margin-top:6px">${esc(first)} kan deze gegevens ook zelf invullen bij Profiel. Alleen die persoon en de verantwoordelijken zien ze.</p>
       <form id="pf-form" novalidate><div class="form-grid" style="margin-top:12px">${profileFields('mf', pr)}</div>
@@ -2676,6 +2734,9 @@ async function viewMember(el, current) {
     <input type="file" id="slip-file" accept="application/pdf,image/png,image/jpeg" hidden>`;
 
   $('#back', el).addEventListener('click', () => { location.hash = 'team'; });
+  const addFixed = $('#add-fixed', el);
+  if (addFixed) addFixed.addEventListener('click', () => templateModal(null, { staffId: p.id }));
+  $$('[data-template]', el).forEach(b => b.addEventListener('click', () => templateModal(mine.find(x => x.id === b.dataset.template))));
   const pm = $('#pm-form', el);
   pm.addEventListener('submit', async ev => {
     ev.preventDefault();
@@ -2860,6 +2921,12 @@ function famCalendarHTML(shifts, month, people, selected) {
   const avatarOf = id => (people.find(p => p.id === id) || {}).avatar;
   const entry = x => {
     const part = shiftPart(x), label = fam.part(x), past = new Date(x.ends_at) <= t;
+    if (isGroup(x)) {
+      const people = x.people.map(p => ({ ...p, avatar: avatarOf(p.id) }));
+      return `<span class="cal-shift is-group${past ? ' is-past' : ''}" title="${esc(`${label}, ${fmt.range(x.starts_at, x.ends_at)}: ${people.map(p => p.name).join(', ')}`)}">
+        <span class="cal-line"><span class="cal-tag${partClass(part)}"><span class="tag-full">${esc(label)}</span><span class="tag-short" aria-hidden="true">${esc(label.charAt(0))}</span></span><span class="t">${fmt.range(x.starts_at, x.ends_at)}</span></span>
+        ${groupWho(people)}</span>`;
+    }
     const who = x.open ? `${L('Open', '空缺')}${x.count > 1 ? ` ×${x.count}` : ''}` : esc(x.staff_name);
     const av = x.open ? null : avatarOf(x.staff_id);
     const pic = x.open ? '' : av ? `<span class="cal-pic">${Avatar.head(av)}</span>` : `<span class="cal-pic cal-initials">${esc(initials(x.staff_name))}</span>`;
@@ -2870,7 +2937,7 @@ function famCalendarHTML(shifts, month, people, selected) {
   const cells = [];
   for (let i = 0; i < weekdayIndex(first); i++) cells.push('<div class="cal-cell is-blank"></div>');
   for (let i = 0; i < days; i++) {
-    const d = addDays(first, i), list = dayEntries(shifts.filter(s => sameDay(s.starts_at, d)));
+    const d = addDays(first, i), list = dayEntries(shifts.filter(s => sameDay(s.starts_at, d)), { group: true });
     cells.push(`<div class="cal-cell${sameDay(d, t) ? ' is-today' : ''}${d < today ? ' is-before' : ''}${list.length ? ' has-shifts' : ''}${sameDay(d, selected) ? ' is-selected' : ''}" data-day="${toDateInput(d)}">
       <div class="cal-day"><span class="cal-num">${i + 1}</span></div>
       ${list.map(entry).join('')}
@@ -2895,8 +2962,9 @@ function famCalendarHTML(shifts, month, people, selected) {
 
 // One day spelled out in big letters, under the calendar on a phone.
 function famDayHTML(shifts, day, people) {
-  const t = now(), list = dayEntries(shifts.filter(s => sameDay(s.starts_at, day)));
+  const t = now(), list = dayEntries(shifts.filter(s => sameDay(s.starts_at, day)), { group: true });
   const avatarOf = id => (people.find(p => p.id === id) || {}).avatar;
+  const who = p => `<span class="fam-person-chip">${personPic({ name: p.name, avatar: avatarOf(p.id) })}<span>${esc(p.name)}</span></span>`;
   return `
     <h2>${esc(fam.day(day))}${sameDay(day, t) ? ` <span class="pill on">${L('Vandaag', '今天')}</span>` : ''}</h2>
     ${list.length ? `<div class="day-list">${list.map(x => `
@@ -2904,7 +2972,7 @@ function famDayHTML(shifts, day, people) {
         <div class="day-main">
           <div class="day-when"><span class="cal-tag${partClass(shiftPart(x))}">${esc(fam.part(x))}</span><span class="time">${fmt.range(x.starts_at, x.ends_at)}</span></div>
           <div class="day-who">${x.open ? `<span class="fam-open-who">${L('Open, nog niemand', '空缺，还没人')}${x.count > 1 ? ` · ${L(`${x.count} plaatsen`, `${x.count}个位置`)}` : ''}</span>`
-            : `${personPic({ name: x.staff_name, avatar: avatarOf(x.staff_id) })}<span>${esc(x.staff_name)}</span>`}</div>
+            : `<span class="fam-people-list">${(x.people || [personOf(x)]).map(who).join('')}</span>`}</div>
         </div>
       </div>`).join('')}</div>` : `<p class="empty">${L('Geen shiften op deze dag.', '这天没有班次。')}</p>`}`;
 }
