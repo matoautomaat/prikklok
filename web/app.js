@@ -157,6 +157,7 @@ const SERVER_NL = {
   'Pick a language.': 'Kies een taal.',
   'Pick who clocks in.': 'Duid aan wie inklokt.',
   'The XP a day must be between 0 and 500.': 'De XP per dag moet tussen 0 en 500 liggen.',
+  'Pick a title from the list.': 'Kies een titel uit de lijst.',
 };
 // What staff can run into, for who uses the app in Chinese.
 const SERVER_ZH = {
@@ -197,12 +198,15 @@ const SERVER_ZH = {
   'Not allowed.': '不允许这样做。',
   'Clocking in is off for you. Ask your manager.': '你不需要打卡。有问题请问负责人。',
   'Pick a language.': '请选择语言。',
+  'Pick a title from the list.': '请从列表里选一个称号。',
+  "That person wasn't found.": '找不到这个人。',
 };
 const SERVER_ZH_PATTERNS = [
   [/^Shifts can't be dropped less than (\d+) hours before they start\. Ask your manager\.$/, '离开始不到 $1 小时的班次不能退回。请问负责人。'],
   [/^Too many wrong PINs\. Try again in (\d+) min, or ask your manager to reset your PIN\.$/, '密码错误次数太多。请 $1 分钟后再试，或请负责人重设密码。'],
   [/^Your shift starts at (\d\d:\d\d)\. You can check in from (\d\d:\d\d)\.$/, '你的班次 $1 开始，$2 起可以打卡。'],
   [/^That item unlocks at level (\d+)\.$/, '这个物品 $1 级才解锁。'],
+  [/^That title unlocks at level (\d+)\.$/, '这个称号 $1 级才解锁。'],
 ];
 const SERVER_NL_PATTERNS = [
   [/^(.+) already has a shift that overlaps one of these\.$/, '$1 heeft al een shift die met een van deze overlapt.'],
@@ -211,6 +215,7 @@ const SERVER_NL_PATTERNS = [
   [/^Too many wrong PINs\. Try again in (\d+) min, or ask your manager to reset your PIN\.$/, 'Te vaak een verkeerde pincode. Probeer opnieuw over $1 min, of vraag je verantwoordelijke om een nieuwe pincode.'],
   [/^Your shift starts at (\d\d:\d\d)\. You can check in from (\d\d:\d\d)\.$/, 'Je shift begint om $1. Je kan inklokken vanaf $2.'],
   [/^That item unlocks at level (\d+)\.$/, 'Dat krijg je pas vanaf level $1.'],
+  [/^That title unlocks at level (\d+)\.$/, 'Die titel krijg je pas vanaf level $1.'],
   [/^Officient answered (\d+)( for .*)?\.$/, 'Officient gaf een fout ($1). Probeer het later opnieuw.'],
   [/^MATO Info answered (\d+)(: .*)?\.$/, 'MATO Info gaf een fout ($1). Probeer het later opnieuw.'],
   [/^You're (\d+) m from the restaurant\. Clock in and out at the restaurant\.$/, (_, m) => `Je bent ${metres(+m)} van het restaurant. In- en uitklokken kan alleen aan het restaurant.`],
@@ -619,6 +624,164 @@ const modal = {
   },
 };
 
+/* ------------------------------------------------- colleagues and titles */
+
+// Funny titles people pick for their card (Profiel → Titel kiezen); some need
+// a level. Same keys and levels as app_private.fun_title_level.
+const TITLES = [
+  ['dumpling', 'Dumplingbaas', '饺子大王', 1], ['wok', 'Wokmeester', '炒锅大师', 1], ['rice', 'Rijstridder', '米饭骑士', 1],
+  ['tea', 'Theemeester', '茶艺大师', 1], ['fortune', 'Gelukskoekje', '幸运饼干', 1], ['panda', 'Panda van de zaak', '店里的熊猫', 1],
+  ['spicy', 'Pittig pepertje', '小辣椒', 1], ['clown', 'Hofnar', '开心果', 1], ['owl', 'Nachtuil', '夜猫子', 1],
+  ['bird', 'Vroege vogel', '早起的鸟儿', 1], ['smile', 'Glimlach van de zaal', '大堂微笑担当', 1],
+  ['noodle', 'Noedelnerd', '面条达人', 2], ['dishes', 'Afwaskampioen', '洗碗冠军', 2],
+  ['karaoke', 'Karaokester', '卡拉OK之星', 3], ['speed', 'Snelste bord van Torhout', '托尔豪特上菜最快', 3],
+  ['chopsticks', 'Stokjesninja', '筷子忍者', 4], ['springroll', 'Loempialegende', '春卷传奇', 5],
+  ['boss', 'Baas van de bar', '吧台老大', 6], ['zen', 'Zen tijdens de rush', '高峰期淡定大师', 8],
+  ['dragon', 'Drakenhart', '龙之心', 10], ['emperor', 'Keizer van de keuken', '厨房皇帝', 15], ['legend', 'Levende legende', '活传奇', 20],
+];
+const TITLE_BY = Object.fromEntries(TITLES.map(t => [t[0], t]));
+// The title on someone's card: theirs, the manager's own words, or one the app picks for them.
+function funTitle(p) {
+  const t = p && p.title;
+  if (t) return TITLE_BY[t] ? T(TITLE_BY[t][1], TITLE_BY[t][2]) : t;
+  const free = TITLES.filter(x => x[3] === 1);
+  const n = [...String((p && p.id) || '')].reduce((a, c) => a + c.charCodeAt(0), 0);
+  return T(free[n % free.length][1], free[n % free.length][2]);
+}
+// "2 jaar en 1 maand" since a date
+function sinceText(iso) {
+  const d = new Date(iso + 'T00:00'), t = now();
+  const m = Math.max(0, (t.getFullYear() - d.getFullYear()) * 12 + t.getMonth() - d.getMonth() - (t.getDate() < d.getDate() ? 1 : 0));
+  const y = Math.floor(m / 12), r = m % 12;
+  if (!m) return T('net begonnen', '刚加入');
+  return zhUI() ? `${y ? `${y}年` : ''}${r ? `${r}个月` : ''}`
+    : [y && `${y} jaar`, r && plural(r, 'maand', 'maanden')].filter(Boolean).join(' en ');
+}
+
+// A colleague's card: their picture, title, level and since when they work
+// here. Opens from the ranking, the calendar and a day's shifts.
+async function mateCard(id) {
+  let p;
+  try { p = await rpc('colleague', { p_id: id }); } catch (e) { if (e.code !== 'auth') toast(e.message, 'error'); return; }
+  const role = { manager: T('Verantwoordelijke', '负责人'), driver: T('Chauffeur', '司机') }[p.role];
+  const d = modal.open(`
+    <div class="mate">
+      <div class="mate-pic">${p.avatar ? Avatar.render(p.avatar, { title: p.name }) : `<span class="hero-empty">${Avatar.render(Avatar.DEFAULT)}</span>`}</div>
+      <div class="mate-main">
+        <p class="mate-title">“${esc(funTitle(p))}”</p>
+        <h2 id="modal-title">${esc(p.name)}${p.me ? ` <span class="pill accent">${T('jij', '你')}</span>` : ''}</h2>
+        <p class="lvl-line">${levelPill(p)} <span>${esc(levelTitle(p.level))}</span></p>
+        ${xpBar({ xp: p.xp, level: p.level })}
+        <dl class="kv">
+          <dt>${p.since_app ? T('In de app sinds', '开始用 app') : T(`Bij ${esc(S.settings.business_name)} sinds`, `加入 ${esc(S.settings.business_name)}`)}</dt>
+          <dd>${fmtDate(p.since)} <span class="muted">· ${sinceText(p.since)}</span></dd>
+          ${role ? `<dt>${T('Rol', '角色')}</dt><dd>${role}</dd>` : ''}
+        </dl>
+      </div>
+    </div>
+    <div class="form-actions">${p.me ? `<button type="button" id="mate-title">${T('Titel kiezen', '选择称号')}</button>` : ''}${isManager() && !p.me
+      ? '<button type="button" id="mate-team">Openen bij Team</button>' : ''}<button type="button" class="primary" data-close>${T('Sluiten', '关闭')}</button></div>`, null, { sheet: true });
+  const team = $('#mate-team', d);
+  if (team) team.addEventListener('click', () => { modal.close(); location.hash = `team/${p.id}`; });
+  const ti = $('#mate-title', d);
+  if (ti) ti.addEventListener('click', () => titlePicker(p.title, p.level, () => { if (S.view === 'profile' || S.view === 'ranking') renderView(); }));
+}
+function bindMates(el) {
+  $$('[data-mate]', el).forEach(r => {
+    r.addEventListener('click', () => mateCard(r.dataset.mate));
+    r.addEventListener('keydown', e => { if (e.target === r && (e.key === 'Enter' || e.key === ' ')) { e.preventDefault(); mateCard(r.dataset.mate); } });
+  });
+}
+
+function titlePicker(current, level, after) {
+  const d = modal.open(`
+    <h2 id="modal-title">${T('Kies je titel', '选择你的称号')}</h2>
+    <p>${T('Je collega\'s zien hem op je kaart. Sommige titels krijg je pas op een hoger level.', '同事会在你的名片上看到它。有些称号升级后才能用。')}</p>
+    <div class="title-grid">${TITLES.map(([k, nl, zh, l]) => {
+      const lock = l > level;
+      return `<button type="button" class="title-pick${current === k ? ' is-on' : ''}" data-title="${k}" aria-pressed="${current === k}" ${lock ? 'disabled' : ''}>
+        <span>${esc(T(nl, zh))}</span>${lock ? `<span class="av-lock">${LOCK_ICON}${T('Level', '等级')} ${l}</span>` : ''}</button>`;
+    }).join('')}</div>
+    <p class="form-error" id="tp-err"></p>
+    <div class="form-actions">${current ? `<button type="button" id="title-clear">${T('Laat de app kiezen', '让 app 来选')}</button>` : ''}<button type="button" data-close>${T('Annuleren', '取消')}</button></div>`, null, { sheet: true });
+  const save = (key, b) => busy(b, async () => {
+    await rpc('save_my_title', { p_key: key });
+    modal.close();
+    toast(T('Je titel is opgeslagen.', '称号已保存。'));
+    if (after) after();
+  }).catch(e => { $('#tp-err', d).textContent = e.message; });
+  $$('[data-title]', d).forEach(b => b.addEventListener('click', () => save(b.dataset.title, b)));
+  const c = $('#title-clear', d);
+  if (c) c.addEventListener('click', () => save(null, c));
+}
+
+/* ------------------------------------------------- open shift reminder */
+
+// Who picks shifts (not fixed workers, drivers or managers) hears about open
+// shifts when they open the app: right away when a colleague gave a shift
+// back, otherwise once a day while shifts are still open this month (and next
+// month from the 20th on). Off per device at Profiel → Herinneringen.
+const REMIND_OFF = 'prikklok.remind.off';
+async function maybeShiftReminder() {
+  if (!S.me || !S.me.picks || store.get(REMIND_OFF) || $('#modal').open || Date.now() - (S.alertsAt || 0) < 5 * 60000) return;
+  S.alertsAt = Date.now();
+  let r;
+  try { r = await rpc('shift_alerts'); } catch { return; }
+  if (!S.me || $('#modal').open || !r.open.length) return;
+  const key = `prikklok.remind.${S.me.id}`, today = toDateInput(now());
+  let seen;
+  try { seen = JSON.parse(store.get(key) || '{}'); } catch { seen = {}; }
+  const back = r.open.filter(s => s.released).map(s => s.id);
+  const fresh = back.filter(id => !(seen.back || []).includes(id));
+  if (!fresh.length && seen.day === today) return;
+  store.set(key, JSON.stringify({ day: today, back }));
+  shiftReminder(r.open, fresh.length > 0);
+}
+
+function shiftReminder(list, urgent) {
+  const back = list.filter(s => s.released);
+  // the same shift with several open places is one row
+  const slots = [];
+  for (const s of list.filter(x => !x.released)) {
+    const same = slots.find(o => o.starts_at === s.starts_at && o.ends_at === s.ends_at && o.label === s.label);
+    if (same) same.count++; else slots.push({ ...s, count: 1 });
+  }
+  const soon = slots.slice(0, back.length ? 3 : 5);
+  const months = new Map();
+  for (const s of list) { const m = toDateInput(startOfMonth(new Date(s.starts_at))); months.set(m, (months.get(m) || 0) + 1); }
+  const row = s => {
+    const part = shiftPart(s);
+    return `<div class="remind-row">
+      <span class="cal-tag${partClass(part)}">${esc(partName(part))}</span>
+      <div class="remind-when"><strong>${esc(fmt.dayLong(s.starts_at))}</strong><span class="time">${fmt.range(s.starts_at, s.ends_at)}${s.count > 1 ? ` <span class="muted">· ${T(`${s.count} plaatsen`, `${s.count} 个位置`)}</span>` : ''}</span>
+        ${s.released ? `<span class="muted small">${T(`${esc(s.released.name)} gaf hem terug`, `${esc(s.released.name)} 退回了这个班次`)}</span>` : ''}</div>
+      <button type="button" class="sm primary" data-take="${s.id}">${T('Opnemen', '认领')}</button>
+    </div>`;
+  };
+  const d = modal.open(`
+    <div class="remind-head"><span class="remind-icon" aria-hidden="true">${ICONS.shifts}</span>
+      <div><h2 id="modal-title">${urgent ? T('Een collega gaf een shift terug', '有同事退回了班次') : T('Er zijn nog shiften vrij', '还有空班次')}</h2>
+        <p class="muted small">${[...months].map(([m, n]) => T(`${plural(n, 'open shift', 'open shiften')} in ${fmt.monthName(new Date(m + 'T00:00'))}`,
+          `${fmt.monthName(new Date(m + 'T00:00'))}有 ${n} 个空班次`)).join(' · ')}</p></div></div>
+    ${back.length ? `<h3 class="remind-sub">${T('Teruggegeven en nog open', '退回的，还空着')}</h3><div class="remind-list">${back.map(row).join('')}</div>` : ''}
+    ${soon.length ? `<h3 class="remind-sub">${T('De eerstvolgende open shiften', '最近的空班次')}</h3><div class="remind-list">${soon.map(row).join('')}</div>` : ''}
+    <p class="muted small remind-tip">${T('Tik op Opnemen en dan op Zeker? om een shift op jouw naam te zetten.', '点“认领”，再点“确定？”，班次就是你的了。')}</p>
+    <p class="form-error" id="rm-err"></p>
+    <div class="form-actions"><button type="button" id="rm-cal">${T('Naar de kalender', '去看日历')}</button><button type="button" class="primary" data-close>${T('Later', '以后再说')}</button></div>`, null, { sheet: true });
+  // a first tap asks "Zeker?", the second takes the shift
+  $$('[data-take]', d).forEach(b => b.addEventListener('click', async () => {
+    if (!b.dataset.sure) { b.dataset.sure = '1'; b.textContent = T('Zeker?', '确定？'); return; }
+    b.disabled = true; b.textContent = T('Bezig…', '请稍候…');
+    try {
+      await rpc('claim_shift', { p_shift_id: b.dataset.take });
+      b.replaceWith(Object.assign(document.createElement('span'), { className: 'pill on', textContent: T('Van jou', '你的了') }));
+      await refreshMe();
+      if (['clock', 'shifts'].includes(S.view)) renderView();
+    } catch (e) { $('#rm-err', d).textContent = e.message; b.disabled = false; b.textContent = T('Opnemen', '认领'); delete b.dataset.sure; }
+  }));
+  $('#rm-cal', d).addEventListener('click', () => { modal.close(); S.month = startOfMonth(now()); if (S.view === 'shifts') renderView(); else location.hash = 'shifts'; });
+}
+
 /* ------------------------------------------- on your phone: install guide */
 
 // Prikklok sits on the home screen like an app (manifest.webmanifest). On a
@@ -730,12 +893,16 @@ function installGuide({ auto = false } = {}) {
 
 // After a page is drawn: the guide, once, on a phone that doesn't have the app yet.
 function maybeInstallGuide() {
-  if (!device.phone || installed() || S.installAsked || !S.me || $('#modal').open) return;
+  if (!device.phone || installed() || S.installAsked || S.installTimer || !S.me || $('#modal').open) return;
   const v = store.get(INSTALL_KEY);
   if (v === 'done' || (v && Date.now() < Number(v))) return;
-  S.installAsked = true;
-  store.set(INSTALL_KEY, String(Date.now() + 3 * 86400000)); // "Later": ask again in three days
-  setTimeout(() => { if (S.me && !$('#modal').open) installGuide({ auto: true }); }, 1200);
+  S.installTimer = setTimeout(() => {
+    S.installTimer = null;
+    if (!S.me || $('#modal').open || S.installAsked) return; // another overlay first; a next page asks again
+    S.installAsked = true;
+    store.set(INSTALL_KEY, String(Date.now() + 3 * 86400000)); // "Later": ask again in three days
+    installGuide({ auto: true });
+  }, 1500);
 }
 const installButton = (id, cls = '') => device.phone && !installed()
   ? `<button type="button" class="${cls}" id="${id}">${IK.add}<span>${T('Zet Prikklok op je telefoon', '把 Prikklok 添加到手机')}</span></button>` : '';
@@ -896,7 +1063,7 @@ async function signOut({ silent = false } = {}) {
   const t = S.token;
   if (Tracker.entry != null) { Tracker.flush({ keepalive: true }); Tracker.stop(); }
   setToken(null);
-  S.me = null; S.staff = null;
+  S.me = null; S.staff = null; S.alertsAt = 0;
   $('#toast').hidden = true;
   stopPolling();
   if (!silent && t) quiet(rpc('logout', { p_token: t }, { auth: false }));
@@ -1038,7 +1205,7 @@ async function renderView() {
   }
   try {
     await VIEWS[S.view](el, () => seq === S.renderSeq);
-    if (seq === S.renderSeq) { showLevelUp(); maybeInstallGuide(); }
+    if (seq === S.renderSeq) { showLevelUp(); maybeShiftReminder(); maybeInstallGuide(); }
   } catch (e) {
     if (e.code === 'auth') return;
     if (seq === S.renderSeq) el.innerHTML = `<div class="card"><h2>${T('Deze pagina kon niet geladen worden', '这个页面无法加载')}</h2><p class="muted">${esc(e.message)}</p><div class="form-actions"><button class="primary" id="retry">${T('Opnieuw proberen', '重试')}</button></div></div>`;
@@ -1653,20 +1820,20 @@ function calEntry(x, manager, t, day) {
     const inner = `<span class="cal-line"><span class="cal-tag${partClass(part)}"><span class="tag-full">${esc(name)}</span><span class="tag-short" aria-hidden="true">${esc(name.charAt(0))}</span></span><span class="t">${time}</span></span>
       ${groupWho(x.people)}`;
     const title = esc(`${name}, ${time}: ${x.people.map(p => p.name).join(', ')}`);
-    return manager
-      ? `<button type="button" class="cal-shift is-group${past ? ' is-past' : ''}" data-group-day="${toDateInput(day)}" title="${title}">${inner}</button>`
-      : `<span class="cal-shift is-group${past ? ' is-past' : ''}" title="${title}">${inner}</span>`;
+    return `<button type="button" class="cal-shift is-group${past ? ' is-past' : ''}" data-group-day="${toDateInput(day)}" title="${title}">${inner}</button>`;
   }
   const who = x.open ? `${T('Open', '空缺')}${x.count > 1 ? ` ×${x.count}` : ''}` : esc(x.staff_name) + (x.mine && !manager ? T(' (jij)', '（你）') : '');
   const pic = x.open ? '' : x.staff_avatar ? `<span class="cal-pic">${Avatar.head(x.staff_avatar)}</span>` : `<span class="cal-pic cal-initials">${esc(initials(x.staff_name))}</span>`;
   const cls = `cal-shift${x.open ? ' is-open' : ''}${x.mine && !manager ? ' is-mine' : ''}${past ? ' is-past' : ''}`;
   const clickable = manager || (!past && (x.open || x.mine));
+  const mate = !manager && !x.open && !x.mine && x.staff_id; // someone else's shift: their card
   const title = esc(`${name}, ${time}${x.open ? (manager ? ' (open)' : T(' – tik om op te nemen', ' – 点击认领')) : ''}`);
   // phones show only the first letter of the part of the day, and the number of open places
   const inner = `<span class="cal-line"><span class="cal-tag${partClass(part)}"><span class="tag-full">${esc(name)}</span><span class="tag-short" aria-hidden="true">${esc(name.charAt(0))}</span></span><span class="t">${time}</span>${x.open && x.count > 1 ? `<span class="cal-count" aria-hidden="true">×${x.count}</span>` : ''}</span>
     <span class="cal-who">${pic}<b>${who}</b></span>`;
   return clickable
     ? `<button type="button" class="${cls}" data-shift="${x.id}" title="${title}">${inner}</button>`
+    : mate ? `<button type="button" class="${cls}" data-mate="${x.staff_id}" title="${title}">${inner}</button>`
     : `<span class="${cls}" title="${title}">${inner}</span>`;
 }
 
@@ -1713,7 +1880,7 @@ function daySheet(dateStr, shifts, manager) {
     const part = shiftPart(x), past = new Date(x.ends_at) <= t;
     const who = x.open
       ? `<span class="day-open">${T('Open', '空缺')}${x.count > 1 ? T(` · ${x.count} plaatsen`, ` · ${x.count} 个位置`) : ''}</span>`
-      : `${personPic({ name: x.staff_name, avatar: x.staff_avatar })}<span>${esc(x.staff_name)}${x.mine && !manager ? T(' (jij)', '（你）') : ''}</span>`;
+      : `<button type="button" class="day-mate" data-mate="${x.staff_id}">${personPic({ name: x.staff_name, avatar: x.staff_avatar })}<span>${esc(x.staff_name)}${x.mine && !manager ? T(' (jij)', '（你）') : ''}</span></button>`;
     const action = manager ? `<button type="button" class="sm" data-day-edit="${x.id}">Wijzigen</button>`
       : past ? '' : x.open ? `<button type="button" class="primary" data-day-claim="${x.id}">${T('Opnemen', '认领')}</button>`
       : x.mine ? `<button type="button" data-day-own="${x.id}">${T('Teruggeven', '退回')}</button>` : '';
@@ -1734,6 +1901,7 @@ function daySheet(dateStr, shifts, manager) {
   $$('[data-day-claim]', d).forEach(b => b.addEventListener('click', () => claimShift(find(b.dataset.dayClaim))));
   $$('[data-day-own]', d).forEach(b => b.addEventListener('click', () => ownShift(find(b.dataset.dayOwn))));
   $$('[data-day-edit]', d).forEach(b => b.addEventListener('click', () => editShift(find(b.dataset.dayEdit))));
+  $$('[data-mate]', d).forEach(b => b.addEventListener('click', () => mateCard(b.dataset.mate)));
   const add = $('#day-add', d);
   if (add) add.addEventListener('click', () => addShiftModal(dateStr));
 }
@@ -1749,6 +1917,8 @@ function bindCalendar(el, shifts, manager) {
     if (add) { addShiftModal(add.dataset.addDay); return; }
     const grp = ev.target.closest('[data-group-day]');
     if (grp) { daySheet(grp.dataset.groupDay, shifts, manager); return; }
+    const mate = ev.target.closest('[data-mate]');
+    if (mate) { mateCard(mate.dataset.mate); return; }
     const b = ev.target.closest('[data-shift]');
     const s = b && shifts.find(x => x.id === b.dataset.shift);
     if (!s) return;
@@ -3212,12 +3382,14 @@ async function viewProfile(el, current) {
       <div class="hero-main">
         <p class="section-label">${esc(S.me.name)}</p>
         <h2 class="hero-level">${T('Level', '等级')} ${lvl} <span>· ${esc(levelTitle(lvl))}</span></h2>
+        <p class="mate-title">“${esc(funTitle({ id: S.me.id, title: r.title }))}”${r.title ? '' : ` <span class="muted small">${T('(gekozen door de app)', '（app 选的）')}</span>`}</p>
         ${xpBar(xp)}
         ${xp.bonus && (canClock() || isManager()) ? `<p class="muted small">${T(`Waarvan ${num(xp.bonus, 0)} bonus-XP van je verantwoordelijke.`, `其中 ${num(xp.bonus, 0)} 是负责人给的奖励 XP。`)}</p>` : ''}
         ${next.length ? `<p class="small">${T(`Op level ${lvl + 1} krijg je:`, `升到 ${lvl + 1} 级可以得到：`)} <strong>${next.map(esc).join(T(', ', '、'))}</strong></p>` : ''}
         <div class="stats stats-3">${stats}
         </div>
-        <div class="toolbar"><button class="primary" id="edit-avatar">${r.avatar ? T('Avatar aanpassen', '修改头像') : T('Maak je avatar', '创建你的头像')}</button></div>
+        <div class="toolbar"><button class="primary" id="edit-avatar">${r.avatar ? T('Avatar aanpassen', '修改头像') : T('Maak je avatar', '创建你的头像')}</button>
+          <button id="pf-title">${T('Titel kiezen', '选择称号')}</button><button id="pf-card">${T('Zo zien collega\'s je', '同事看到的你')}</button></div>
         <details class="xp-how"><summary>${T('Hoe verdien je XP?', '怎么获得 XP？')}</summary>${xpHow(xp)}</details>
       </div>
     </section>
@@ -3249,6 +3421,10 @@ async function viewProfile(el, current) {
             <div class="field"><label for="pin-new2">${T('Herhaal de nieuwe', '再输一次新密码')}</label><input id="pin-new2" class="pin-input" type="password" inputmode="numeric" pattern="[0-9]*" maxlength="8" autocomplete="new-password"></div>
           </div><p class="form-error" id="pin-err"></p><div class="form-actions"><button type="submit" class="primary">${T('Pincode wijzigen', '修改密码')}</button></div></form>
         </section>
+        ${S.me.picks ? `<section class="card"><h2>${T('Herinneringen', '提醒')}</h2>
+          <label class="check" style="margin-top:12px"><input type="checkbox" id="pf-remind" ${store.get(REMIND_OFF) ? '' : 'checked'}> ${T('Herinner me aan open shiften', '提醒我还有空班次')}</label>
+          <p class="muted small" style="margin-top:6px">${T('Als je de app opent: meteen als iemand een shift teruggeeft, en één keer per dag als er nog shiften open staan. Alleen op dit toestel.', '打开 app 时：有人退回班次时马上提醒；还有空班次时每天提醒一次。只在这台设备上。')}</p>
+        </section>` : ''}
         <section class="card"><h2>${T('Weergave', '显示')}</h2>
           <p class="muted small" style="margin-top:6px">${T('Alleen op dit toestel.', '只在这台设备上。')}</p>
           <div class="chips" role="group" aria-label="${T('Thema', '主题')}" style="margin-top:12px">${THEMES.map(([k, nl, zh]) => `<button type="button" class="chip" data-theme-pick="${k}">${T(nl, zh)}</button>`).join('')}</div>
@@ -3262,6 +3438,13 @@ async function viewProfile(el, current) {
   $('#pf-signout', el).addEventListener('click', askSignOut);
   const pfi = $('#pf-install', el);
   if (pfi) pfi.addEventListener('click', () => installGuide());
+  $('#pf-title', el).addEventListener('click', () => titlePicker(r.title, lvl, renderView));
+  $('#pf-card', el).addEventListener('click', () => mateCard(S.me.id));
+  const rem = $('#pf-remind', el);
+  if (rem) rem.addEventListener('change', () => {
+    store.set(REMIND_OFF, rem.checked ? null : '1');
+    toast(rem.checked ? T('Je krijgt weer herinneringen voor open shiften.', '会再提醒你空班次。') : T('Geen herinneringen meer op dit toestel.', '这台设备不再提醒。'));
+  });
   $$('[data-theme-pick]', el).forEach(b => b.addEventListener('click', () => setTheme(b.dataset.themePick)));
   applyTheme();
   bindLangCard(el);
@@ -3309,7 +3492,7 @@ async function viewRanking(el, current) {
   const anyXp = ranked.some(p => p[key] > 0);
   const figure = p => p.avatar ? Avatar.render(p.avatar, { title: p.name }) : `<span class="hero-empty">${Avatar.render(Avatar.DEFAULT)}</span>`;
   const spot = (p, place) => p ? `
-    <div class="podium-spot place-${place}${p.me ? ' is-me' : ''}">
+    <div class="podium-spot place-${place}${p.me ? ' is-me' : ''}" data-mate="${p.id}" role="button" tabindex="0" aria-label="${esc(p.name)}">
       <div class="podium-pic">${figure(p)}</div>
       <div class="podium-name">${esc(p.name)}${p.me ? ` <span class="pill accent">${you}</span>` : ''}</div>
       <div class="podium-meta">${levelPill(p)} <span class="mono">${p[key]} XP</span></div>
@@ -3317,8 +3500,8 @@ async function viewRanking(el, current) {
     </div>` : '<div class="podium-spot is-empty"></div>';
   el.innerHTML = `
     <div class="view-head">
-      <div><h1>${T('Ranglijst', '排行榜')}</h1><p>${T(`Wie van het team heeft het hoogste level? XP verdien je met werken: 10 per uur, +5 als je op tijd begint en +5 als je blijft tot het einde. Wie niet inklokt, krijgt ${S.settings.daily_xp || 0} XP per dag.`,
-        `团队里谁的等级最高？工作就能得 XP：每小时 10，准时开始 +5，待到结束 +5。不用打卡的人每天得 ${S.settings.daily_xp || 0} XP。`)}</p></div>
+      <div><h1>${T('Ranglijst', '排行榜')}</h1><p>${T(`Wie van het team heeft het hoogste level? XP verdien je met werken: 10 per uur, +5 als je op tijd begint en +5 als je blijft tot het einde. Wie niet inklokt, krijgt ${S.settings.daily_xp || 0} XP per dag. Tik op iemand om de kaart te zien.`,
+        `团队里谁的等级最高？工作就能得 XP：每小时 10，准时开始 +5，待到结束 +5。不用打卡的人每天得 ${S.settings.daily_xp || 0} XP。点一个人可以看名片。`)}</p></div>
       <div class="chips" role="group" aria-label="${T('Periode', '时间')}">
         <button type="button" class="chip${mode === 'all' ? ' is-on' : ''}" data-rank-mode="all" aria-pressed="${mode === 'all'}">${T('Altijd', '全部')}</button>
         <button type="button" class="chip${mode === 'month' ? ' is-on' : ''}" data-rank-mode="month" aria-pressed="${mode === 'month'}">${T('Deze maand', '本月')}</button>
@@ -3330,14 +3513,15 @@ async function viewRanking(el, current) {
     <section class="card">
       <div class="card-head"><h2>${mode === 'month' ? T(`XP in ${month}`, `${month}的 XP`) : T('Iedereen', '所有人')}</h2><span class="muted small">${T(plural(ranked.length, 'persoon', 'personen'), `${ranked.length} 人`)}</span></div>
       <div class="rows rank-rows">${ranked.map(p => `
-        <div class="row rank-row${p.me ? ' mine' : ''}">
+        <div class="row rank-row${p.me ? ' mine' : ''}" data-mate="${p.id}" role="button" tabindex="0">
           <div class="person"><span class="rank-num">${p.rank}</span>${personPic(p, 'lg')}
             <div class="row-main"><span class="row-title">${esc(p.name)}${p.me ? ` <span class="pill accent">${you}</span>` : ''}</span>
-              <span class="row-sub">${levelPill(p)} ${esc(levelTitle(p.level))}</span></div></div>
+              <span class="row-sub">${levelPill(p)} <span class="rank-fun">“${esc(funTitle(p))}”</span></span></div></div>
           <span class="rank-xp mono">${p[key]} XP</span>
         </div>`).join('')}</div>
     </section>`;
   $$('[data-rank-mode]', el).forEach(b => b.addEventListener('click', () => { S.rankMode = b.dataset.rankMode; renderView(); }));
+  bindMates(el);
 }
 
 /* ---------------------------------------------------------- manager: today */
@@ -4316,6 +4500,10 @@ async function viewMember(el, current) {
             <div class="field"><label for="pm-pid">Werknemersnummer (Securex)</label><input id="pm-pid" maxlength="30" autocomplete="off" value="${esc(p.payroll_id || '')}"></div>
             <div class="field"><label for="pm-start">In dienst sinds</label><input id="pm-start" data-k="start_date" inputmode="numeric" placeholder="dd/mm/jjjj" maxlength="10" value="${esc(isoToDMY(pr.start_date))}"></div>
             <div class="field"><label for="pm-role">Rol</label><select id="pm-role">${roleOptions(p.role)}</select></div>
+            ${driver ? '' : `<div class="field"><label for="pm-title">Grappige titel</label><input id="pm-title" list="pm-titles" maxlength="40" autocomplete="off"
+              value="${esc(p.fun_title ? (TITLE_BY[p.fun_title] ? TITLE_BY[p.fun_title][1] : p.fun_title) : '')}" placeholder="${esc(funTitle({ id: p.id }))} (gekozen door de app)">
+              <datalist id="pm-titles">${TITLES.map(t => `<option value="${esc(t[1])}">`).join('')}</datalist>
+              <span class="help">Kies er een of typ je eigen titel. Collega's zien hem op ${esc(first)}'s kaart.</span></div>`}
             <div class="field"><label for="pm-lang">Taal van de app</label><select id="pm-lang">${[['', 'Zoals de telefoon'], ['nl', 'Nederlands'], ['zh', '中文 (Chinees)']].map(([k, l]) =>
               `<option value="${k}" ${(p.lang || '') === k ? 'selected' : ''}>${l}</option>`).join('')}</select>
               <span class="help">Wat ${esc(first)} ziet: klok, shiften, uren, profiel. Jouw schermen blijven Nederlands.</span></div>
@@ -4432,6 +4620,12 @@ async function viewMember(el, current) {
       if (pay !== (p.pay_method || null)) await rpc('mgr_set_pay_method', { p_id: p.id, p_method: pay });
       const lng = $('#pm-lang', pm).value || null;
       if (lng !== (p.lang || null)) await rpc('mgr_set_language', { p_id: p.id, p_lang: lng });
+      const ti = $('#pm-title', pm);
+      if (ti) {
+        const typed = ti.value.trim(), key = (TITLES.find(t => t[1].toLowerCase() === typed.toLowerCase()) || [])[0];
+        const title = key || typed || null; // a title from the list is kept by its key, so it reads in Chinese too
+        if (title !== (p.fun_title || null)) await rpc('mgr_set_title', { p_id: p.id, p_title: title });
+      }
       toast(pin ? `Opgeslagen. Nieuwe pincode: ${pin}` : 'Opgeslagen.');
       await loadStaff(true);
       if (self) { await refreshMe(); renderShell(); } else refreshTabs();

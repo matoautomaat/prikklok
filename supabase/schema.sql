@@ -76,7 +76,10 @@ create table public.staff (
   -- restaurant, and while clocked in the app keeps the route (route_points)
   driver          boolean not null default false,
   mato_name       text check (length(mato_name) <= 60), -- the name a driver fills under in MATO Info; empty = the first name
-  lang            text check (lang in ('nl', 'zh')) -- the app's language for this person; empty = what the phone chose
+  lang            text check (lang in ('nl', 'zh')), -- the app's language for this person; empty = what the phone chose
+  -- a funny title colleagues see on the person's card: a key from app_private.fun_title_level
+  -- (picked by the person) or the manager's own words; empty = one the app picks
+  fun_title       text check (length(fun_title) <= 40)
 );
 create unique index staff_name_key on public.staff (lower(name));
 
@@ -434,7 +437,9 @@ begin
   return json_build_object(
     'me', json_build_object('id', v.id, 'name', v.name, 'role', app_private.role_of(v), 'avatar', v.avatar,
                             'xp', app_private.xp_json(v.id), 'can_clock', not v.view_only and app_private.can_clock(v),
-                            'lang', v.lang),
+                            'lang', v.lang,
+                            -- who picks open shifts, and is reminded of them (see shift_alerts)
+                            'picks', not v.view_only and not v.driver and v.role <> 'manager' and v.contract_type is distinct from 'vast'),
     'settings', (select json_build_object(
         'business_name', business_name, 'drop_cutoff_hours', drop_cutoff_hours,
         'grace_minutes', grace_minutes, 'currency', currency, 'timezone', timezone,
@@ -546,6 +551,37 @@ begin
     from public.shifts sh left join public.staff st on st.id = sh.staff_id
    where sh.cancelled_at is null and sh.starts_at < p_to and sh.ends_at > p_from
      and not app_private.is_fixed_shift(sh.template_id, sh.staff_id)), '[]'::json);
+end $$;
+
+-- What to remind someone who picks shifts of: open shifts for the rest of this
+-- month (and next month from the 20th on) that don't clash with their own,
+-- with who gave a shift back in the last 30 days. Not for fixed workers,
+-- drivers or managers.
+create function public.shift_alerts(p_token text) returns json
+language plpgsql volatile security definer set search_path = public, extensions as $$
+declare v public.staff; v_tz text; v_to timestamptz;
+begin
+  v := app_private.current_staff(p_token);
+  if v.role = 'manager' or v.driver or v.contract_type = 'vast' then
+    return json_build_object('open', '[]'::json);
+  end if;
+  select coalesce(timezone, 'UTC') into v_tz from public.settings where id = 1;
+  v_to := (date_trunc('month', now() at time zone v_tz)
+           + case when extract(day from now() at time zone v_tz) >= 20 then interval '2 months' else interval '1 month' end)
+          at time zone v_tz;
+  perform app_private.ensure_template_shifts(now(), v_to);
+  return json_build_object('open', coalesce((select json_agg(json_build_object(
+      'id', sh.id, 'starts_at', sh.starts_at, 'ends_at', sh.ends_at, 'label', sh.label,
+      'released', case when r.staff_id <> v.id and r.created_at > now() - interval '30 days'
+                       then json_build_object('name', rs.name, 'at', r.created_at) end)
+      order by sh.starts_at)
+    from public.shifts sh
+    left join lateral (select * from public.shift_releases x where x.shift_id = sh.id order by x.created_at desc limit 1) r on true
+    left join public.staff rs on rs.id = r.staff_id
+   where sh.staff_id is null and sh.cancelled_at is null and sh.starts_at > now() and sh.starts_at < v_to
+     and not exists (select 1 from public.shifts m
+                      where m.staff_id = v.id and m.cancelled_at is null
+                        and m.starts_at < sh.ends_at and m.ends_at > sh.starts_at)), '[]'::json));
 end $$;
 
 create function public.claim_shift(p_token text, p_shift_id uuid) returns json
@@ -1725,7 +1761,7 @@ begin
     'work', json_build_object('role', app_private.role_of(v), 'hourly_rate', v.hourly_rate, 'contract_type', v.contract_type,
                               'payroll_id', v.payroll_id, 'start_date', v.start_date, 'created_at', v.created_at,
                               'can_clock', app_private.can_clock(v), 'lang', v.lang),
-    'avatar', v.avatar,
+    'avatar', v.avatar, 'title', v.fun_title,
     'xp', app_private.xp_json(v.id),
     'contracts', app_private.contracts_json(v.id));
 end $$;
@@ -1797,7 +1833,7 @@ begin
       'officient_pending', s.officient_pending,
       'officient_connected', (select o.refresh_token is not null from app_private.officient o where o.id = 1),
       'mato_name', app_private.mato_name(s), 'mato_name_own', s.mato_name,
-      'lang', s.lang, 'can_clock', not s.view_only and app_private.can_clock(s)),
+      'lang', s.lang, 'can_clock', not s.view_only and app_private.can_clock(s), 'fun_title', s.fun_title),
     'profile', app_private.profile_json(s),
     'xp', app_private.xp_json(s.id),
     'contracts', app_private.contracts_json(s.id),
@@ -1954,13 +1990,75 @@ begin
   select coalesce(timezone, 'UTC') into v_tz from public.settings where id = 1;
   v_from := date_trunc('month', now() at time zone v_tz) at time zone v_tz;
   return coalesce((select json_agg(json_build_object(
-      'id', st.id, 'name', st.name, 'avatar', st.avatar, 'me', st.id = v.id,
+      'id', st.id, 'name', st.name, 'avatar', st.avatar, 'me', st.id = v.id, 'title', st.fun_title,
       'xp', (j.x ->> 'xp')::int, 'level', (j.x ->> 'level')::int,
       'month_xp', app_private.xp_since(st.id, v_from))
       order by lower(st.name))
     from public.staff st
     cross join lateral (select app_private.xp_json(st.id) as x) j
    where st.active and not st.view_only and not st.driver), '[]'::json);
+end $$;
+
+-- The funny titles staff pick from, and the level each needs. Keep in sync
+-- with TITLES in web/app.js.
+create function app_private.fun_title_level(p_key text) returns int
+language sql immutable set search_path = public as $$
+  select ('{"dumpling": 1, "wok": 1, "rice": 1, "tea": 1, "fortune": 1, "panda": 1, "spicy": 1, "clown": 1,
+            "owl": 1, "bird": 1, "smile": 1, "noodle": 2, "dishes": 2, "karaoke": 3, "speed": 3,
+            "chopsticks": 4, "springroll": 5, "boss": 6, "zen": 8, "dragon": 10, "emperor": 15, "legend": 20}'::jsonb
+          ->> p_key)::int
+$$;
+
+revoke all on all functions in schema app_private from public, anon, authenticated;
+
+-- A colleague's card: picture, level, title and since when they work here.
+-- Nothing personal: no contract, wage or details.
+create function public.colleague(p_token text, p_id uuid) returns json
+language plpgsql stable security definer set search_path = public, extensions as $$
+declare v public.staff; s public.staff; x json;
+begin
+  v := app_private.current_staff(p_token);
+  select * into s from public.staff where id = p_id and active and not view_only;
+  if not found then
+    raise exception using message = 'That person wasn''t found.', errcode = 'P0001';
+  end if;
+  x := app_private.xp_json(s.id);
+  return json_build_object('id', s.id, 'name', s.name, 'avatar', s.avatar, 'role', app_private.role_of(s),
+    'me', s.id = v.id, 'title', s.fun_title, 'xp', (x ->> 'xp')::int, 'level', (x ->> 'level')::int,
+    'since', coalesce(s.start_date, (s.created_at at time zone coalesce((select timezone from public.settings where id = 1), 'UTC'))::date),
+    'since_app', s.start_date is null);
+end $$;
+
+-- Your own funny title, from the list (some need a level); null clears it.
+create function public.save_my_title(p_token text, p_key text) returns json
+language plpgsql security definer set search_path = public, extensions as $$
+declare v public.staff; v_need int;
+begin
+  v := app_private.current_staff(p_token);
+  if p_key is not null then
+    v_need := app_private.fun_title_level(p_key);
+    if v_need is null then
+      raise exception using message = 'Pick a title from the list.', errcode = 'P0001';
+    end if;
+    if (app_private.xp_json(v.id) ->> 'level')::int < v_need then
+      raise exception using errcode = 'P0001', message = format('That title unlocks at level %s.', v_need);
+    end if;
+  end if;
+  update public.staff set fun_title = p_key where id = v.id;
+  return json_build_object('ok', true);
+end $$;
+
+-- A manager gives someone a title: one from the list or their own words.
+create function public.mgr_set_title(p_token text, p_id uuid, p_title text) returns json
+language plpgsql security definer set search_path = public, extensions as $$
+declare v public.staff;
+begin
+  v := app_private.current_manager(p_token);
+  update public.staff set fun_title = nullif(app_private.clean_text(p_title, 40), '') where id = p_id;
+  if not found then
+    raise exception using message = 'That person wasn''t found.', errcode = 'P0001';
+  end if;
+  return json_build_object('ok', true);
 end $$;
 
 -- Bonus XP a manager gives someone, on top of what their work earns. It counts

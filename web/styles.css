@@ -778,6 +778,41 @@ dialog.sheet { width: min(480px, 100vw); }
 .signout-wide svg { width: 18px; height: 18px; }
 @media (min-width: 760px) { .signout-wide { display: none; } }
 
+/* a colleague's card, funny titles */
+.mate { display: grid; grid-template-columns: 132px minmax(0, 1fr); gap: 18px; align-items: start; }
+.mate-pic { background: var(--accent-soft); border-radius: var(--r); padding: 8px 4px 0; overflow: hidden; }
+.mate-pic svg { display: block; width: 100%; height: auto; }
+.mate-main h2 { margin: 2px 0 6px; }
+.mate-main .kv { margin-top: 14px; grid-template-columns: minmax(0, 1fr); gap: 2px; }
+.mate-main .kv dd + dt { margin-top: 8px; }
+.mate-title { font: 600 1.02rem/1.35 var(--f-display); color: var(--accent); font-style: italic; margin: 0; }
+.hero-main .mate-title { margin: 2px 0 10px; }
+@media (max-width: 420px) { .mate { grid-template-columns: 104px minmax(0, 1fr); gap: 14px; } }
+[data-mate][role="button"], button[data-mate] { cursor: pointer; }
+.rank-row[data-mate]:hover, .podium-spot[data-mate]:hover .podium-pic { filter: brightness(.98); }
+.rank-row[data-mate]:focus-visible, .podium-spot[data-mate]:focus-visible { outline: 2px solid var(--focus); outline-offset: 2px; }
+.rank-fun { color: var(--muted); font-style: italic; overflow: hidden; text-overflow: ellipsis; white-space: nowrap; min-width: 0; }
+.day-mate { padding: 0; min-height: 0; border: 0; background: transparent; gap: 8px; font-weight: 600; color: inherit; text-align: left; min-width: 0; }
+.day-mate span { overflow: hidden; text-overflow: ellipsis; }
+.title-grid { display: grid; grid-template-columns: repeat(2, minmax(0, 1fr)); gap: 8px; margin-top: 4px; }
+.title-pick { flex-direction: column; gap: 4px; min-height: 52px; padding: 8px 10px; text-align: center; line-height: 1.25; }
+.title-pick.is-on { background: var(--accent); border-color: var(--accent); color: var(--accent-ink); }
+.title-pick .av-lock { position: static; transform: none; }
+
+/* the reminder of open shifts */
+.remind-head { display: flex; gap: 12px; align-items: center; margin-bottom: 6px; }
+.remind-head h2 { margin-bottom: 2px; }
+.remind-icon { width: 48px; height: 48px; flex: none; border-radius: 14px; display: grid; place-items: center; background: var(--brand); color: var(--brand-ink); }
+.remind-icon svg { width: 26px; height: 26px; }
+.remind-sub { font-size: .82rem; text-transform: uppercase; letter-spacing: .05em; color: var(--muted); margin: 16px 0 6px; }
+.remind-list { display: flex; flex-direction: column; border: 1px solid var(--line); border-radius: var(--r); overflow: hidden; }
+.remind-row { display: grid; grid-template-columns: auto minmax(0, 1fr) auto; gap: 10px; align-items: center; padding: 10px 12px; background: var(--surface); }
+.remind-row + .remind-row { border-top: 1px solid var(--line); }
+.remind-when { display: flex; flex-direction: column; min-width: 0; }
+.remind-when .time { font-family: var(--f-mono); font-size: .88rem; color: var(--ink-2); }
+.remind-row > button, .remind-row > .pill { min-width: 84px; justify-content: center; }
+.remind-tip { margin-top: 10px; }
+
 /* putting the app on your phone: the guide and its buttons */
 .install-wide { color: var(--accent); }
 .install-link { background: transparent; border-color: transparent; color: var(--accent); gap: 8px; }
