@@ -24,6 +24,9 @@
   Cache-Control: no-cache
 /route.js
   Cache-Control: no-cache
+/manifest.webmanifest
+  Content-Type: application/manifest+json
+  Cache-Control: no-cache
 /vendor/pdfjs/pdf.min.mjs
   Content-Type: text/javascript; charset=utf-8
   Cache-Control: public, max-age=604800
