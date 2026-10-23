@@ -443,7 +443,8 @@ begin
                             -- who picks open shifts, and is reminded of them (see shift_alerts)
                             'picks', not v.view_only and not v.driver and v.role <> 'manager' and v.contract_type is distinct from 'vast'
                                      and not v.shifts_hidden,
-                            'shifts', not v.shifts_hidden),
+                            'shifts', not v.shifts_hidden,
+                            'learn', v.learn and not v.view_only), -- the Nederlands tab
     'settings', (select json_build_object(
         'business_name', business_name, 'drop_cutoff_hours', drop_cutoff_hours,
         'grace_minutes', grace_minutes, 'currency', currency, 'timezone', timezone,
@@ -464,6 +465,7 @@ begin
              order by starts_at limit 3) s), '[]'::json),
     'pending_requests', case when v.role = 'manager'
       then (select count(*) from public.time_edits where status = 'pending') else 0 end,
+    'unread_messages', case when v.view_only then 0 else app_private.unread_for(v) end,
     'server_time', now());
 end $$;
 
@@ -1842,8 +1844,9 @@ begin
       'officient_connected', (select o.refresh_token is not null from app_private.officient o where o.id = 1),
       'mato_name', app_private.mato_name(s), 'mato_name_own', s.mato_name,
       'lang', s.lang, 'can_clock', not s.view_only and app_private.can_clock(s), 'fun_title', s.fun_title,
-      'shifts_hidden', s.shifts_hidden),
+      'shifts_hidden', s.shifts_hidden, 'learn', s.learn),
     'profile', app_private.profile_json(s),
+    'learning', app_private.learn_json(s.id, false),
     'xp', app_private.xp_json(s.id),
     'contracts', app_private.contracts_json(s.id),
     'payslips', coalesce((select json_agg(json_build_object(
@@ -3447,6 +3450,250 @@ begin
     raise exception using message = 'That person wasn''t found.', errcode = 'P0001';
   end if;
   return json_build_object('ok', true, 'mato_name', app_private.mato_name(s));
+end $$;
+
+revoke all on all functions in schema app_private from public, anon, authenticated;
+
+-- ------------------------------------------------- Dutch lessons and messages
+
+-- Nederlands: lessons in the app (web/dutch.js) with their own level, and a
+-- conversation with the managers: text and voice notes, both ways.
+alter table public.staff add column learn boolean not null default false; -- the Nederlands tab
+update public.staff set learn = true where lang = 'zh' and not view_only and not driver and role <> 'manager';
+
+create table public.learn_progress (
+  staff_id   uuid primary key references public.staff (id) on delete cascade,
+  data       jsonb not null default '{}'::jsonb, -- lessons done, words to repeat, days learned (web/dutch.js)
+  xp         int not null default 0 check (xp >= 0),
+  lessons    int not null default 0 check (lessons >= 0),
+  updated_at timestamptz not null default now()
+);
+alter table public.learn_progress enable row level security;
+revoke all on public.learn_progress from anon, authenticated;
+
+-- One conversation per person, with all managers: to_staff is a manager writing.
+create table public.messages (
+  id         uuid primary key default gen_random_uuid(),
+  staff_id   uuid not null references public.staff (id) on delete cascade, -- whose conversation
+  sender_id  uuid not null references public.staff (id) on delete cascade,
+  to_staff   boolean not null,
+  body       text check (length(body) <= 2000),
+  audio      bytea,
+  audio_type text check (audio_type in ('audio/webm', 'audio/mp4', 'audio/ogg', 'audio/mpeg', 'audio/aac', 'audio/x-m4a', 'audio/wav')),
+  audio_ms   int check (audio_ms between 0 and 300000),
+  created_at timestamptz not null default now(),
+  read_at    timestamptz, -- read by the other side
+  check (body is not null or audio is not null)
+);
+create index messages_staff_idx on public.messages (staff_id, created_at);
+create index messages_sender_idx on public.messages (sender_id);
+create index messages_unread_idx on public.messages (to_staff, staff_id) where read_at is null;
+alter table public.messages enable row level security;
+revoke all on public.messages from anon, authenticated;
+
+create function app_private.learn_json(p_staff uuid, p_with_data boolean) returns json
+language sql stable set search_path = public as $$
+  select json_build_object('xp', coalesce(lp.xp, 0), 'level', app_private.level_for(coalesce(lp.xp, 0)),
+                           'lessons', coalesce(lp.lessons, 0), 'updated_at', lp.updated_at,
+                           'data', case when p_with_data then coalesce(lp.data, '{}'::jsonb) end)
+    from (select 1) one left join public.learn_progress lp on lp.staff_id = p_staff
+$$;
+
+-- Messages someone hasn't read yet: for a manager, everything staff sent.
+create function app_private.unread_for(p public.staff) returns int
+language sql stable set search_path = public as $$
+  select case when p.role = 'manager'
+    then (select count(*) from public.messages where not to_staff and read_at is null)
+    else (select count(*) from public.messages where staff_id = p.id and to_staff and read_at is null) end::int
+$$;
+
+-- A voice note, checked and decoded.
+create function app_private.clean_audio(p_type text, p_data text) returns bytea
+language plpgsql immutable set search_path = public as $$
+declare v_bytes bytea;
+begin
+  if p_type is null or p_type not in ('audio/webm', 'audio/mp4', 'audio/ogg', 'audio/mpeg', 'audio/aac', 'audio/x-m4a', 'audio/wav') then
+    raise exception using message = 'That recording can''t be saved. Try again.', errcode = 'P0001';
+  end if;
+  begin
+    v_bytes := decode(p_data, 'base64');
+  exception when others then
+    raise exception using message = 'That recording can''t be saved. Try again.', errcode = 'P0001';
+  end;
+  if v_bytes is null or length(v_bytes) = 0 then
+    raise exception using message = 'That recording is empty.', errcode = 'P0001';
+  end if;
+  if length(v_bytes) > 4 * 1024 * 1024 then
+    raise exception using message = 'That recording is too long. Keep it under two minutes.', errcode = 'P0001';
+  end if;
+  return v_bytes;
+end $$;
+
+create function app_private.add_message(p_staff uuid, p_sender uuid, p_to_staff boolean, p_body text,
+                                        p_audio text, p_audio_type text, p_audio_ms int) returns json
+language plpgsql set search_path = public as $$
+declare v_body text := nullif(app_private.clean_text(p_body, 2000), ''); v_id uuid;
+begin
+  if v_body is null and p_audio is null then
+    raise exception using message = 'Write a message or record one.', errcode = 'P0001';
+  end if;
+  if (select count(*) from public.messages where sender_id = p_sender and created_at > now() - interval '1 hour') >= 60 then
+    raise exception using message = 'That''s a lot of messages. Try again in a while.', errcode = 'P0001';
+  end if;
+  insert into public.messages (staff_id, sender_id, to_staff, body, audio, audio_type, audio_ms)
+  values (p_staff, p_sender, p_to_staff, v_body,
+          case when p_audio is not null then app_private.clean_audio(split_part(p_audio_type, ';', 1), p_audio) end,
+          case when p_audio is not null then split_part(p_audio_type, ';', 1) end,
+          case when p_audio is not null then greatest(0, least(coalesce(p_audio_ms, 0), 300000)) end)
+  returning id into v_id;
+  return json_build_object('ok', true, 'id', v_id);
+end $$;
+
+-- A conversation without the sound itself (get_message_audio fetches that).
+create function app_private.messages_json(p_staff uuid) returns json
+language sql stable set search_path = public as $$
+  select coalesce(json_agg(json_build_object(
+      'id', m.id, 'sender_id', m.sender_id, 'sender', s.name, 'avatar', s.avatar, 'to_staff', m.to_staff,
+      'body', m.body, 'audio', m.audio is not null, 'audio_ms', m.audio_ms, 'created_at', m.created_at, 'read_at', m.read_at)
+      order by m.created_at), '[]'::json)
+    from (select * from public.messages where staff_id = p_staff order by created_at desc limit 300) m
+    join public.staff s on s.id = m.sender_id
+$$;
+
+revoke all on all functions in schema app_private from public, anon, authenticated;
+
+create function public.my_learning(p_token text) returns json
+language plpgsql stable security definer set search_path = public, extensions as $$
+declare v public.staff;
+begin
+  v := app_private.current_staff(p_token);
+  return app_private.learn_json(v.id, true);
+end $$;
+
+-- After a lesson: the whole progress (it is small), the XP it earned and
+-- whether a lesson was finished. XP only goes up, a little at a time.
+create function public.save_learning(p_token text, p_data jsonb, p_gain int, p_lesson boolean) returns json
+language plpgsql security definer set search_path = public, extensions as $$
+declare v public.staff;
+begin
+  v := app_private.current_staff(p_token);
+  if p_data is null or jsonb_typeof(p_data) <> 'object' or octet_length(p_data::text) > 200000 then
+    raise exception using message = 'Your progress couldn''t be saved. Try again.', errcode = 'P0001';
+  end if;
+  if p_gain is null or p_gain < 0 or p_gain > 200 then
+    raise exception using message = 'Your progress couldn''t be saved. Try again.', errcode = 'P0001';
+  end if;
+  insert into public.learn_progress as lp (staff_id, data, xp, lessons, updated_at)
+  values (v.id, p_data, p_gain, case when p_lesson then 1 else 0 end, now())
+  on conflict (staff_id) do update
+    set data = excluded.data, xp = lp.xp + excluded.xp, lessons = lp.lessons + excluded.lessons, updated_at = now();
+  return app_private.learn_json(v.id, false);
+end $$;
+
+-- The Nederlands tab on or off: for yourself, or (a manager) for someone.
+create function public.set_my_learning(p_token text, p_on boolean) returns json
+language plpgsql security definer set search_path = public, extensions as $$
+declare v public.staff;
+begin
+  v := app_private.current_staff(p_token);
+  update public.staff set learn = coalesce(p_on, false) where id = v.id;
+  return json_build_object('ok', true);
+end $$;
+
+create function public.mgr_set_learning(p_token text, p_id uuid, p_on boolean) returns json
+language plpgsql security definer set search_path = public, extensions as $$
+declare v public.staff;
+begin
+  v := app_private.current_manager(p_token);
+  update public.staff set learn = coalesce(p_on, false) where id = p_id and not view_only;
+  if not found then
+    raise exception using message = 'That person wasn''t found.', errcode = 'P0001';
+  end if;
+  return json_build_object('ok', true);
+end $$;
+
+create function public.unread_messages(p_token text) returns json
+language plpgsql stable security definer set search_path = public, extensions as $$
+declare v public.staff;
+begin
+  v := app_private.current_staff(p_token);
+  return json_build_object('unread', app_private.unread_for(v));
+end $$;
+
+-- The person's conversation with the managers; what the managers wrote is read now.
+create function public.my_messages(p_token text) returns json
+language plpgsql security definer set search_path = public, extensions as $$
+declare v public.staff;
+begin
+  v := app_private.current_staff(p_token);
+  update public.messages set read_at = now() where staff_id = v.id and to_staff and read_at is null;
+  return json_build_object('messages', app_private.messages_json(v.id),
+    'managers', coalesce((select json_agg(json_build_object('id', id, 'name', name, 'avatar', avatar) order by lower(name))
+                            from public.staff where role = 'manager' and active and not view_only), '[]'::json));
+end $$;
+
+create function public.send_message(p_token text, p_body text, p_audio text, p_audio_type text, p_audio_ms int) returns json
+language plpgsql security definer set search_path = public, extensions as $$
+declare v public.staff;
+begin
+  v := app_private.current_staff(p_token);
+  if v.role = 'manager' then
+    raise exception using message = 'Answer from Berichten.', errcode = 'P0001';
+  end if;
+  return app_private.add_message(v.id, v.id, false, p_body, p_audio, p_audio_type, p_audio_ms);
+end $$;
+
+create function public.get_message_audio(p_token text, p_id uuid) returns json
+language plpgsql stable security definer set search_path = public, extensions as $$
+declare v public.staff; m public.messages;
+begin
+  v := app_private.current_staff(p_token);
+  select * into m from public.messages where id = p_id and audio is not null;
+  if not found or (v.role <> 'manager' and m.staff_id <> v.id) then
+    raise exception using message = 'That recording wasn''t found.', errcode = 'P0001';
+  end if;
+  return json_build_object('data', encode(m.audio, 'base64'), 'content_type', m.audio_type);
+end $$;
+
+-- Managers: everyone who learns Dutch or wrote, with the last message and how they're doing.
+create function public.mgr_message_threads(p_token text) returns json
+language plpgsql stable security definer set search_path = public, extensions as $$
+declare v public.staff;
+begin
+  v := app_private.current_manager(p_token);
+  return coalesce((select json_agg(t order by (t ->> 'last_at') desc nulls last, lower(t ->> 'name'))
+    from (select json_build_object('id', s.id, 'name', s.name, 'avatar', s.avatar, 'learn', s.learn,
+            'unread', (select count(*) from public.messages m where m.staff_id = s.id and not m.to_staff and m.read_at is null),
+            'last_at', l.created_at, 'last_body', l.body, 'last_audio', l.audio is not null, 'last_to_staff', l.to_staff,
+            'learning', app_private.learn_json(s.id, true)) as t
+            from public.staff s
+            left join lateral (select * from public.messages m where m.staff_id = s.id order by m.created_at desc limit 1) l on true
+           where s.active and not s.view_only and s.role <> 'manager' and (s.learn or l.id is not null)) x), '[]'::json);
+end $$;
+
+create function public.mgr_messages(p_token text, p_staff_id uuid) returns json
+language plpgsql security definer set search_path = public, extensions as $$
+declare v public.staff; s public.staff;
+begin
+  v := app_private.current_manager(p_token);
+  select * into s from public.staff where id = p_staff_id and not view_only;
+  if not found then
+    raise exception using message = 'That person wasn''t found.', errcode = 'P0001';
+  end if;
+  update public.messages set read_at = now() where staff_id = s.id and not to_staff and read_at is null;
+  return json_build_object('person', json_build_object('id', s.id, 'name', s.name, 'avatar', s.avatar, 'learn', s.learn, 'lang', s.lang),
+                           'messages', app_private.messages_json(s.id), 'learning', app_private.learn_json(s.id, true));
+end $$;
+
+create function public.mgr_send_message(p_token text, p_staff_id uuid, p_body text, p_audio text, p_audio_type text, p_audio_ms int) returns json
+language plpgsql security definer set search_path = public, extensions as $$
+declare v public.staff;
+begin
+  v := app_private.current_manager(p_token);
+  if not exists (select 1 from public.staff where id = p_staff_id and active and not view_only) then
+    raise exception using message = 'That person wasn''t found.', errcode = 'P0001';
+  end if;
+  return app_private.add_message(p_staff_id, v.id, true, p_body, p_audio, p_audio_type, p_audio_ms);
 end $$;
 
 revoke all on all functions in schema app_private from public, anon, authenticated;

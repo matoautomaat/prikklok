@@ -3,14 +3,14 @@
     {
       "source": "/(.*)",
       "headers": [
-        { "key": "Content-Security-Policy", "value": "default-src 'self'; script-src 'self'; style-src 'self' 'unsafe-inline' https://fonts.googleapis.com; font-src https://fonts.gstatic.com; img-src 'self' data: https://tile.openstreetmap.org; connect-src 'self' https://cwncvipsaqqvwjcfphno.supabase.co https://nominatim.openstreetmap.org; manifest-src 'self'; base-uri 'none'; form-action 'none'; frame-ancestors 'none'" },
+        { "key": "Content-Security-Policy", "value": "default-src 'self'; script-src 'self'; style-src 'self' 'unsafe-inline' https://fonts.googleapis.com; font-src https://fonts.gstatic.com; img-src 'self' data: https://tile.openstreetmap.org; media-src 'self' blob:; connect-src 'self' https://cwncvipsaqqvwjcfphno.supabase.co https://nominatim.openstreetmap.org; manifest-src 'self'; base-uri 'none'; form-action 'none'; frame-ancestors 'none'" },
         { "key": "X-Content-Type-Options", "value": "nosniff" },
         { "key": "Referrer-Policy", "value": "no-referrer" },
-        { "key": "Permissions-Policy", "value": "camera=(), microphone=(), geolocation=(self)" }
+        { "key": "Permissions-Policy", "value": "camera=(), microphone=(self), geolocation=(self)" }
       ]
     },
     {
-      "source": "/(index.html|app.js|avatar.js|loonfiche.js|contract.js|route.js|theme.js|config.js|styles.css)?",
+      "source": "/(index.html|app.js|avatar.js|loonfiche.js|contract.js|route.js|dutch.js|theme.js|config.js|styles.css)?",
       "headers": [{ "key": "Cache-Control", "value": "no-cache" }]
     },
     {

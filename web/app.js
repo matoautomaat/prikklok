@@ -273,6 +273,7 @@ async function refreshMe() {
   S.openEntry = r.open_entry;
   S.nextShifts = r.next_shifts || [];
   S.pending = r.pending_requests || 0;
+  S.unread = r.unread_messages || 0;
   S.offset = new Date(r.server_time).getTime() - Date.now();
   updateBadges();
   checkLevelUp();
@@ -544,6 +545,8 @@ const ICONS = {
   profile: '<svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"><circle cx="12" cy="12" r="9"/><circle cx="9" cy="10" r=".6" fill="currentColor"/><circle cx="15" cy="10" r=".6" fill="currentColor"/><path d="M8.5 14.5c1.8 2 5.2 2 7 0"/></svg>',
   ranking: '<svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"><path d="M8 21h8M12 17v4M7 4h10v5a5 5 0 0 1-10 0z"/><path d="M7 6H4a3 3 0 0 0 3 4M17 6h3a3 3 0 0 1-3 4"/></svg>',
   home: '<svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"><path d="M3 11l9-7 9 7"/><path d="M5 10v10h14V10"/><path d="M10 20v-6h4v6"/></svg>',
+  learn: '<svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"><path d="M4 5h9v9H8l-4 3z"/><path d="M13 9h7v9l-3-2.5h-6.5V14"/><path d="M6.5 9.5h4M8.5 8v1.5"/></svg>',
+  chat: '<svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"><path d="M20 12a8 8 0 0 1-11.6 7.1L4 20l1-4A8 8 0 1 1 20 12z"/><path d="M9 11h.01M12.5 11h.01M16 11h.01"/></svg>',
   route: '<svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"><circle cx="6" cy="19" r="2"/><circle cx="18" cy="5" r="2"/><path d="M8 19h8.5a3.5 3.5 0 0 0 0-7h-9a3.5 3.5 0 0 1 0-7H16"/></svg>',
   more: '<svg viewBox="0 0 24 24" fill="currentColor"><circle cx="5" cy="12" r="2"/><circle cx="12" cy="12" r="2"/><circle cx="19" cy="12" r="2"/></svg>',
   signout: '<svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"><path d="M14 4h4a2 2 0 0 1 2 2v12a2 2 0 0 1-2 2h-4M10 16l-4-4 4-4M6 12h10"/></svg>',
@@ -587,13 +590,15 @@ if (darkQuery && darkQuery.addEventListener) darkQuery.addEventListener('change'
 function tabsFor() {
   if (isViewer()) return [['family', L('Kalender', '排班')], ['famstaff', L('Personeel', '员工')]];
   if (isDriver()) return [['clock', 'Klok'], ['hours', 'Mijn uren'], ['profile', 'Profiel']];
-  if (isManager()) return [['today', 'Vandaag'], ['schedule', 'Planning'], ['monthly', 'Overzicht'], ['requests', 'Aanvragen'],
+  if (isManager()) return [['today', 'Vandaag'], ['schedule', 'Planning'], ['monthly', 'Overzicht'], ['requests', 'Aanvragen'], ['messages', 'Berichten'],
     ...(S.settings.has_drivers ? [['routes', 'Ritten']] : []), ['team', 'Team'], ['ranking', 'Ranglijst'], ['profile', 'Profiel']];
-  // Who doesn't clock in gets a start page instead of the clock.
-  return [['clock', canClock() ? T('Klok', '打卡') : T('Start', '首页')], ...(seesShifts() ? [['shifts', T('Shiften', '班次')]] : []),
+  // Who doesn't clock in gets a start page instead of the clock. Nederlands
+  // comes second, so it stays in the bottom bar on a phone.
+  return [['clock', canClock() ? T('Klok', '打卡') : T('Start', '首页')], ...(S.me.learn ? [['learn', T('Nederlands', '荷兰语')]] : []),
+    ...(seesShifts() ? [['shifts', T('Shiften', '班次')]] : []),
     ['hours', T('Mijn uren', '我的工时')], ['ranking', T('Ranglijst', '排行榜')], ['profile', T('Profiel', '我的资料')]];
 }
-const ICON_FOR = { home: 'home', clock: 'clock', shifts: 'shifts', hours: 'hours', profile: 'profile', ranking: 'ranking', today: 'today', schedule: 'shifts', monthly: 'monthly', requests: 'requests', team: 'team', routes: 'route' };
+const ICON_FOR = { home: 'home', clock: 'clock', shifts: 'shifts', hours: 'hours', profile: 'profile', ranking: 'ranking', today: 'today', schedule: 'shifts', monthly: 'monthly', requests: 'requests', team: 'team', routes: 'route', learn: 'learn', messages: 'chat' };
 
 /* --------------------------------------------------------------- modal */
 
@@ -610,7 +615,7 @@ const modal = {
     if (first) first.focus();
     return d;
   },
-  close() { const d = $('#modal'); if (d.open) d.close(); d.innerHTML = ''; d.classList.remove('wide', 'sheet'); },
+  close() { const d = $('#modal'); if (d.open) d.close(); d.innerHTML = ''; d.classList.remove('wide', 'sheet', 'lesson'); },
   confirm({ title, body = '', ok = T('Bevestigen', '确定'), cancel = T('Annuleren', '取消'), danger = false }) {
     return new Promise(resolve => {
       let done = false;
@@ -1108,7 +1113,7 @@ function openMore() {
 function renderShell() {
   if (isViewer()) return renderFamilyShell();
   const tabs = tabsFor(), { main, more } = bottomTabs();
-  const badge = k => k === 'requests' ? '<span class="count" data-badge hidden></span>' : '';
+  const badge = k => ['requests', 'messages', 'learn'].includes(k) ? `<span class="count" data-badge="${k}" hidden></span>` : '';
   document.title = `${S.settings.business_name} · Prikklok`;
   document.documentElement.lang = zhUI() ? 'zh-Hans' : 'nl-BE';
   $('#app').innerHTML = `
@@ -1131,7 +1136,7 @@ function renderShell() {
     <main class="view" id="view"></main>
     <nav class="bnav" aria-label="${T('Onderdelen', '页面')}">
       ${main.map(([k, l]) => `<button data-tab="${k}">${ICONS[k === 'clock' && !canClock() && !isManager() ? 'home' : ICON_FOR[k]]}<span>${l}</span>${badge(k)}</button>`).join('')}
-      ${more.length ? `<button id="bnav-more" data-more="${more.map(t => t[0]).join(' ')}" aria-haspopup="dialog">${ICONS.more}<span>${T('Meer', '更多')}</span></button>` : ''}
+      ${more.length ? `<button id="bnav-more" data-more="${more.map(t => t[0]).join(' ')}" aria-haspopup="dialog">${ICONS.more}<span>${T('Meer', '更多')}</span><span class="count" data-badge-more hidden></span></button>` : ''}
     </nav>`;
   $('#signout').addEventListener('click', askSignOut);
   $('[data-theme-btn]').addEventListener('click', () => setTheme(isDark() ? 'light' : 'dark'));
@@ -1157,13 +1162,17 @@ async function refreshTabs() {
 }
 
 function updateBadges() {
-  $$('[data-badge]').forEach(b => { b.hidden = !S.pending; b.textContent = S.pending; });
+  const n = { requests: S.pending || 0, messages: S.unread || 0, learn: S.unread || 0 };
+  $$('[data-badge]').forEach(b => { const v = n[b.dataset.badge] || 0; b.hidden = !v; b.textContent = v; });
+  const mb = $('#bnav-more'), mc = $('[data-badge-more]');
+  if (mb && mc) { const v = mb.dataset.more.split(' ').reduce((a, k) => a + (n[k] || 0), 0); mc.hidden = !v; mc.textContent = v; }
 }
 
 const VIEWS = {
   clock: (el, current) => isDriver() ? viewDriver(el, current) : viewClock(el, current), shifts: viewShifts, hours: viewHours, profile: viewProfile, ranking: viewRanking,
   today: viewToday, schedule: viewSchedule, monthly: viewMonthly, requests: viewRequests, team: viewTeam, member: viewMember,
   family: viewFamily, famstaff: viewFamilyStaff, contracts: viewContracts, routes: viewRoutes,
+  learn: viewLearn, chat: viewChat, messages: viewMessages,
 };
 
 // #profile works for everyone (managers reach it through their picture);
@@ -1180,7 +1189,7 @@ const Updates = {
     if (this.pending || Date.now() - this.at < 60000) return;
     this.at = Date.now();
     try {
-      const tags = await Promise.all(['app.js', 'avatar.js', 'styles.css'].map(f =>
+      const tags = await Promise.all(['app.js', 'avatar.js', 'dutch.js', 'styles.css'].map(f =>
         fetch(f, { method: 'HEAD', cache: 'no-store' }).then(r => r.ok ? r.headers.get('etag') || r.headers.get('last-modified') || '' : '')));
       if (tags.some(t => !t)) return;
       const tag = tags.join();
@@ -1208,6 +1217,9 @@ function route() {
   const member = v.match(/^team\/([0-9a-f-]{36})$/);
   const ctMonth = v.match(/^contracts(?:\/(\d{4}-\d{2}))?$/);
   const rt = v.match(/^routes(?:\/([0-9a-f-]{36}))?(?:\/(\d{4}-\d{2}-\d{2}))?$/);
+  const msg = v.match(/^messages(?:\/([0-9a-f-]{36}))?$/);
+  if (msg && isManager()) { v = 'messages'; tab = 'messages'; S.msgStaff = msg[1] || null; }
+  if (v === 'chat' && S.me.learn && !isManager()) tab = 'learn'; // the conversation hangs under Nederlands
   if (ctMonth && isManager()) { v = 'contracts'; tab = 'schedule'; }
   if (rt && isManager()) {
     v = 'routes'; tab = 'routes';
@@ -1216,7 +1228,8 @@ function route() {
   }
   if (member && isManager()) { S.memberId = member[1]; v = 'member'; tab = 'team'; }
   else if ((v === 'family' || v === 'famstaff') && isManager()) tab = 'team';
-  else if ((v === 'contracts' || v === 'routes') && isManager()) { /* set above */ }
+  else if ((v === 'contracts' || v === 'routes' || v === 'messages') && isManager()) { /* set above */ }
+  else if (v === 'chat' && tab === 'learn') { /* set above */ }
   else if (!tabs.includes(v)) { v = tabs[0]; tab = v; }
   if (S.view !== v) S.month = null;
   if (ctMonth && ctMonth[1] && v === 'contracts') S.month = new Date(ctMonth[1] + '-01T00:00');
@@ -1233,7 +1246,7 @@ async function renderView() {
   const el = $('#view');
   if (!el) return;
   const seq = ++S.renderSeq;
-  const key = S.view === 'member' ? `member/${S.memberId}` : S.view;
+  const key = S.view === 'member' ? `member/${S.memberId}` : S.view === 'messages' ? `messages/${S.msgStaff || ''}` : S.view;
   if (!el.dataset.view || el.dataset.key !== key) {
     el.innerHTML = `<div class="empty">${T('Laden…', '加载中…')}</div>`;
     el.dataset.view = S.view;
@@ -1260,6 +1273,7 @@ function stopPolling() { if (S.poll) clearInterval(S.poll); S.poll = null; }
 
 document.addEventListener('visibilitychange', () => {
   if (document.visibilityState === 'visible' && S.me && !$('#modal').open) renderView();
+  if (document.visibilityState === 'visible' && S.me) quiet(pollUnread());
 });
 
 /* live counters: clocks and "on the clock for" durations */
@@ -1427,7 +1441,8 @@ function bindHome(el) {
 async function viewStart(el, current) {
   await refreshMe();
   const t = now(), wk = startOfWeek(t);
-  const shifts = await rpc('list_shifts', { p_from: wk.toISOString(), p_to: addDays(wk, 14).toISOString() });
+  const [shifts] = await Promise.all([rpc('list_shifts', { p_from: wk.toISOString(), p_to: addDays(wk, 14).toISOString() }),
+    S.me.learn ? loadLearning().catch(() => null) : null]);
   if (!current()) return;
   const open = shifts.filter(s => !s.staff_id && new Date(s.ends_at) > t);
   const planned = shifts.filter(s => s.mine && new Date(s.starts_at) < addDays(wk, 7)).reduce((a, s) => a + minutesBetween(s.starts_at, s.ends_at), 0);
@@ -1443,6 +1458,7 @@ async function viewStart(el, current) {
         <div class="form-actions"><button class="sm" data-go="ranking">${T('Ranglijst', '排行榜')}</button><button class="sm" data-go="profile">${T('Avatar aanpassen', '修改头像')}</button></div>
       </section>
       <div style="display:flex;flex-direction:column;gap:18px;min-width:0">
+        ${S.me.learn ? learnCard() : ''}
         ${avatarCta()}
         <div class="stats">
           <div class="stat"><span class="v">${fmt.dur(planned)}</span><span class="k">${T('Ingepland deze week', '本周排班')}</span></div>
@@ -1462,6 +1478,7 @@ async function viewClock(el, current) {
   const [month, week] = await Promise.all([
     rpc('my_hours', { p_from: from.toISOString(), p_to: addDays(now(), 1).toISOString() }),
     rpc('list_shifts', { p_from: wk.toISOString(), p_to: addDays(wk, 14).toISOString() }),
+    S.me.learn && !isManager() ? loadLearning().catch(() => null) : null,
   ]);
   if (!current()) return;
   const done = month.entries.filter(x => x.clock_out);
@@ -1475,6 +1492,7 @@ async function viewClock(el, current) {
     <div class="grid-2">
       ${punchCard()}
       <div style="display:flex;flex-direction:column;gap:18px;min-width:0">
+        ${S.me.learn && !isManager() ? learnCard() : ''}
         ${avatarCta()}
         <div class="stats stats-3">
           <div class="stat"><span class="v">${fmt.dur(weekMins)}</span><span class="k">${T('Gewerkt deze week', '本周工时')}</span></div>
@@ -3439,6 +3457,9 @@ async function viewProfile(el, current) {
       </section>
       <div class="stack">
         ${staffLang ? langCard() : ''}
+        ${staffLang ? `<section class="card"><h2>${T('Nederlands leren', '学荷兰语')}</h2>
+          <label class="check" style="margin-top:12px"><input type="checkbox" id="pf-learn" ${S.me.learn ? 'checked' : ''}> ${T('Toon de lessen Nederlands in de app', '在 app 里显示荷兰语课程')}</label>
+          <p class="muted small" style="margin-top:6px">${T('Korte lessen, van de eerste woorden tot B1, met wat je in het restaurant elke dag zegt. Je kan er ook vragen stellen.', '简短的课程，从第一个单词学到 B1，先学餐厅里每天要说的话。还可以提问。')}</p></section>` : ''}
         <section class="card"><h2>${T('Werk', '工作')}</h2>
           <dl class="kv">
             <dt>${T('Rol', '角色')}</dt><dd>${w.role === 'manager' ? 'Verantwoordelijke' : w.role === 'driver' ? 'Chauffeur' : T('Medewerker', '员工')}</dd>
@@ -3484,6 +3505,12 @@ async function viewProfile(el, current) {
   $$('[data-theme-pick]', el).forEach(b => b.addEventListener('click', () => setTheme(b.dataset.themePick)));
   applyTheme();
   bindLangCard(el);
+  const lrn = $('#pf-learn', el);
+  if (lrn) lrn.addEventListener('change', () => busy(null, async () => {
+    await rpc('set_my_learning', { p_on: lrn.checked });
+    await refreshTabs();
+    if (lrn.checked) toast(T('Je vindt de lessen bij Nederlands.', '课程在「荷兰语」页面。'));
+  }).catch(() => { lrn.checked = !lrn.checked; }));
   $$('[data-contract]', el).forEach(b => b.addEventListener('click', () => downloadContract(b.dataset.contract, b)));
   const pf = $('#pf-form', el);
   pf.addEventListener('submit', async ev => {
@@ -4545,6 +4572,8 @@ async function viewMember(el, current) {
               <span class="help">Wat ${esc(first)} ziet: klok, shiften, uren, profiel. Jouw schermen blijven Nederlands.</span></div>
             <div class="field"><label for="pm-bonus">Bonus-XP</label><input id="pm-bonus" type="number" min="0" max="100000" step="1" inputmode="numeric" value="${p.xp_bonus || 0}">
               <span class="help">XP die jij geeft, bovenop het werk. Telt voor het level, niet voor de uren of het loon. Level 20 = ${num(xpForLevel(20), 0)} XP.</span></div>
+            ${p.role === 'manager' ? '' : `<div class="field wide"><label class="check"><input type="checkbox" id="pm-learn" ${p.learn ? 'checked' : ''}> Nederlands leren</label>
+              <span class="help">Het tabblad Nederlands: lessen van A1 tot B1, en vragen aan jou bij <a href="#messages/${p.id}">Berichten</a>. ${esc(learnSummary(r.learning))}</span></div>`}
             ${driver || p.role === 'manager' ? '' : `<div class="field wide"><label class="check"><input type="checkbox" id="pm-noshifts" ${p.shifts_hidden ? 'checked' : ''}> Shiften verbergen voor ${esc(first)}</label>
               <span class="help">Voorlopig geen kalender, geen open shiften en geen herinneringen. Shiften die jij aan ${esc(first)} geeft, ziet ${esc(first)} wel.</span></div>`}
             <div class="field wide"><label class="check"><input type="checkbox" id="pm-active" ${p.active ? 'checked' : ''} ${self ? 'disabled' : ''}> Actief</label>
@@ -4658,6 +4687,8 @@ async function viewMember(el, current) {
       if (pay !== (p.pay_method || null)) await rpc('mgr_set_pay_method', { p_id: p.id, p_method: pay });
       const hide = $('#pm-noshifts', pm);
       if (hide && hide.checked !== !!p.shifts_hidden) await rpc('mgr_set_shifts_hidden', { p_id: p.id, p_hidden: hide.checked });
+      const learn = $('#pm-learn', pm);
+      if (learn && learn.checked !== !!p.learn) await rpc('mgr_set_learning', { p_id: p.id, p_on: learn.checked });
       const lng = $('#pm-lang', pm).value || null;
       if (lng !== (p.lang || null)) await rpc('mgr_set_language', { p_id: p.id, p_lang: lng });
       const ti = $('#pm-title', pm);
@@ -5350,3 +5381,783 @@ function slipReview(items, { fixed }) {
 }
 
 boot();
+
+/* ------------------------------------------------- Nederlands: lessons */
+
+// The Nederlands tab, for who learns Dutch (Team → person, or Profiel): a path
+// of units from A1 to B1 (the course is in web/dutch.js), lessons that get
+// harder unit by unit, a Dutch level of its own (it doesn't count for the
+// work level or the ranking) and, for when something is unclear, a
+// conversation with the managers, with voice notes.
+const LEARN_PENDING = 'prikklok.learn.pending';   // progress the server doesn't have yet (offline)
+const LEARN_SPEAK_OFF = 'prikklok.learn.speakoff'; // no speaking exercises until then (ms)
+const LEARN_SLOW = 'prikklok.learn.slow';
+const learnLevelFor = xp => Math.max(1, Math.floor((Math.sqrt(9 + 4 * Math.max(0, xp) / 12.5) - 1) / 2)); // = app_private.level_for
+const learnLevelName = l => Dutch.levelName(l, zhUI());
+const CEFR_NAME = { A1: ['Beginner', '入门'], A2: ['Basis', '基础'], B1: ['Op weg naar school', '为上学做准备'] };
+const PRAISE = [['Goed zo!', '答对了！'], ['Super!', '太棒了！'], ['Prima!', '很好！'], ['Knap!', '厉害！'], ['Top!', '真棒！'], ['Juist!', '正确！']];
+const pendingKey = () => `${LEARN_PENDING}.${S.me.id}`;
+
+async function loadLearning() {
+  Dutch.setName(S.me.name);
+  const pend = () => { try { return JSON.parse(store.get(pendingKey()) || 'null'); } catch { return null; } };
+  const before = pend();
+  if (before) {
+    try {
+      await rpc('save_learning', { p_data: before.data, p_gain: before.gain, p_lesson: !!before.lesson });
+      store.set(pendingKey(), null);
+    } catch (e) { if (e.code === 'auth') throw e; }
+  }
+  const r = await rpc('my_learning'), still = pend();
+  S.learn = { xp: r.xp + (still ? still.gain : 0), lessons: r.lessons, p: Dutch.clean(still ? still.data : r.data) };
+  S.learn.level = learnLevelFor(S.learn.xp);
+  return S.learn;
+}
+
+// After a lesson. Offline, it waits on the phone and goes with the next one.
+async function saveLearning(gain, lesson) {
+  let prev = null;
+  try { prev = JSON.parse(store.get(pendingKey()) || 'null'); } catch { /* none */ }
+  const body = { data: S.learn.p, gain: Math.min(200, gain + (prev ? prev.gain : 0)), lesson: lesson || !!(prev && prev.lesson) };
+  S.learn.xp += gain;
+  S.learn.level = learnLevelFor(S.learn.xp);
+  try {
+    const r = await rpc('save_learning', { p_data: body.data, p_gain: body.gain, p_lesson: body.lesson });
+    store.set(pendingKey(), null);
+    S.learn.xp = r.xp; S.learn.level = r.level; S.learn.lessons = r.lessons;
+    return true;
+  } catch (e) {
+    store.set(pendingKey(), JSON.stringify(body));
+    return false;
+  }
+}
+
+const learnOpts = () => ({
+  speech: Dutch.canHear() && Number(store.get(LEARN_SPEAK_OFF) || 0) < Date.now(),
+  listen: Dutch.canSpeak(),
+});
+const slowVoice = () => !!store.get(LEARN_SLOW);
+const sayNl = (text, slow = slowVoice()) => Dutch.say(text, { slow });
+
+const FLAME = '<svg viewBox="0 0 24 24" width="18" height="18" aria-hidden="true"><path fill="currentColor" d="M12.6 2.2c.4 3-1.4 4.6-2.9 6.2C8.2 10 6.8 11.6 6.8 14.4A5.3 5.3 0 0 0 12 19.8a5.3 5.3 0 0 0 5.2-5.4c0-1.9-.8-3.4-1.6-4.6-.2 1.4-.9 2.4-1.9 2.9.4-2.9-.2-6.6-1.1-10.5zM12 21.8a7.2 7.2 0 0 1-7.2-7.4c0-3.6 1.8-5.6 3.4-7.3C9.9 5.3 11.3 3.8 10.9.9L10.8 0l.9.3c3.3 1.1 6.8 4.6 7.2 9.4.2 1.3.3 2.8.3 4.7a7.2 7.2 0 0 1-7.2 7.4z"/></svg>';
+const SPEAKER = '<svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round" aria-hidden="true"><path d="M4 9v6h4l5 4V5L8 9z"/><path d="M16.5 8.5a5 5 0 0 1 0 7M19 6a8.5 8.5 0 0 1 0 12"/></svg>';
+const TURTLE = '<svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round" aria-hidden="true"><path d="M4 15c0-4 3.6-7 8-7s8 3 8 7z"/><path d="M20 13h1.5a1.5 1.5 0 0 0 0-3H19M6 15l-1 3M18 15l1 3M9 15v2M15 15v2"/></svg>';
+const MIC = '<svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round" aria-hidden="true"><rect x="9" y="3" width="6" height="11" rx="3"/><path d="M5 11a7 7 0 0 0 14 0M12 18v3"/></svg>';
+const SEND = '<svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round" aria-hidden="true"><path d="M4 12l16-8-6 16-2.5-6.5z"/></svg>';
+const PLAY = '<svg viewBox="0 0 24 24" aria-hidden="true"><path fill="currentColor" d="M8 5.5v13l11-6.5z"/></svg>';
+const PAUSE = '<svg viewBox="0 0 24 24" aria-hidden="true"><path fill="currentColor" d="M7 5h3.5v14H7zM13.5 5H17v14h-3.5z"/></svg>';
+const LOCK_SM = '<svg viewBox="0 0 24 24" width="16" height="16" fill="none" stroke="currentColor" stroke-width="2.2" stroke-linecap="round" aria-hidden="true"><rect x="5" y="11" width="14" height="10" rx="2"/><path d="M8 11V8a4 4 0 0 1 8 0v3"/></svg>';
+const stars = n => `<span class="stars" aria-label="${n} ${T('sterren', '颗星')}">${[1, 2, 3].map(i => `<span class="${i <= n ? 'on' : ''}">★</span>`).join('')}</span>`;
+
+function learnLevelBar() {
+  const L = S.learn, l = L.level, a = xpForLevel(l), b = xpForLevel(l + 1);
+  const pct = Math.max(0, Math.min(100, Math.round((L.xp - a) / (b - a) * 100)));
+  return `<div class="xpbar" role="progressbar" aria-valuemin="0" aria-valuemax="100" aria-valuenow="${pct}"><span style="width:${pct}%"></span></div>
+    <p class="xp-text"><span class="mono">${L.xp} XP</span><span class="muted">${T(`nog ${b - L.xp} XP tot taal-level ${l + 1}`, `还差 ${b - L.xp} XP 升到语言 ${l + 1} 级`)}</span></p>`;
+}
+
+// On the start page: today's Dutch in one line.
+function learnCard() {
+  if (!S.learn) return '';
+  const p = S.learn.p, st = Dutch.streak(p), td = Dutch.today(p), goal = p.goal || 1, done = td >= goal;
+  return `<section class="card learn-cta${done ? ' is-done' : ''}">
+    <div class="lc-badge" aria-hidden="true">NL</div>
+    <div class="lc-main"><h2>${T('Nederlands vandaag', '今天的荷兰语')}</h2>
+      <p class="muted small">${done ? T('Je doel van vandaag is gehaald. Knap!', '今天的目标完成了，真棒！') : T('Eén les duurt maar vijf minuten.', '一课只要五分钟。')}
+        ${st ? `<span class="streak-inline">${FLAME}${T(`${st} ${st === 1 ? 'dag' : 'dagen'} op rij`, `连续 ${st} 天`)}</span>` : ''}</p></div>
+    <button class="${done ? '' : 'primary '}sm" data-go="learn">${done ? T('Nog een les', '再学一课') : T('Start de les', '开始学习')}</button>
+  </section>`;
+}
+
+async function viewLearn(el, current) {
+  await loadLearning();
+  if (!current()) return;
+  const L = S.learn, p = L.p, next = Dutch.nextLesson(p), dueN = Dutch.due(p).length, st = Dutch.streak(p);
+  const td = Dutch.today(p), goal = p.goal || 1, skip = Dutch.skippable(p);
+  const nextLabel = next ? `${esc(next.unit.nl)} · ${next.test ? T('toets', '测验') : T(`les ${next.n}`, `第 ${next.n} 课`)}` : '';
+  const groups = ['A1', 'A2', 'B1'].map(c => ({ c, units: Dutch.UNITS.filter(u => u.cefr === c) }));
+  el.innerHTML = `
+    <div class="view-head"><div><h1>${T('Nederlands', '学荷兰语')}</h1>
+      <p>${T('Elke dag een beetje, na je shift. Vijf minuten is genoeg.', '每天学一点，下班后五分钟就够。')}</p></div></div>
+    <section class="card learn-hero">
+      <div class="lh-top">
+        <div class="lh-level"><span class="lh-num">${L.level}</span><span class="lh-k">${T('taal-level', '语言等级')}</span></div>
+        <div class="lh-main"><p class="section-label">${esc(Dutch.cefrNow(p) === 'A0' ? T('Op weg naar A1', '向 A1 出发') : T(`Lessen ${Dutch.cefrNow(p)} afgerond`, `${Dutch.cefrNow(p)} 课程已学完`))}</p>
+          <h2>${esc(learnLevelName(L.level))}</h2>${learnLevelBar()}</div>
+      </div>
+      <div class="lh-stats">
+        <div class="lh-stat${st ? ' hot' : ''}">${FLAME}<b>${st}</b><span>${T(st === 1 ? 'dag op rij' : 'dagen op rij', '天连续')}</span></div>
+        <div class="lh-stat"><b>${Math.min(td, goal)}/${goal}</b><span>${T('doel vandaag', '今日目标')}</span></div>
+        <div class="lh-stat"><b>${Dutch.known(p)}</b><span>${T('woorden gekend', '已掌握')}</span></div>
+      </div>
+      <div class="lh-actions">
+        ${next ? `<button class="primary lg-btn" id="ln-next"><span>${td ? T('Verder leren', '继续学习') : T('Start de les van vandaag', '开始今天的课')}</span><small>${nextLabel}</small></button>`
+          : `<p class="hint good">${T('Je hebt alles gedaan. Herhaal om het niet te vergeten.', '你已经学完全部课程！多复习，别忘了。')}</p>`}
+        ${Object.keys(p.words).length >= 4 ? `<button class="lg-btn" id="ln-review"><span>${T('Herhalen', '复习')}</span><small>${dueN ? T(`${dueN} woorden wachten`, `${dueN} 个词等你复习`) : T('Oefen wat je al kent', '练习学过的内容')}</small></button>` : ''}
+      </div>
+    </section>
+    <button type="button" class="card help-card" data-go="chat">
+      <span class="help-ic">${ICONS.chat}</span>
+      <span class="help-main"><b>${T('Iets niet begrepen? Vraag het.', '有不懂的？直接问。')}</b>
+        <span class="muted small">${T('Stuur een bericht of een spraakbericht naar je verantwoordelijke.', '给负责人发文字或语音消息。')}</span></span>
+      ${S.unread ? `<span class="pill accent">${T(`${S.unread} nieuw`, `${S.unread} 条新消息`)}</span>` : '<span class="help-go" aria-hidden="true">›</span>'}
+    </button>
+    ${groups.map(g => `
+      <div class="path-head"><span class="cefr">${g.c}</span><span>${T(CEFR_NAME[g.c][0], CEFR_NAME[g.c][1])}</span></div>
+      <div class="path">${g.units.map(u => unitCard(u, p, skip)).join('')}</div>`).join('')}
+    <section class="card"><h2>${T('Instellingen', '设置')}</h2>
+      <div class="field" style="margin-top:12px"><label>${T('Doel per dag', '每天的目标')}</label>
+        <div class="chips" role="group">${[1, 2, 3].map(n => `<button type="button" class="chip${goal === n ? ' is-on' : ''}" data-goal="${n}" aria-pressed="${goal === n}">${T(`${n} ${n === 1 ? 'les' : 'lessen'}`, `${n} 课`)}</button>`).join('')}</div></div>
+      <label class="check" style="margin-top:14px"><input type="checkbox" id="ln-slow" ${slowVoice() ? 'checked' : ''}> ${T('Trager voorlezen', '朗读慢一点')}</label>
+      ${Dutch.canHear() ? `<label class="check" style="margin-top:10px"><input type="checkbox" id="ln-speak" ${learnOpts().speech ? 'checked' : ''}> ${T('Spreekoefeningen (de telefoon luistert)', '口语练习（手机会听你说）')}</label>` : ''}
+      ${!Dutch.canSpeak() ? `<p class="hint warn" style="margin-top:12px">${T('Deze telefoon kan niet voorlezen. Luisteroefeningen vallen weg.', '这台手机不能朗读，听力练习会跳过。')}</p>`
+        : !Dutch.hasDutchVoice() ? `<p class="muted small" style="margin-top:12px">${T('Klinkt de stem niet Nederlands? Zet een Nederlandse stem aan in de instellingen van je telefoon (Toegankelijkheid → Gesproken inhoud).', '如果读音不像荷兰语，请在手机设置里打开荷兰语语音（辅助功能 → 朗读内容）。')}</p>` : ''}
+    </section>`;
+  bindHome(el);
+  const nb = $('#ln-next', el);
+  if (nb) nb.addEventListener('click', () => playLesson(next));
+  const rb = $('#ln-review', el);
+  if (rb) rb.addEventListener('click', () => playLesson(null, { review: true }));
+  $$('[data-lesson]', el).forEach(b => b.addEventListener('click', () => playLesson(Dutch.lessonById(b.dataset.lesson))));
+  $$('[data-skip]', el).forEach(b => b.addEventListener('click', async () => {
+    const u = Dutch.unitById(b.dataset.skip);
+    if (await modal.confirm({ title: T(`${u.nl} overslaan?`, `跳到「${u.zh}」？`),
+      body: T('Haal je 80% op de toets, dan gaan deze en alle vorige units open.', '测验答对 80% 以上，这个单元和之前的单元都会解锁。'), ok: T('Start de toets', '开始测验') })) {
+      playLesson(Dutch.lessonsOf(u).find(l => l.test), { skip: true });
+    }
+  }));
+  $$('[data-tip]', el).forEach(b => b.addEventListener('click', () => unitTip(Dutch.unitById(b.dataset.tip))));
+  $$('[data-goal]', el).forEach(b => b.addEventListener('click', async () => {
+    S.learn.p.goal = Number(b.dataset.goal);
+    await saveLearning(0, false);
+    renderView();
+  }));
+  $('#ln-slow', el).addEventListener('change', e => { store.set(LEARN_SLOW, e.target.checked ? '1' : null); sayNl('Goeiedag!'); });
+  const sp = $('#ln-speak', el);
+  if (sp) sp.addEventListener('change', () => store.set(LEARN_SPEAK_OFF, sp.checked ? null : String(Date.now() + 3650 * 86400000)));
+}
+
+function unitCard(u, p, skip) {
+  const open = Dutch.unitOpen(p, u), done = Dutch.unitDone(p, u), ls = Dutch.lessonsOf(u);
+  const pct = Math.round(Dutch.unitProgress(p, u) * 100);
+  return `<section class="unit${open ? '' : ' is-locked'}${done ? ' is-done' : ''}">
+    <div class="unit-head">
+      <span class="unit-n">${done ? '✓' : u.index + 1}</span>
+      <div class="unit-title"><h3>${esc(u.nl)}</h3><span class="muted small">${esc(u.zh)} · ${T(Dutch.TIER_NAME[u.tier][0], Dutch.TIER_NAME[u.tier][1])}</span></div>
+      <button type="button" class="sm ghost" data-tip="${u.id}">${T('Uitleg', '讲解')}</button>
+    </div>
+    ${open ? `<div class="unit-bar"><span style="width:${pct}%"></span></div>
+      <div class="lessons">${ls.map(l => {
+        const can = Dutch.lessonOpen(p, l), got = p.done[l.id];
+        return `<button type="button" class="lesson-dot${l.test ? ' is-test' : ''}${got ? ' is-done' : ''}" data-lesson="${l.id}" ${can ? '' : 'disabled'}
+          aria-label="${l.test ? T('Toets', '测验') : T(`Les ${l.n}`, `第 ${l.n} 课`)}">
+          <span class="ld-n">${can ? (l.test ? T('Toets', '测验') : l.n) : LOCK_SM}</span>${got && !l.test ? stars(got) : ''}</button>`;
+      }).join('')}</div>`
+      : skip === u ? `<button type="button" class="sm skip-btn" data-skip="${u.id}">${T('Ken je dit al? Doe de toets en sla over', '已经会了？做测验直接跳过')}</button>` : ''}
+  </section>`;
+}
+
+function unitTip(u) {
+  modal.open(`
+    <p class="section-label">${u.cefr} · ${T(`Unit ${u.index + 1}`, `第 ${u.index + 1} 单元`)}</p>
+    <h2 id="modal-title">${esc(u.nl)} <span class="muted">· ${esc(u.zh)}</span></h2>
+    <div class="tip-body">${u.tip}</div>
+    <div class="tip-words">${u.list.map(it => `<button type="button" class="tip-word" data-say="${esc(Dutch.nl(it))}"><b lang="nl-BE">${esc(Dutch.nl(it))}</b><span>${esc(Dutch.zh(it))}</span></button>`).join('')}</div>
+    <div class="form-actions"><button type="button" class="primary" data-close>${T('Sluiten', '关闭')}</button></div>`, d => {
+    $$('[data-say]', d).forEach(b => b.addEventListener('click', () => sayNl(b.dataset.say)));
+  }, { wide: true });
+}
+
+/* ------------------------------------------------- the lesson player */
+
+function playLesson(lesson, { review = false, skip = false } = {}) {
+  if (!S.learn) return;
+  const p = S.learn.p, opts = learnOpts();
+  const queue = review ? Dutch.makeReview(p, opts) : Dutch.makeLesson(lesson, p, opts);
+  if (!queue.length) { toast(T('Nog niets om te herhalen.', '还没有可以复习的内容。')); return; }
+  const st = {
+    i: 0, queue, questions: queue.filter(e => e.type !== 'intro').length, first: 0, wrongOnce: new Set(),
+    combo: 0, bestCombo: 0, asked: new Set(), marked: new Set(), active: true, startLevel: S.learn.level,
+  };
+  const d = modal.open(`
+    <div class="ls">
+      <div class="ls-top">
+        <button type="button" class="icon ghost ls-quit" id="ls-quit" aria-label="${T('Stoppen', '退出')}">✕</button>
+        <div class="ls-bar" role="progressbar" aria-valuemin="0" aria-valuemax="100"><span id="ls-fill"></span></div>
+        <span class="ls-combo" id="ls-combo" hidden></span>
+      </div>
+      <div class="ls-main" id="ls-main"></div>
+      <div class="ls-foot" id="ls-foot"></div>
+    </div>`);
+  d.classList.add('lesson');
+  // Escape asks first. The close event comes a moment later, maybe when the
+  // next lesson is already open: then it isn't this one's.
+  const onCancel = ev => { ev.preventDefault(); if (st.active) askQuit(); };
+  const cleanup = () => {
+    st.active = false;
+    d.removeEventListener('cancel', onCancel); d.removeEventListener('close', onClose);
+    d.classList.remove('lesson');
+    if ('speechSynthesis' in window) speechSynthesis.cancel();
+  };
+  const onClose = () => { if (!d.open) cleanup(); };
+  d.addEventListener('cancel', onCancel);
+  d.addEventListener('close', onClose);
+  const leave = () => { cleanup(); modal.close(); };
+  const main = $('#ls-main', d), foot = $('#ls-foot', d);
+
+  async function askQuit() {
+    if (st.i === 0 || !st.active) { leave(); return; }
+    foot.className = 'ls-foot is-quit';
+    foot.innerHTML = `<p><b>${T('Stoppen?', '要退出吗？')}</b> ${T('Wat je in deze les deed, wordt niet bewaard.', '这节课的进度不会保存。')}</p>
+      <div class="ls-btns"><button type="button" id="q-stay" class="primary">${T('Verder doen', '继续学')}</button><button type="button" id="q-go">${T('Stoppen', '退出')}</button></div>`;
+    $('#q-go', foot).addEventListener('click', leave);
+    $('#q-stay', foot).addEventListener('click', () => show());
+  }
+  $('#ls-quit', d).addEventListener('click', askQuit);
+
+  const progress = () => {
+    const pct = Math.round(st.i / st.queue.length * 100);
+    $('#ls-fill', d).style.width = `${pct}%`;
+    $('.ls-bar', d).setAttribute('aria-valuenow', pct);
+    const c = $('#ls-combo', d);
+    c.hidden = st.combo < 3;
+    c.innerHTML = `${FLAME}${st.combo}`;
+  };
+  const prompt = (label, html) => `<p class="ls-ask">${label}</p>${html}`;
+  const speakBtns = text => `<div class="ls-say"><button type="button" class="say-btn" data-say-now aria-label="${T('Luister', '听')}">${SPEAKER}</button>
+    <button type="button" class="say-btn slow" data-say-slow aria-label="${T('Trager', '慢速')}">${TURTLE}</button></div>`;
+  const bindSay = (root, text) => {
+    $$('[data-say-now]', root).forEach(b => b.addEventListener('click', () => sayNl(text, false)));
+    $$('[data-say-slow]', root).forEach(b => b.addEventListener('click', () => sayNl(text, true)));
+  };
+
+  function show() {
+    if (!st.active) return;
+    progress();
+    if (st.i >= st.queue.length) return finish();
+    const ex = st.queue[st.i], it = ex.item, text = Dutch.nl(it), zhText = Dutch.zh(it);
+    foot.className = 'ls-foot';
+    foot.innerHTML = '';
+    main.className = `ls-main t-${ex.type}`;
+
+    if (ex.type === 'intro') {
+      main.innerHTML = `<p class="ls-new">${T('Nieuw', '新内容')}</p>
+        <div class="ls-card"><p class="ls-nl" lang="nl-BE">${esc(text)}</p><p class="ls-zh">${esc(zhText)}</p>
+        ${it.note ? `<p class="ls-note">${esc(Dutch.fill(it.note))}</p>` : ''}${speakBtns(text)}</div>`;
+      bindSay(main, text);
+      sayNl(text);
+      foot.innerHTML = `<button type="button" class="primary wide" id="ls-go">${T('Volgende', '下一个')}</button>`;
+      $('#ls-go', foot).addEventListener('click', () => { st.i++; show(); });
+      return;
+    }
+
+    if (ex.type === 'pickZh') {
+      main.innerHTML = prompt(T('Wat betekent dit?', '这是什么意思？'), `<div class="ls-card"><p class="ls-nl" lang="nl-BE">${esc(text)}</p>${speakBtns(text)}</div>`)
+        + choiceList(ex.choices.map(c => [c, Dutch.zh(c), '']));
+      bindSay(main, text);
+      if (ex.tier <= 2) sayNl(text);
+      bindChoices(ex);
+    }
+    if (ex.type === 'pickNl') {
+      main.innerHTML = prompt(T('Hoe zeg je dit in het Nederlands?', '用荷兰语怎么说？'), `<div class="ls-card"><p class="ls-zh big">${esc(zhText)}</p></div>`)
+        + choiceList(ex.choices.map(c => [c, Dutch.nl(c), 'nl-BE']));
+      bindChoices(ex);
+    }
+    if (ex.type === 'listen') {
+      main.innerHTML = prompt(T('Wat hoor je?', '你听到的是哪一句？'), `<div class="ls-card listen">${speakBtns(text)}</div>`)
+        + choiceList(ex.choices.map(c => [c, Dutch.nl(c), 'nl-BE']));
+      bindSay(main, text);
+      setTimeout(() => sayNl(text), 250);
+      bindChoices(ex);
+    }
+    if (ex.type === 'dehet') {
+      const noun = text.split(' ').slice(1).join(' ');
+      main.innerHTML = prompt(T('De of het?', '用 de 还是 het？'), `<div class="ls-card"><p class="ls-nl" lang="nl-BE">… ${esc(noun)}</p><p class="ls-zh">${esc(zhText)}</p></div>`)
+        + `<div class="dehet">${['de', 'het'].map(a => `<button type="button" class="choice big" data-a="${a}" lang="nl-BE">${a}</button>`).join('')}</div>`;
+      $$('[data-a]', main).forEach(b => b.addEventListener('click', () => {
+        $$('[data-a]', main).forEach(x => { x.disabled = true; });
+        b.classList.add(b.dataset.a === ex.answer ? 'is-right' : 'is-wrong');
+        answered(b.dataset.a === ex.answer);
+      }));
+    }
+    if (ex.type === 'build') buildExercise(ex, text, zhText);
+    if (ex.type === 'type' || ex.type === 'dictation') typeExercise(ex, text, zhText);
+    if (ex.type === 'speak') speakExercise(ex, text, zhText);
+  }
+
+  const choiceList = list => `<div class="choices">${list.map(([c, label, lng], i) =>
+    `<button type="button" class="choice" data-c="${i}" ${lng ? `lang="${lng}"` : ''}>${esc(label)}</button>`).join('')}</div>`;
+  function bindChoices(ex) {
+    $$('[data-c]', main).forEach(b => b.addEventListener('click', () => {
+      const c = ex.choices[Number(b.dataset.c)], ok = c === ex.item;
+      $$('[data-c]', main).forEach(x => { x.disabled = true; if (ex.choices[Number(x.dataset.c)] === ex.item) x.classList.add('is-right'); });
+      if (!ok) b.classList.add('is-wrong');
+      answered(ok);
+    }));
+  }
+
+  function buildExercise(ex, text, zhText) {
+    const placed = [];
+    main.innerHTML = prompt(T('Maak de zin', '把句子拼出来'), `<div class="ls-card"><p class="ls-zh big">${esc(zhText)}</p></div>`)
+      + `<div class="build-line" id="b-line" aria-live="polite"></div><div class="build-bank" id="b-bank">${ex.tiles.map((w, i) =>
+        `<button type="button" class="tile" data-t="${i}" lang="nl-BE">${esc(w)}</button>`).join('')}</div>`;
+    const line = $('#b-line', main), bank = $('#b-bank', main);
+    const redraw = () => {
+      line.innerHTML = placed.map((i, k) => `<button type="button" class="tile on" data-k="${k}" lang="nl-BE">${esc(ex.tiles[i])}</button>`).join('');
+      $$('[data-t]', bank).forEach(b => { b.classList.toggle('used', placed.includes(Number(b.dataset.t))); b.disabled = placed.includes(Number(b.dataset.t)); });
+      $$('[data-k]', line).forEach(b => b.addEventListener('click', () => { placed.splice(Number(b.dataset.k), 1); redraw(); }));
+      check.disabled = !placed.length;
+    };
+    foot.innerHTML = `<button type="button" class="primary wide" id="ls-check" disabled>${T('Controleren', '检查')}</button>`;
+    const check = $('#ls-check', foot);
+    $$('[data-t]', bank).forEach(b => b.addEventListener('click', () => { placed.push(Number(b.dataset.t)); redraw(); }));
+    check.addEventListener('click', () => {
+      $$('.tile', main).forEach(b => { b.disabled = true; });
+      answered(Dutch.checkBuilt(placed.map(i => ex.tiles[i]), ex.item));
+    });
+  }
+
+  function typeExercise(ex, text, zhText) {
+    const dict = ex.type === 'dictation';
+    main.innerHTML = dict
+      ? prompt(T('Schrijf wat je hoort', '听写：把听到的写下来'), `<div class="ls-card listen">${speakBtns(text)}</div>`)
+      : prompt(T('Schrijf in het Nederlands', '用荷兰语写出来'), `<div class="ls-card"><p class="ls-zh big">${esc(zhText)}</p></div>`);
+    main.insertAdjacentHTML('beforeend', `<textarea class="ls-input" id="ls-in" rows="2" lang="nl-BE" autocapitalize="off" autocomplete="off" autocorrect="off" spellcheck="false"
+      placeholder="${T('Typ hier…', '在这里输入…')}"></textarea>`);
+    bindSay(main, text);
+    if (dict) setTimeout(() => sayNl(text), 250);
+    foot.innerHTML = `<div class="ls-btns"><button type="button" class="ghost" id="ls-dunno">${T('Weet ik niet', '不会')}</button>
+      <button type="button" class="primary" id="ls-check" disabled>${T('Controleren', '检查')}</button></div>`;
+    const inp = $('#ls-in', main), check = $('#ls-check', foot);
+    inp.addEventListener('input', () => { check.disabled = !inp.value.trim(); });
+    inp.addEventListener('keydown', e => { if (e.key === 'Enter' && !e.shiftKey) { e.preventDefault(); if (!check.disabled) check.click(); } });
+    check.addEventListener('click', () => { inp.disabled = true; const r = Dutch.checkTyped(inp.value, ex.item); answered(r.ok, { typo: r.typo, typed: inp.value }); });
+    $('#ls-dunno', foot).addEventListener('click', () => { inp.disabled = true; answered(false); });
+    setTimeout(() => inp.focus(), 50);
+  }
+
+  function speakExercise(ex, text, zhText) {
+    let tries = 0;
+    main.innerHTML = prompt(T('Zeg het hardop', '大声说出来'), `<div class="ls-card"><p class="ls-nl" lang="nl-BE">${esc(text)}</p><p class="ls-zh">${esc(zhText)}</p>${speakBtns(text)}</div>`)
+      + `<div class="mic-wrap"><button type="button" class="mic-btn" id="ls-mic" aria-label="${T('Tik en spreek', '点一下再说')}">${MIC}</button>
+         <p class="muted small" id="ls-heard">${T('Tik op de micro en zeg de zin.', '点麦克风，然后说出这句话。')}</p></div>`;
+    bindSay(main, text);
+    foot.innerHTML = `<div class="ls-btns"><button type="button" class="ghost" id="ls-nospeak">${T('Nu niet praten', '现在不方便说话')}</button></div>`;
+    $('#ls-nospeak', foot).addEventListener('click', () => {
+      store.set(LEARN_SPEAK_OFF, String(Date.now() + 3600000));
+      toast(T('Een uur lang geen spreekoefeningen.', '一小时内不再出现口语练习。'));
+      skipExercise();
+    });
+    const mic = $('#ls-mic', main), heard = $('#ls-heard', main);
+    mic.addEventListener('click', async () => {
+      mic.disabled = true;
+      mic.classList.add('is-on');
+      heard.textContent = T('Ik luister…', '正在听…');
+      try {
+        const got = await Dutch.hear({});
+        mic.classList.remove('is-on');
+        const r = Dutch.checkSpoken(got, ex.item);
+        tries++;
+        if (r.ok) return answered(true);
+        heard.innerHTML = got.length ? `${T('Ik hoorde', '我听到的是')}: <b lang="nl-BE">“${esc(got[0])}”</b>` : T('Ik hoorde niets. Probeer opnieuw, wat luider.', '没听到。再试一次，声音大一点。');
+        if (tries >= 3) return answered(false, { spoken: true });
+        mic.disabled = false;
+      } catch (e) {
+        mic.classList.remove('is-on');
+        if (e === 'not-allowed' || e === 'service-not-allowed') {
+          store.set(LEARN_SPEAK_OFF, String(Date.now() + 3650 * 86400000));
+          toast(T('De app mag de micro niet gebruiken. Spreekoefeningen staan uit.', 'app 无法使用麦克风，口语练习已关闭。'), 'error');
+          return skipExercise();
+        }
+        heard.textContent = T('Dat lukte niet. Probeer opnieuw.', '没成功，再试一次。');
+        mic.disabled = false;
+      }
+    });
+  }
+
+  // Counts neither right nor wrong (no microphone right now).
+  function skipExercise() { st.questions--; st.i++; show(); }
+
+  function answered(ok, { typo = false, spoken = false } = {}) {
+    const ex = st.queue[st.i], it = ex.item, text = Dutch.nl(it), firstTime = !st.asked.has(ex);
+    st.asked.add(ex);
+    if (!st.marked.has(it.key)) { st.marked.add(it.key); Dutch.mark(p, it, ok); } else if (!ok) Dutch.mark(p, it, false);
+    if (ok) {
+      if (firstTime && !ex.redo) st.first++;
+      st.combo++; st.bestCombo = Math.max(st.bestCombo, st.combo);
+    } else {
+      st.combo = 0;
+      st.wrongOnce.add(it.key);
+      if (!ex.redo) st.queue.push({ ...ex, redo: true, choices: ex.choices && [...ex.choices].sort(() => Math.random() - 0.5) });
+    }
+    progress();
+    const [nlP, zhP] = PRAISE[Math.floor(Math.random() * PRAISE.length)];
+    foot.className = `ls-foot ${ok ? 'is-good' : 'is-bad'}`;
+    foot.innerHTML = `
+      <div class="fb">
+        <p class="fb-head">${ok ? `${T(nlP, zhP)}${st.combo >= 3 ? ` <span class="fb-combo">${FLAME}${st.combo}</span>` : ''}` : spoken ? T('Bijna. Luister nog eens:', '差一点。再听一遍：') : T('Het juiste antwoord:', '正确答案：')}</p>
+        ${!ok || typo || ex.type === 'listen' || ex.type === 'dictation' ? `<p class="fb-nl" lang="nl-BE">${esc(text)} <button type="button" class="say-btn sm" data-say-now aria-label="${T('Luister', '听')}">${SPEAKER}</button></p>
+          <p class="fb-zh">${esc(Dutch.zh(it))}</p>` : ''}
+        ${typo ? `<p class="fb-note">${T('Let op de spelling.', '注意拼写。')}</p>` : ''}
+        ${!ok && it.note ? `<p class="fb-note">${esc(Dutch.fill(it.note))}</p>` : ''}
+      </div>
+      <div class="ls-btns">${ok ? '' : `<button type="button" id="fb-ask">${ICONS.chat}<span>${T('Vraag het', '问一问')}</span></button>`}
+        <button type="button" class="primary" id="fb-go">${T('Verder', '继续')}</button></div>`;
+    bindSay(foot, text);
+    sayNl(text);
+    $('#fb-go', foot).addEventListener('click', () => { st.i++; show(); });
+    const ask = $('#fb-ask', foot);
+    if (ask) ask.addEventListener('click', () => askAbout(it));
+    $('#fb-go', foot).focus();
+  }
+
+  // A question about this sentence, from inside the lesson.
+  function askAbout(it) {
+    const back = foot.innerHTML, cls = foot.className;
+    foot.className = 'ls-foot is-ask';
+    foot.innerHTML = `<p class="fb-head">${T('Vraag het aan je verantwoordelijke', '问负责人')}</p><div id="ask-box"></div>
+      <div class="ls-btns"><button type="button" class="ghost" id="ask-back">${T('Terug', '返回')}</button></div>`;
+    composer($('#ask-box', foot), {
+      prefill: T(`Ik begrijp dit niet: “${Dutch.nl(it)}” (${Dutch.zh(it)})\n`, `我不明白这个：“${Dutch.nl(it)}”（${Dutch.zh(it)}）\n`),
+      send: async m => {
+        await rpc('send_message', m);
+        toast(T('Verstuurd. Je krijgt het antwoord bij Nederlands → Vraag het.', '已发送。回复会出现在「学荷兰语 → 问一问」。'));
+        restore();
+      },
+    });
+    const restore = () => {
+      foot.className = cls; foot.innerHTML = back;
+      bindSay(foot, Dutch.nl(it));
+      $('#fb-go', foot).addEventListener('click', () => { st.i++; show(); });
+      const a = $('#fb-ask', foot); if (a) a.addEventListener('click', () => askAbout(it));
+    };
+    $('#ask-back', foot).addEventListener('click', restore);
+  }
+
+  async function finish() {
+    st.active = false;
+    const acc = st.questions ? st.first / st.questions : 1;
+    const isTest = lesson && lesson.test, passed = !isTest || acc >= 0.8;
+    const wasToday = Dutch.today(p);
+    let gain = st.first * 2 + (review ? 8 : isTest ? (passed ? 20 : 5) : 10) + (acc === 1 ? 5 : 0) + (!wasToday ? 5 : 0);
+    gain = Math.min(gain, 200);
+    const starsNow = acc >= 0.95 ? 3 : acc >= 0.8 ? 2 : 1;
+    if (lesson && passed) {
+      p.done[lesson.id] = Math.max(p.done[lesson.id] || 0, starsNow);
+      if (isTest) {
+        // A test passed opens this unit and, when skipping ahead, everything before it.
+        for (const u of Dutch.UNITS.slice(0, lesson.unit.index + 1)) for (const l of Dutch.lessonsOf(u)) if (!p.done[l.id]) p.done[l.id] = 1;
+      }
+    }
+    Dutch.logLesson(p);
+    const saved = await saveLearning(gain, true);
+    const up = S.learn.level > st.startLevel, st2 = Dutch.streak(p), goal = p.goal || 1, td = Dutch.today(p);
+    const next = Dutch.nextLesson(p);
+    $('#ls-fill', d).style.width = '100%';
+    $('#ls-combo', d).hidden = true;
+    main.className = 'ls-main ls-end';
+    main.innerHTML = `
+      <div class="end">
+        ${up ? `<p class="section-label">${T('Taal-level omhoog', '语言等级提升')}</p><div class="end-level">${S.learn.level}</div><h2>${esc(learnLevelName(S.learn.level))}</h2>`
+          : isTest && !passed ? `<h2>${T('Bijna!', '差一点！')}</h2><p>${T('Voor de toets heb je 80% nodig. Herhaal de lessen en probeer opnieuw.', '测验需要答对 80%。复习一下再试一次。')}</p>`
+          : `<h2>${review ? T('Herhaling klaar!', '复习完成！') : isTest ? T('Toets gehaald!', '测验通过！') : T('Les klaar!', '这课完成了！')}</h2>${lesson && !isTest ? stars(starsNow) : ''}`}
+        <div class="end-stats">
+          <div><b class="mono">+${gain}</b><span>XP</span></div>
+          <div><b class="mono">${Math.round(acc * 100)}%</b><span>${T('juist', '正确率')}</span></div>
+          <div class="hot">${FLAME}<b class="mono">${st2}</b><span>${T(st2 === 1 ? 'dag op rij' : 'dagen op rij', '天连续')}</span></div>
+        </div>
+        ${td === goal ? `<p class="hint good">${T('Je doel van vandaag is gehaald. Tot morgen!', '今天的目标完成了，明天见！')}</p>` : ''}
+        ${isTest && passed && lesson.unit.index + 1 < Dutch.UNITS.length ? `<p class="hint info">${T(`Nieuwe unit open: ${esc(Dutch.UNITS[lesson.unit.index + 1].nl)}`, `新单元已解锁：${esc(Dutch.UNITS[lesson.unit.index + 1].zh)}`)}</p>` : ''}
+        ${saved ? '' : `<p class="hint warn">${T('Geen verbinding: je vooruitgang wordt bewaard zodra je weer online bent.', '没有网络：联网后会自动保存进度。')}</p>`}
+      </div>`;
+    foot.className = 'ls-foot';
+    foot.innerHTML = `<div class="ls-btns"><button type="button" id="end-close">${T('Klaar', '完成')}</button>
+      ${isTest && !passed ? `<button type="button" class="primary" id="end-again">${T('Opnieuw', '再试一次')}</button>`
+        : next ? `<button type="button" class="primary" id="end-next">${T('Volgende les', '下一课')}</button>` : ''}</div>`;
+    $('#end-close', foot).addEventListener('click', () => { leave(); renderView(); });
+    const again = $('#end-again', foot);
+    if (again) again.addEventListener('click', () => { leave(); playLesson(lesson, { skip }); });
+    const nx = $('#end-next', foot);
+    if (nx) nx.addEventListener('click', () => { leave(); playLesson(next); });
+    if (up) sayNl('Proficiat!');
+  }
+
+  show();
+}
+
+/* ------------------------------------------------- messages and voice */
+
+// Voice notes: the phone records (MediaRecorder, mp4 where it can so every
+// phone plays it), the database keeps it with the message, at most two minutes.
+const REC_TYPES = ['audio/mp4', 'audio/webm;codecs=opus', 'audio/webm', 'audio/ogg;codecs=opus'];
+const canRecord = () => !!(navigator.mediaDevices && navigator.mediaDevices.getUserMedia && window.MediaRecorder);
+const fmtSec = ms => { const s = Math.round((ms || 0) / 1000); return `${Math.floor(s / 60)}:${pad(s % 60)}`; };
+const Rec = {
+  rec: null, stream: null, chunks: [], t0: 0, timer: null,
+  async start(onTick) {
+    this.stream = await navigator.mediaDevices.getUserMedia({ audio: true });
+    const type = MediaRecorder.isTypeSupported ? REC_TYPES.find(t => MediaRecorder.isTypeSupported(t)) : '';
+    this.rec = new MediaRecorder(this.stream, type ? { mimeType: type } : undefined);
+    this.chunks = [];
+    this.rec.ondataavailable = e => { if (e.data && e.data.size) this.chunks.push(e.data); };
+    this.rec.start(1000);
+    this.t0 = Date.now();
+    this.timer = setInterval(() => { const ms = Date.now() - this.t0; onTick(ms); if (ms >= 120000) this.onLimit && this.onLimit(); }, 250);
+  },
+  stop() {
+    return new Promise(resolve => {
+      clearInterval(this.timer);
+      const r = this.rec, ms = Date.now() - this.t0;
+      if (!r) return resolve(null);
+      r.onstop = () => {
+        const type = (r.mimeType || (this.chunks[0] && this.chunks[0].type) || 'audio/webm').split(';')[0].replace(/^video\//, 'audio/');
+        const blob = new Blob(this.chunks, { type });
+        this.stream.getTracks().forEach(t => t.stop());
+        this.rec = null; this.stream = null;
+        resolve(blob.size ? { blob, type, ms } : null);
+      };
+      r.stop();
+    });
+  },
+  cancel() { if (this.rec) this.stop(); },
+};
+
+const voiceCache = new Map();
+let voiceNow = null;
+const voiceHTML = (id, ms, src = '') => `<button type="button" class="voice" ${id ? `data-voice="${id}"` : ''} ${src ? `data-src="${src}"` : ''} data-ms="${ms || 0}" aria-label="${T('Spraakbericht afspelen', '播放语音')}">
+  <span class="voice-ic">${PLAY}</span><span class="voice-bar"><span></span></span><span class="voice-t mono">${fmtSec(ms)}</span></button>`;
+function stopVoice() {
+  if (!voiceNow) return;
+  voiceNow.audio.pause();
+  const b = voiceNow.btn;
+  $('.voice-ic', b).innerHTML = PLAY; $('.voice-bar span', b).style.width = '0'; $('.voice-t', b).textContent = fmtSec(Number(b.dataset.ms));
+  voiceNow = null;
+}
+async function playVoice(b) {
+  if (voiceNow && voiceNow.btn === b) { if (voiceNow.audio.paused) voiceNow.audio.play(); else voiceNow.audio.pause(); return; }
+  stopVoice();
+  let url = b.dataset.src || voiceCache.get(b.dataset.voice);
+  if (!url) {
+    b.classList.add('is-loading');
+    try {
+      const f = await rpc('get_message_audio', { p_id: b.dataset.voice });
+      const bin = atob(f.data.replace(/\s/g, '')), bytes = new Uint8Array(bin.length);
+      for (let i = 0; i < bin.length; i++) bytes[i] = bin.charCodeAt(i);
+      url = URL.createObjectURL(new Blob([bytes], { type: f.content_type }));
+      voiceCache.set(b.dataset.voice, url);
+    } catch (e) { toast(e.message, 'error'); return; } finally { b.classList.remove('is-loading'); }
+  }
+  const a = new Audio(url), ic = $('.voice-ic', b), bar = $('.voice-bar span', b), t = $('.voice-t', b);
+  voiceNow = { btn: b, audio: a };
+  a.addEventListener('play', () => { ic.innerHTML = PAUSE; });
+  a.addEventListener('pause', () => { ic.innerHTML = PLAY; });
+  a.addEventListener('timeupdate', () => {
+    const total = isFinite(a.duration) && a.duration ? a.duration * 1000 : Number(b.dataset.ms) || 1;
+    bar.style.width = `${Math.min(100, a.currentTime * 1000 / total * 100)}%`;
+    t.textContent = fmtSec(a.currentTime * 1000);
+  });
+  a.addEventListener('ended', () => { if (voiceNow && voiceNow.audio === a) stopVoice(); });
+  a.play().catch(() => { stopVoice(); toast(T('Dit spraakbericht speelt niet af op dit toestel.', '这台设备无法播放这条语音。'), 'error'); });
+}
+const bindVoices = root => $$('.voice', root).forEach(b => b.addEventListener('click', () => playVoice(b)));
+
+// Write or record, then send: send({ p_body, p_audio, p_audio_type, p_audio_ms }).
+function composer(box, { send, prefill = '', draftKey = null }) {
+  let take = null;
+  box.innerHTML = `<div class="composer">
+    <div class="cmp-rec" hidden><span class="rec-dot" aria-hidden="true"></span><span class="rec-t mono">0:00</span><span class="muted small">${T('Aan het opnemen…', '录音中…')}</span>
+      <button type="button" class="sm" data-rec-cancel>${T('Weg', '取消')}</button><button type="button" class="sm primary" data-rec-stop>${T('Klaar', '完成')}</button></div>
+    <div class="cmp-take" hidden></div>
+    <div class="cmp-row">
+      <textarea rows="1" maxlength="2000" placeholder="${T('Typ een bericht…', '输入消息…')}" aria-label="${T('Bericht', '消息')}">${esc(prefill || (draftKey && S.drafts && S.drafts[draftKey]) || '')}</textarea>
+      ${canRecord() ? `<button type="button" class="icon cmp-mic" data-rec aria-label="${T('Spraakbericht opnemen', '录语音')}">${MIC}</button>` : ''}
+      <button type="button" class="icon primary cmp-send" data-send aria-label="${T('Versturen', '发送')}">${SEND}</button>
+    </div></div>`;
+  const ta = $('textarea', box), recRow = $('.cmp-rec', box), takeRow = $('.cmp-take', box), row = $('.cmp-row', box);
+  const grow = () => { ta.style.height = 'auto'; ta.style.height = `${Math.min(160, ta.scrollHeight + 2)}px`; };
+  ta.addEventListener('input', () => { grow(); if (draftKey) { S.drafts = S.drafts || {}; S.drafts[draftKey] = ta.value; } });
+  setTimeout(grow);
+  const showTake = () => {
+    takeRow.hidden = !take;
+    if (!take) { takeRow.innerHTML = ''; return; }
+    takeRow.innerHTML = `${voiceHTML(null, take.ms, take.url)}<button type="button" class="sm ghost" data-take-del>${T('Verwijderen', '删除')}</button>`;
+    bindVoices(takeRow);
+    $('[data-take-del]', takeRow).addEventListener('click', () => { stopVoice(); URL.revokeObjectURL(take.url); take = null; showTake(); });
+  };
+  const stopRec = async keep => {
+    const r = await Rec.stop();
+    recRow.hidden = true; row.hidden = false;
+    if (keep && r) { take = { ...r, url: URL.createObjectURL(r.blob) }; showTake(); }
+  };
+  const mic = $('[data-rec]', box);
+  if (mic) mic.addEventListener('click', async () => {
+    stopVoice();
+    try {
+      await Rec.start(ms => { $('.rec-t', box).textContent = fmtSec(ms); });
+      Rec.onLimit = () => stopRec(true);
+      if (take) { URL.revokeObjectURL(take.url); take = null; showTake(); }
+      recRow.hidden = false; row.hidden = true;
+    } catch (e) {
+      toast(T('De micro kan niet gebruikt worden. Geef de app toegang tot de micro in de instellingen van je telefoon.', '无法使用麦克风。请在手机设置里允许这个 app 使用麦克风。'), 'error');
+    }
+  });
+  $('[data-rec-stop]', box).addEventListener('click', () => stopRec(true));
+  $('[data-rec-cancel]', box).addEventListener('click', () => stopRec(false));
+  const sendBtn = $('[data-send]', box);
+  sendBtn.addEventListener('click', async () => {
+    const body = ta.value.trim();
+    if (!body && !take) { ta.focus(); return; }
+    sendBtn.disabled = true; sendBtn.classList.add('is-busy');
+    try {
+      const m = { p_body: body || null, p_audio: null, p_audio_type: null, p_audio_ms: null };
+      if (take) Object.assign(m, { p_audio: await readAsBase64(take.blob), p_audio_type: take.type, p_audio_ms: Math.round(take.ms) });
+      await send(m);
+      ta.value = ''; grow();
+      if (draftKey && S.drafts) delete S.drafts[draftKey];
+      if (take) { stopVoice(); URL.revokeObjectURL(take.url); take = null; showTake(); }
+    } catch (e) { if (e.code !== 'auth') toast(e.message, 'error'); }
+    finally { sendBtn.disabled = false; sendBtn.classList.remove('is-busy'); }
+  });
+  ta.addEventListener('keydown', e => { if (e.key === 'Enter' && (e.metaKey || e.ctrlKey)) sendBtn.click(); });
+}
+
+// mine(m): the messages on the right.
+function chatList(msgs, mine, { names = false } = {}) {
+  if (!msgs.length) return '';
+  let day = '';
+  return msgs.map(m => {
+    const d = fmt.dayLong(m.created_at), sep = d !== day ? `<p class="chat-day">${esc(d)}</p>` : '';
+    day = d;
+    const me = mine(m);
+    return `${sep}<div class="bubble${me ? ' mine' : ''}">
+      ${names && me ? `<span class="bubble-who">${esc(m.sender.split(' ')[0])}</span>` : ''}
+      ${m.body ? `<p class="bubble-text">${esc(m.body)}</p>` : ''}${m.audio ? voiceHTML(m.id, m.audio_ms) : ''}
+      <span class="bubble-meta">${fmt.time(m.created_at)}${me && m.read_at ? ` · ${T('gelezen', '已读')}` : ''}</span></div>`;
+  }).join('');
+}
+
+function runChat(el, { load, send, mine, names, draftKey }) {
+  const list = $('#chat-list', el);
+  let sig = '';
+  const draw = msgs => {
+    const s = msgs.map(m => `${m.id}${m.read_at ? 'r' : ''}`).join();
+    if (s === sig) return;
+    const atEnd = list.scrollHeight - list.scrollTop - list.clientHeight < 80 || !sig;
+    sig = s;
+    if (voiceNow && list.contains(voiceNow.btn)) stopVoice();
+    list.innerHTML = chatList(msgs, mine, { names }) || `<p class="empty chat-empty">${T('Nog geen berichten. Stel gerust je vraag, ook in het Chinees of met een spraakbericht.', '还没有消息。尽管提问，可以用中文，也可以发语音。')}</p>`;
+    bindVoices(list);
+    if (atEnd) list.scrollTop = list.scrollHeight;
+  };
+  composer($('#chat-box', el), { draftKey, send: async m => { await send(m); draw(await load()); } });
+  return { draw, refresh: async () => draw(await load()) };
+}
+
+async function viewChat(el, current) {
+  const r = await rpc('my_messages');
+  if (!current()) return;
+  S.unread = 0; updateBadges();
+  const names = r.managers.map(m => m.name.split(' ')[0]);
+  const who = names.length ? names.join(T(' of ', ' 或 ')) : T('je verantwoordelijke', '负责人');
+  el.innerHTML = `
+    <div class="view-head"><div><button class="link back" data-go="learn">‹ ${T('Nederlands', '学荷兰语')}</button>
+      <h1>${T('Vraag het', '问一问')}</h1><p>${T(`Je berichten gaan naar ${esc(who)}. Schrijf in het Nederlands of in het Chinees, of stuur een spraakbericht.`,
+        `消息会发给 ${esc(who)}。可以写荷兰语或中文，也可以发语音。`)}</p></div></div>
+    <section class="card chat">
+      <div class="chat-list" id="chat-list" aria-live="polite"></div>
+      <div id="chat-box"></div>
+    </section>`;
+  bindHome(el);
+  let msgs = r.messages;
+  const chat = runChat(el, {
+    load: async () => (msgs = (await rpc('my_messages')).messages),
+    send: m => rpc('send_message', m),
+    mine: m => !m.to_staff, draftKey: 'me',
+  });
+  chat.draw(msgs);
+  S.poll = setInterval(() => { if (document.visibilityState === 'visible' && current()) quiet(chat.refresh()); }, 8000);
+}
+
+/* ------------------------------------------------- managers: Berichten */
+
+// How a learner is doing, in one line, from their saved progress.
+function learnSummary(lr) {
+  if (!lr || (!lr.xp && !lr.lessons)) return 'Nog niet begonnen met Nederlands.';
+  const p = Dutch.clean(lr.data || {}), next = lr.data ? Dutch.nextLesson(p) : null, st = lr.data ? Dutch.streak(p) : 0;
+  return [`Taal-level ${lr.level}`, plural(lr.lessons, 'les', 'lessen'), st ? `${st} ${st === 1 ? 'dag' : 'dagen'} op rij` : '',
+    next ? `nu: ${next.unit.nl} (${next.unit.cefr})` : lr.data ? 'alles gedaan' : '',
+    lr.updated_at ? `laatst ${sinceShort(lr.updated_at)}` : ''].filter(Boolean).join(' · ');
+}
+function sinceShort(iso) {
+  const m = minutesBetween(iso, now());
+  if (m < 60) return 'net nog';
+  if (m < 24 * 60) return `${Math.round(m / 60)} u geleden`;
+  const d = Math.round(m / 1440);
+  return d === 1 ? 'gisteren' : `${d} dagen geleden`;
+}
+
+async function viewMessages(el, current) {
+  if (S.msgStaff) return viewThread(el, current);
+  const list = await rpc('mgr_message_threads');
+  if (!current()) return;
+  el.innerHTML = `
+    <div class="view-head"><div><h1>Berichten</h1><p>Vragen en spraakberichten van wie Nederlands leert. Zet iemand aan bij Team → persoon → Nederlands leren.</p></div></div>
+    <section class="card">${list.length ? `<div class="rows">${list.map(t => `
+      <button type="button" class="row thread${t.unread ? ' is-unread' : ''}" data-thread="${t.id}">
+        ${personPic(t, 'lg')}
+        <span class="row-main"><span class="row-title">${esc(t.name)}${t.unread ? ` <span class="count-pill">${t.unread}</span>` : ''}</span>
+          <span class="row-sub">${t.last_at ? `${t.last_to_staff ? 'Jij: ' : ''}${t.last_audio && !t.last_body ? 'Spraakbericht' : esc((t.last_body || '').slice(0, 90))}` : 'Nog geen berichten'}</span>
+          <span class="row-sub small">${esc(learnSummary(t.learning))}</span></span>
+        <span class="muted small">${t.last_at ? esc(sinceShort(t.last_at)) : ''}</span>
+      </button>`).join('')}</div>` : '<p class="empty"><strong>Nog niemand leert Nederlands.</strong>Zet het aan bij Team → (persoon) → Nederlands leren.</p>'}</section>`;
+  $$('[data-thread]', el).forEach(b => b.addEventListener('click', () => { location.hash = `messages/${b.dataset.thread}`; }));
+  S.poll = setInterval(() => { if (document.visibilityState === 'visible' && current() && !$('#modal').open) renderView(); }, 20000);
+}
+
+async function viewThread(el, current) {
+  const id = S.msgStaff;
+  const r = await rpc('mgr_messages', { p_staff_id: id });
+  if (!current()) return;
+  quiet(pollUnread());
+  const p = r.person, lr = r.learning, prog = Dutch.clean(lr.data || {});
+  const done = Dutch.UNITS.filter(u => Dutch.unitDone(prog, u)).length;
+  el.innerHTML = `
+    <div class="view-head"><div class="hello">${personPic(p, 'xl')}
+      <div><button class="link back" data-go="messages">‹ Berichten</button><h1>${esc(p.name)}</h1>
+      <p class="lvl-line"><span class="pill lvl">Taal-level ${lr.level}</span> <span>${esc(Dutch.levelName(lr.level, false))}</span>${p.lang === 'zh' ? ' <span class="pill">中文</span>' : ''}</p></div></div>
+      <button class="sm" data-go="team/${p.id}">Team-pagina</button></div>
+    <div class="stats">
+      <div class="stat"><span class="v">${lr.lessons}</span><span class="k">Lessen gedaan</span></div>
+      <div class="stat"><span class="v">${done}/${Dutch.UNITS.length}</span><span class="k">Units af${Dutch.cefrNow(prog) === 'A0' ? '' : `, ${Dutch.cefrNow(prog)} afgerond`}</span></div>
+      <div class="stat good"><span class="v">${Dutch.streak(prog)}</span><span class="k">Dagen op rij</span></div>
+      <div class="stat"><span class="v">${Dutch.known(prog)}</span><span class="k">Woorden gekend</span></div>
+    </div>
+    ${p.learn ? '' : '<p class="hint info">Het tabblad Nederlands staat uit voor deze persoon. Berichten kan je wel lezen en beantwoorden.</p>'}
+    <section class="card chat">
+      <div class="chat-list" id="chat-list" aria-live="polite"></div>
+      <div id="chat-box"></div>
+    </section>
+    <p class="muted small">${esc(learnSummary(lr))}. Een spraakbericht van jou met de juiste uitspraak helpt vaak het meest.</p>`;
+  bindHome(el);
+  let msgs = r.messages;
+  const chat = runChat(el, {
+    load: async () => (msgs = (await rpc('mgr_messages', { p_staff_id: id })).messages),
+    send: m => rpc('mgr_send_message', { p_staff_id: id, ...m }),
+    mine: m => m.to_staff, names: true, draftKey: id,
+  });
+  chat.draw(msgs);
+  S.poll = setInterval(() => { if (document.visibilityState === 'visible' && current()) quiet(chat.refresh()); }, 8000);
+}
+
+// The unread count on the tab, every half minute while the app is on the screen.
+async function pollUnread() {
+  if (!S.me || isViewer() || !S.token) return;
+  const r = await rpc('unread_messages');
+  if (r.unread !== S.unread) {
+    const more = r.unread > (S.unread || 0);
+    S.unread = r.unread;
+    updateBadges();
+    if (more && S.view === 'learn' && !$('#modal').open) renderView();
+  }
+}
+setInterval(() => { if (document.visibilityState === 'visible') quiet(pollUnread()); }, 30000);
