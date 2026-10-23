@@ -41,19 +41,49 @@ const Avatar = (() => {
     mouth: [['smile', 'Glimlach'], ['grin', 'Lach'], ['neutral', 'Neutraal'], ['pout', 'Pruillip'], ['smirk', 'Grijns']],
     beard: [['none', 'Geen'], ['stubble', 'Stoppels'], ['mustache', 'Snor'], ['beard', 'Baard']],
     top: [['tee', 'T-shirt'], ['vneck', 'V-hals'], ['tank', 'Topje'], ['longsleeve', 'Lange mouw'], ['shirt', 'Hemd'], ['sweater', 'Trui'],
-      ['hoodie', 'Hoodie'], ['chef', 'Koksvest'], ['garden', "Chen's Garden-shirt"]],
+      ['hoodie', 'Hoodie'], ['chef', 'Koksvest'], ['garden', "Chen's Garden-shirt"], ['clown', 'Clownspak']],
     outer: [['none', 'Geen'], ['jacket', 'Jasje'], ['cardigan', 'Vest'], ['puffer', 'Bodywarmer'], ['apron', 'Schort'], ['leather', 'Leren jas']],
     bottom: [['baggy', 'Wijde jeans'], ['straight', 'Rechte jeans'], ['joggers', 'Joggingbroek'], ['skirt', 'Rok'], ['shorts', 'Short']],
     shoes: [['sneakers', 'Sneakers'], ['boots', 'Laarsjes'], ['bunny', 'Konijnensloffen'], ['monster', 'Monstersloffen'],
       ['dragon', 'Drakensloffen'], ['gold', 'Gouden sneakers']],
     hat: [['none', 'Geen'], ['beanie', 'Muts'], ['headband', 'Haarband'], ['hijab', 'Hoofddoek'], ['cap', 'Pet'], ['bandana', 'Bandana'], ['chef', 'Koksmuts'],
-      ['crown', 'Kroon'], ['bucket', 'Vissershoedje']],
+      ['crown', 'Kroon'], ['bucket', 'Vissershoedje'], ['clown', 'Clownshoedje']],
     glasses: [['none', 'Geen'], ['round', 'Rond'], ['square', 'Vierkant'], ['sun', 'Zonnebril'], ['heart', 'Hartjesbril']],
     neck: [['none', 'Geen'], ['scarf', 'Sjaal'], ['bowtie', 'Strikje'], ['headphones', 'Koptelefoon'], ['chain', 'Gouden ketting']],
     aura: [['none', 'Geen'], ['gold', 'Gouden gloed']],
     earrings: [['none', 'Geen'], ['studs', 'Knopjes'], ['hoops', 'Ringen'], ['stack', 'Meerdere']],
-    piercing: [['none', 'Geen'], ['nose', 'Neus'], ['septum', 'Septum']],
+    piercing: [['none', 'Geen'], ['nose', 'Neus'], ['septum', 'Septum'], ['clownnose', 'Clownsneus']],
   };
+  // The same items in Chinese, for staff who use the app in Chinese.
+  const ZH = {
+    body: { female: '女', male: '男' },
+    hair: { long: '长发', bangs: '长发带刘海', wavy: '波浪发', longcurly: '长卷发', lob: '中长发', shag: '层次发', bob: '波波头',
+      pixie: '精灵短发', halfup: '半扎发', bun: '丸子头', spacebuns: '双丸子头', ponytail: '马尾', highpony: '高马尾', pigtails: '双马尾',
+      braids: '辫子', sidebraid: '侧辫', locs: '脏辫', cornrows: '玉米辫', curly: '卷发', afro: '爆炸头', short: '短发', sidepart: '侧分',
+      slickback: '背头', quiff: '飞机头', spiky: '刺猬头', curtains: '中分', curlytop: '顶部卷发', mullet: '鲻鱼头', mohawk: '莫西干',
+      fade: '渐变寸头', manbun: '男士发髻', buzz: '寸头', none: '光头' },
+    eyes: { round: '圆眼', almond: '杏眼', side: '侧看', happy: '笑眼' },
+    brows: { soft: '柔和', arched: '弯眉', straight: '平眉' },
+    mouth: { smile: '微笑', grin: '大笑', neutral: '平静', pout: '嘟嘴', smirk: '坏笑' },
+    beard: { none: '无', stubble: '胡茬', mustache: '小胡子', beard: '络腮胡' },
+    top: { tee: 'T恤', vneck: 'V领', tank: '背心', longsleeve: '长袖', shirt: '衬衫', sweater: '毛衣', hoodie: '连帽衫', chef: '厨师服',
+      garden: "Chen's Garden 衫", clown: '小丑服' },
+    outer: { none: '无', jacket: '夹克', cardigan: '开衫', puffer: '羽绒背心', apron: '围裙', leather: '皮夹克' },
+    bottom: { baggy: '阔腿牛仔裤', straight: '直筒牛仔裤', joggers: '运动裤', skirt: '裙子', shorts: '短裤' },
+    shoes: { sneakers: '运动鞋', boots: '短靴', bunny: '兔子拖鞋', monster: '怪兽拖鞋', dragon: '龙拖鞋', gold: '金色运动鞋' },
+    hat: { none: '无', beanie: '毛线帽', headband: '发带', hijab: '头巾', cap: '棒球帽', bandana: '方巾', chef: '厨师帽', crown: '皇冠', bucket: '渔夫帽', clown: '小丑帽' },
+    glasses: { none: '无', round: '圆框', square: '方框', sun: '墨镜', heart: '爱心眼镜' },
+    neck: { none: '无', scarf: '围巾', bowtie: '领结', headphones: '耳机', chain: '金项链' },
+    aura: { none: '无', gold: '金光' },
+    earrings: { none: '无', studs: '耳钉', hoops: '耳环', stack: '多个耳饰' },
+    piercing: { none: '无', nose: '鼻环', septum: '中隔环', clownnose: '小丑鼻子' },
+  };
+  // An item's name: label('top', 'clown', 'zh') -> '小丑服'.
+  const label = (key, value, lang = 'nl') => {
+    const nl = ((STYLES[key] || []).find(s => s[0] === value) || [])[1];
+    return lang === 'zh' ? (ZH[key] || {})[value] || nl : nl;
+  };
+  const FANCY_HAIR = { nl: 'Fantasiekleuren voor je haar', zh: '彩色头发' };
   const COLORS = {
     skin: SKIN, hairColor: HAIR_COLORS, eyeColor: EYE_COLORS, topColor: CLOTH, outerColor: CLOTH,
     bottomColor: BOTTOM_COLORS, shoeColor: SHOE_COLORS, hatColor: CLOTH, neckColor: CLOTH,
@@ -74,14 +104,13 @@ const Avatar = (() => {
 
   const levelOf = (key, value) => (UNLOCKS[key] || {})[value] || 1;
   // What unlocks at each level, for the profile and the level-up message.
-  function rewardsAt(level) {
+  function rewardsAt(level, lang = 'nl') {
     const out = [];
     for (const [key, items] of Object.entries(UNLOCKS)) {
       for (const [value, lvl] of Object.entries(items)) {
         if (lvl !== level) continue;
-        const style = (STYLES[key] || []).find(s => s[0] === value);
-        if (style) out.push(style[1]);
-        else if (key === 'hairColor') { if (!out.includes('Fantasiekleuren voor je haar')) out.push('Fantasiekleuren voor je haar'); }
+        const name = key === 'hairColor' ? FANCY_HAIR[lang] || FANCY_HAIR.nl : label(key, value, lang);
+        if (name && !out.includes(name)) out.push(name);
       }
     }
     return out;
@@ -111,7 +140,9 @@ const Avatar = (() => {
     if (Math.random() < 0.6) c.piercing = 'none';
     if (Math.random() < 0.7) c.neck = 'none';
     c.aura = 'none';
-    if (c.top === 'chef') c.top = 'tee';
+    if (c.top === 'chef' || c.top === 'clown') c.top = 'tee';
+    if (c.hat === 'clown') c.hat = 'none';
+    if (c.piercing === 'clownnose') c.piercing = 'none';
     c.freckles = Math.random() < 0.3; c.blush = Math.random() < 0.6;
     return c;
   }
@@ -537,6 +568,30 @@ const Avatar = (() => {
   const SLEEVE_LONG = 'M 59 171 C 49 175 44 190 43 212 L 40 274 Q 40 282 48 282 L 62 282 Q 68 282 68 274 L 72 216 C 72 200 72 186 68 175 Z';
   const BODY_CREW = 'M 60 180 Q 62 168 82 164 Q 100 172 118 164 Q 138 168 140 180 L 143 272 Q 100 278 57 272 Z';
 
+  // A clown suit: red and yellow halves (the sleeves the other way round), big
+  // dots, a white ruffled collar and cuffs, and pompoms down the middle.
+  const CLOWN_RED = '#D9363E', CLOWN_YELLOW = '#F2C230';
+  const CLOWN_HALF = 'M 60 180 Q 62 168 82 164 Q 91 168 100 168 L 100 275 Q 78.5 275 57 272 Z';
+  function clownSuit(fold, hem) {
+    const ruffle = (pts, r) => pts.map(([x, y]) => circ(x, y, r, '#FFFFFF', OL)).join('');
+    const collar = [];
+    for (let i = 0; i <= 8; i++) {
+      const t = i / 8, u = 1 - t;
+      collar.push([u * u * 68 + 2 * u * t * 100 + t * t * 132, u * u * 161 + 2 * u * t * 190 + t * t * 161]);
+    }
+    const cuff = [[42, 277], [48, 278.5], [54, 279], [60, 278.5], [66, 277]];
+    const dots = (list, fill) => list.map(([x, y, r]) => circ(x, y, r, fill, 'opacity=".95"')).join('');
+    return both(SLEEVE_LONG).map((d, i) => shape(d, i ? CLOWN_RED : CLOWN_YELLOW)).join('') +
+      shape(CLOWN_HALF, CLOWN_RED) + shape(mirror(CLOWN_HALF), CLOWN_YELLOW) +
+      dots([[74, 196, 5], [86, 224, 4.5], [70, 248, 5.5], [90, 262, 3.5]], CLOWN_YELLOW) +
+      dots([[126, 200, 5], [114, 230, 4.5], [130, 252, 5], [112, 262, 3.5]], CLOWN_RED) +
+      dots([[52, 236, 3.5], [58, 260, 3]], CLOWN_RED) + dots([[148, 236, 3.5], [142, 260, 3]], CLOWN_YELLOW) +
+      ruffle(cuff, 3.6) + ruffle(cuff.map(([x, y]) => [200 - x, y]), 3.6) +
+      ruffle(collar, 6.5) +
+      [[100, 205, '#3B6FD8'], [100, 228, '#3FA34D'], [100, 251, '#8E5BD8']].map(([x, y, f]) => circ(x, y, 5, f, OL) + circ(x - 1.5, y - 1.6, 1.5, '#FFFFFF', 'opacity=".55"')).join('') +
+      fold + hem;
+  }
+
   function top(c) {
     const col = c.top === 'chef' ? CLOTH.white : c.top === 'garden' ? '#7A1620' : CLOTH[c.topColor], cd = dark(col, 0.12), cl = light(col, 0.12);
     const fold = path('M 118 172 Q 136 176 139 190 L 143 272 Q 130 275 122 275 Q 126 220 118 172 Z', '#000', 'opacity=".05"');
@@ -579,6 +634,8 @@ const Avatar = (() => {
           path('M 84 162 Q 100 170 116 162 L 116 170 Q 100 178 84 170 Z', '#FFFFFF', OL) +
           line('M 84 170 Q 108 186 112 210 L 112 270', '#C9C9C9', 1.4) +
           [190, 212, 234, 256].map(y => circ(90, y, 2.2, '#D0D0D0', OL) + circ(118, y, 2.2, '#D0D0D0', OL)).join('') + fold + hem;
+      case 'clown':
+        return clownSuit(fold, line('M 58 266 Q 100 272 142 266', '#7A2A10', 1.2, 0.35));
       default:
         return sleeves('short') + shape(BODY_CREW, col) + line('M 84 165.5 Q 100 174 116 165.5', cd, 2, 0.7) + fold + hem;
     }
@@ -736,6 +793,7 @@ const Avatar = (() => {
   function piercing(c) {
     if (c.piercing === 'nose') return '<path d="M 104.5 115 Q 107.5 117.5 105 120" fill="none" stroke="#C9CDD3" stroke-width="1.5" stroke-linecap="round"/>';
     if (c.piercing === 'septum') return '<path d="M 97.5 118 Q 100 122.5 102.5 118" fill="none" stroke="#C9CDD3" stroke-width="1.5" stroke-linecap="round"/>';
+    if (c.piercing === 'clownnose') return circ(100, 113.5, 6.6, '#E0262F', OL) + circ(97.6, 111.1, 1.9, '#FFFFFF', 'opacity=".7"');
     return '';
   }
 
@@ -806,6 +864,14 @@ const Avatar = (() => {
         return shape('M 62 66 C 62 36 80 24 100 24 C 120 24 138 36 138 66 Z', col) + path('M 62 58 Q 100 52 138 58 L 138 66 L 62 66 Z', cd) +
           shape('M 42 74 Q 100 56 158 74 L 153 86 Q 100 70 47 86 Z', col) + line('M 48 79 Q 100 63 152 79', cd, 1, 0.6) +
           line('M 80 30 Q 76 44 76 58', cd, 1, 0.4) + line('M 120 30 Q 124 44 124 58', cd, 1, 0.4);
+      case 'clown': {
+        // a striped party cone with a pompom, a bit askew
+        const at = t => [[78 + 26 * t, 60 - 38 * t], [124 - 20 * t, 58 - 36 * t]];
+        const band = (a, b) => { const [l1, r1] = at(a), [l2, r2] = at(b); return path(`M ${l1} L ${r1} L ${r2} L ${l2} Z`.replace(/,/g, ' '), CLOWN_YELLOW); };
+        return shape('M 78 60 L 104 22 L 124 58 Q 101 66 78 60 Z', '#3B6FD8') + band(0.28, 0.42) + band(0.62, 0.74) +
+          [80, 88, 96, 104, 112, 120].map((x, i) => circ(x, 61.5 - (i % 2), 4.2, '#FFFFFF', OL)).join('') +
+          circ(104, 22, 5.5, CLOWN_RED, OL) + circ(102.3, 20.3, 1.6, '#FFFFFF', 'opacity=".6"');
+      }
       case 'crown':
         return path('M 66 62 L 69 30 L 84 46 L 100 20 L 116 46 L 131 30 L 134 62 Q 100 56 66 62 Z', '#E8B830', 'stroke="#B8861B" stroke-width="1.4" stroke-linejoin="round"') +
           path('M 67 56 Q 100 50 133 56 L 134 62 Q 100 56 66 62 Z', '#C9971F') +
@@ -865,7 +931,9 @@ const Avatar = (() => {
 
   function render(cfg, { view = 'full', title = '', cls = '' } = {}) {
     const vb = VIEWS[view] || view;
-    return `<svg class="${cls}" viewBox="${vb}" xmlns="http://www.w3.org/2000/svg" role="img" aria-label="${title ? title.replace(/"/g, '&quot;') : 'Avatar'}" preserveAspectRatio="xMidYMid meet">${drawing(normalize(cfg))}</svg>`;
+    // without a title the picture only decorates (a name or label is next to it)
+    const name = title ? `role="img" aria-label="${title.replace(/"/g, '&quot;')}"` : 'aria-hidden="true"';
+    return `<svg class="${cls}" viewBox="${vb}" xmlns="http://www.w3.org/2000/svg" ${name} preserveAspectRatio="xMidYMid meet">${drawing(normalize(cfg))}</svg>`;
   }
 
   // Small head pictures for lists and the calendar. Each different avatar is
@@ -890,5 +958,5 @@ const Avatar = (() => {
     return `<svg class="${cls}" viewBox="0 0 100 100" aria-hidden="true"><use href="#${id}" width="100" height="100"/></svg>`;
   }
 
-  return { render, head, normalize, random, rewardsAt, levelOf, DEFAULT, STYLES, COLORS, UNLOCKS, VIEWS };
+  return { render, head, normalize, random, rewardsAt, levelOf, label, DEFAULT, STYLES, COLORS, UNLOCKS, VIEWS };
 })();

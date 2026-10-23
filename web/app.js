@@ -14,6 +14,13 @@ const store = {
   set(k, v) { try { if (v == null) localStorage.removeItem(k); else localStorage.setItem(k, v); } catch { /* private mode */ } },
 };
 
+// Dutch or Chinese: the sign-in screen, the family pages and everything staff
+// see; manager screens are Dutch. Kept on the phone and, for staff, on the server.
+const LANG_KEY = 'prikklok.lang';
+const lang = () => store.get(LANG_KEY) === 'zh' ? 'zh' : 'nl';
+const L = (nl, zh) => lang() === 'zh' ? zh : nl;
+const langAttr = () => lang() === 'zh' ? 'zh-Hans' : 'nl-BE';
+
 const S = {
   token: store.get(TOKEN_KEY),
   me: null,
@@ -146,7 +153,57 @@ const SERVER_NL = {
   'Check the amounts.': 'Controleer de bedragen.',
   'Early check-in must be between 0 and 120 minutes.': 'Vroeger inklokken moet tussen 0 en 120 minuten liggen.',
   'Bonus XP must be between 0 and 100000.': 'Bonus-XP moet tussen 0 en 100.000 liggen.',
+  'Clocking in is off for you. Ask your manager.': 'Inklokken staat voor jou uit. Vraag het aan je verantwoordelijke.',
+  'Pick a language.': 'Kies een taal.',
+  'Pick who clocks in.': 'Duid aan wie inklokt.',
+  'The XP a day must be between 0 and 500.': 'De XP per dag moet tussen 0 en 500 liggen.',
 };
+// What staff can run into, for who uses the app in Chinese.
+const SERVER_ZH = {
+  'Add a short reason so your manager knows what happened.': '请写个简短的原因，让负责人知道发生了什么。',
+  'Check-out must be after check-in.': '下班时间必须在上班时间之后。',
+  'Enter a check-in time.': '请填写上班时间。',
+  'Enter a check-out time.': '请填写下班时间。',
+  "One entry can't be longer than 24 hours.": '一条记录不能超过 24 小时。',
+  'PIN must be 4 to 8 digits.': '密码必须是 4 到 8 位数字。',
+  'Say briefly why you give this shift back.': '请简单说说为什么退回这个班次。',
+  'Someone else already picked up this shift.': '别人已经认领了这个班次。',
+  "That file couldn't be read. Try again.": '文件无法读取，请重试。',
+  "That isn't one of your shifts.": '这不是你的班次。',
+  "That name and PIN don't match.": '名字或密码不对。',
+  "That payslip isn't available.": '这张工资单不可用。',
+  'That shift no longer exists.': '这个班次已经不存在了。',
+  'That time entry no longer exists.': '这条工时记录已经不存在了。',
+  'That time entry was removed.': '这条工时记录已被删除。',
+  "That time entry wasn't found.": '找不到这条工时记录。',
+  'This overlaps a shift you already have.': '这和你已有的班次时间重叠。',
+  'This request was already handled.': '这个申请已经处理过了。',
+  'This shift is already over.': '这个班次已经结束了。',
+  "Times can't be in the future.": '时间不能在将来。',
+  "You're already checked in.": '你已经上班打卡了。',
+  "You're not checked in.": '你还没有上班打卡。',
+  'Your sign-in has expired. Please sign in again.': '登录已过期，请重新登录。',
+  "You're not on the schedule right now. Pick up a shift first, or ask your manager.": '你现在没有排班。先认领一个班次，或者问负责人。',
+  "These details couldn't be saved.": '这些信息无法保存。',
+  'Check the email address.': '请检查电子邮件地址。',
+  'Check the national register number (11 digits).': '请检查国民编号（11 位数字）。',
+  'Check the IBAN account number.': '请检查银行账号（IBAN）。',
+  'Check the dates.': '请检查日期。',
+  'Check the date of birth.': '请检查出生日期。',
+  "That avatar couldn't be saved.": '头像无法保存。',
+  "Your current PIN isn't right.": '当前密码不对。',
+  "That contract isn't available.": '这份合同不可用。',
+  'This account can only look at the overview.': '这个账号只能查看概览。',
+  'Not allowed.': '不允许这样做。',
+  'Clocking in is off for you. Ask your manager.': '你不需要打卡。有问题请问负责人。',
+  'Pick a language.': '请选择语言。',
+};
+const SERVER_ZH_PATTERNS = [
+  [/^Shifts can't be dropped less than (\d+) hours before they start\. Ask your manager\.$/, '离开始不到 $1 小时的班次不能退回。请问负责人。'],
+  [/^Too many wrong PINs\. Try again in (\d+) min, or ask your manager to reset your PIN\.$/, '密码错误次数太多。请 $1 分钟后再试，或请负责人重设密码。'],
+  [/^Your shift starts at (\d\d:\d\d)\. You can check in from (\d\d:\d\d)\.$/, '你的班次 $1 开始，$2 起可以打卡。'],
+  [/^That item unlocks at level (\d+)\.$/, '这个物品 $1 级才解锁。'],
+];
 const SERVER_NL_PATTERNS = [
   [/^(.+) already has a shift that overlaps one of these\.$/, '$1 heeft al een shift die met een van deze overlapt.'],
   [/^(.+) already has a shift that overlaps\.$/, '$1 heeft op dat moment al een shift.'],
@@ -160,6 +217,10 @@ const SERVER_NL_PATTERNS = [
 ];
 function tr(msg) {
   if (!msg) return msg;
+  if (zhUI()) {
+    if (SERVER_ZH[msg]) return SERVER_ZH[msg];
+    for (const [re, zh] of SERVER_ZH_PATTERNS) if (re.test(msg)) return msg.replace(re, zh);
+  }
   if (SERVER_NL[msg]) return SERVER_NL[msg];
   for (const [re, nl] of SERVER_NL_PATTERNS) if (re.test(msg)) return msg.replace(re, nl);
   return msg;
@@ -179,7 +240,7 @@ async function rpc(fn, args = {}, { auth = true, path = `/rest/v1/rpc/${fn}`, ke
   try {
     res = await fetch(`${CFG.url}${path}`, { method: 'POST', headers, body: JSON.stringify(body), keepalive });
   } catch {
-    throw new AppError('Kan de server niet bereiken. Controleer je verbinding en probeer opnieuw.', 'network');
+    throw new AppError(T('Kan de server niet bereiken. Controleer je verbinding en probeer opnieuw.', '连不上服务器。请检查网络后重试。'), 'network');
   }
   const text = await res.text();
   let data = null;
@@ -189,7 +250,7 @@ async function rpc(fn, args = {}, { auth = true, path = `/rest/v1/rpc/${fn}`, ke
       signOut({ silent: true });
       throw new AppError(tr(data.message), 'auth');
     }
-    throw new AppError(tr(data && data.message) || `Er ging iets mis (fout ${res.status}).`);
+    throw new AppError(tr(data && data.message) || T(`Er ging iets mis (fout ${res.status}).`, `出错了（错误 ${res.status}）。`));
   }
   return data;
 }
@@ -198,6 +259,10 @@ async function refreshMe() {
   const r = await rpc('get_me');
   S.me = r.me;
   S.settings = r.settings;
+  if (S.me.lang && S.me.lang !== lang()) {
+    store.set(LANG_KEY, S.me.lang);
+    if ($('#view')) setTimeout(renderShell); // set by the manager meanwhile
+  }
   S.openEntry = r.open_entry;
   S.nextShifts = r.next_shifts || [];
   S.pending = r.pending_requests || 0;
@@ -232,7 +297,7 @@ function atTime(day, hhmm) {
 
 // Date and time fields are plain selects and text boxes, so they read the same
 // (Dutch, 24-hour) on every phone whatever language it is set to.
-const dayLabel = d => d.toLocaleDateString(LOCALE, { weekday: 'short', day: 'numeric', month: 'short', year: 'numeric' });
+const dayLabel = d => d.toLocaleDateString(loc(), { weekday: 'short', day: 'numeric', month: 'short', year: 'numeric' });
 function dateField(id, selected, from, to) {
   const sel = toDateInput(selected), opts = [];
   for (let d = startOfDay(from); d <= to; d = addDays(d, 1)) opts.push(d);
@@ -241,7 +306,7 @@ function dateField(id, selected, from, to) {
   return `<select id="${id}">${opts.map(d => `<option value="${toDateInput(d)}" ${toDateInput(d) === sel ? 'selected' : ''}>${dayLabel(d)}</option>`).join('')}</select>`;
 }
 function timeField(id, value, { required = true } = {}) {
-  return `<input id="${id}" class="time-field" inputmode="numeric" maxlength="5" autocomplete="off" spellcheck="false" placeholder="uu:mm" value="${value || ''}" ${required ? 'required' : ''}>`;
+  return `<input id="${id}" class="time-field" inputmode="numeric" maxlength="5" autocomplete="off" spellcheck="false" placeholder="${T('uu:mm', '时:分')}" value="${value || ''}" ${required ? 'required' : ''}>`;
 }
 // "17:30", "1730", "17.30", "17u30", "9:05" -> "17:30"; anything else -> null
 function parseHM(v) {
@@ -261,26 +326,27 @@ document.addEventListener('focusout', e => {
   if (e.target.matches && e.target.matches('.time-field')) { const v = parseHM(e.target.value); if (v) e.target.value = v; }
 });
 
-const num = (n, digits) => Number(n).toLocaleString(LOCALE, { minimumFractionDigits: digits, maximumFractionDigits: digits });
+const num = (n, digits) => Number(n).toLocaleString(loc(), { minimumFractionDigits: digits, maximumFractionDigits: digits });
 const fmt = {
   time: d => new Date(d).toLocaleTimeString(LOCALE, HM),
   clock: d => new Date(d).toLocaleTimeString(LOCALE, HM),
-  day: d => new Date(d).toLocaleDateString(LOCALE, { weekday: 'short', day: 'numeric', month: 'short' }),
-  dayLong: d => new Date(d).toLocaleDateString(LOCALE, { weekday: 'long', day: 'numeric', month: 'long' }),
-  month: d => new Date(d).toLocaleDateString(LOCALE, { month: 'long', year: 'numeric' }),
-  monthName: d => new Date(d).toLocaleDateString(LOCALE, { month: 'long' }),
-  short: d => new Date(d).toLocaleDateString(LOCALE, { day: 'numeric', month: 'short' }),
+  day: d => new Date(d).toLocaleDateString(loc(), { weekday: 'short', day: 'numeric', month: 'short' }),
+  dayLong: d => new Date(d).toLocaleDateString(loc(), { weekday: 'long', day: 'numeric', month: 'long' }),
+  month: d => new Date(d).toLocaleDateString(loc(), { month: 'long', year: 'numeric' }),
+  monthName: d => new Date(d).toLocaleDateString(loc(), { month: 'long' }),
+  short: d => new Date(d).toLocaleDateString(loc(), { day: 'numeric', month: 'short' }),
   range: (a, b) => `${fmt.time(a)} – ${fmt.time(b)}`,
   when(d) {
     const x = new Date(d), today = now();
-    if (sameDay(x, today)) return `vandaag ${fmt.time(x)}`;
-    if (sameDay(x, addDays(today, 1))) return `morgen ${fmt.time(x)}`;
-    if (sameDay(x, addDays(today, -1))) return `gisteren ${fmt.time(x)}`;
+    if (sameDay(x, today)) return `${T('vandaag', '今天')} ${fmt.time(x)}`;
+    if (sameDay(x, addDays(today, 1))) return `${T('morgen', '明天')} ${fmt.time(x)}`;
+    if (sameDay(x, addDays(today, -1))) return `${T('gisteren', '昨天')} ${fmt.time(x)}`;
     return `${fmt.day(x)} ${fmt.time(x)}`;
   },
   dur(mins) {
     const t = Math.max(0, Math.round(mins));
     const h = Math.floor(t / 60), m = t % 60;
+    if (zhUI()) return h ? `${h}小时${m ? `${m}分` : ''}` : `${m}分钟`;
     return h ? `${h}u ${pad(m)}m` : `${m}m`;
   },
   hours: mins => num(Math.round(mins / 6) / 10, 1),
@@ -298,6 +364,14 @@ const initials = name => String(name || '?').trim().split(/\s+/).slice(0, 2).map
 const isManager = () => S.me && S.me.role === 'manager';
 const isViewer = () => S.me && S.me.role === 'viewer';
 const isDriver = () => S.me && S.me.role === 'driver';
+// Who clocks in: students and drivers (Team → Instellingen); the rest earn XP a
+// day. Someone still clocked in keeps the clock until they clock out.
+const canClock = () => !!(S.me && (S.me.can_clock || S.openEntry));
+// Staff screens follow the person's language (Profiel → Taal, or 中文 on the
+// sign-in screen); manager and driver screens stay Dutch.
+const zhUI = () => lang() === 'zh' && !isManager() && !isDriver();
+const T = (nl, zh) => zhUI() ? zh : nl;
+const loc = () => zhUI() ? 'zh-CN' : LOCALE;
 
 /* ------------------------------------------------ people, avatars, levels */
 
@@ -313,13 +387,15 @@ const picFor = (id, name, cls = '') => personPic((S.staff || []).find(p => p.id 
 const LEVEL_TITLES = ['Nieuwkomer', 'Starter', 'Teamspeler', 'Vaste waarde', 'Doorzetter', 'Ster', 'Topper', 'Kampioen', 'Held', 'Legende',
   'Meester', 'Grootmeester', 'Kanjer', 'Tijger', 'Kraanvogel', 'Feniks', 'Draak', 'Keizer', 'Jade', 'Gouden draak'];
 const xpForLevel = l => 12.5 * (l - 1) * (l + 2);
-const levelTitle = l => LEVEL_TITLES[Math.min(l, LEVEL_TITLES.length) - 1];
-const levelPill = xp => `<span class="pill lvl">Level ${xp ? xp.level : 1}</span>`;
+const LEVEL_TITLES_ZH = ['新人', '新手', '团队成员', '中坚力量', '坚持者', '明星', '高手', '冠军', '英雄', '传奇',
+  '大师', '宗师', '能手', '猛虎', '仙鹤', '凤凰', '神龙', '皇帝', '翡翠', '金龙'];
+const levelTitle = l => (zhUI() ? LEVEL_TITLES_ZH : LEVEL_TITLES)[Math.min(l, LEVEL_TITLES.length) - 1];
+const levelPill = xp => `<span class="pill lvl">${T('Level', '等级')} ${xp ? xp.level : 1}</span>`;
 function xpBar(xp) {
   const l = xp.level, a = xpForLevel(l), b = xpForLevel(l + 1);
   const pct = Math.max(0, Math.min(100, Math.round((xp.xp - a) / (b - a) * 100)));
-  return `<div class="xpbar" role="progressbar" aria-valuemin="0" aria-valuemax="100" aria-valuenow="${pct}" aria-label="Op weg naar level ${l + 1}"><span style="width:${pct}%"></span></div>
-    <p class="xp-text"><span class="mono">${xp.xp} XP</span><span class="muted">nog ${b - xp.xp} XP tot level ${l + 1}</span></p>`;
+  return `<div class="xpbar" role="progressbar" aria-valuemin="0" aria-valuemax="100" aria-valuenow="${pct}" aria-label="${T(`Op weg naar level ${l + 1}`, `距离 ${l + 1} 级`)}"><span style="width:${pct}%"></span></div>
+    <p class="xp-text"><span class="mono">${xp.xp} XP</span><span class="muted">${T(`nog ${b - xp.xp} XP tot level ${l + 1}`, `还差 ${b - xp.xp} XP 升到 ${l + 1} 级`)}</span></p>`;
 }
 
 function checkLevelUp() {
@@ -333,16 +409,16 @@ function showLevelUp() {
   if (!up || $('#modal').open) return;
   S.levelUp = null;
   const rewards = [];
-  for (let l = up.from + 1; l <= up.to; l++) rewards.push(...Avatar.rewardsAt(l));
+  for (let l = up.from + 1; l <= up.to; l++) rewards.push(...Avatar.rewardsAt(l, zhUI() ? 'zh' : 'nl'));
   const d = modal.open(`
     <div class="levelup">
       <div class="levelup-pic">${S.me.avatar ? Avatar.render(S.me.avatar, { view: 'bust' }) : `<span class="levelup-num">${up.to}</span>`}</div>
-      <p class="section-label">Level omhoog</p>
-      <h2 id="modal-title">Level ${up.to} · ${esc(levelTitle(up.to))}</h2>
-      <p>Goed bezig, ${esc(S.me.name.split(' ')[0])}! ${rewards.length > 4 ? `Je hebt <strong>${rewards.length} nieuwe dingen</strong> voor je avatar vrijgespeeld.`
-        : rewards.length ? `Nieuw voor je avatar: <strong>${rewards.map(esc).join(', ')}</strong>.` : 'Blijf zo doorgaan voor de volgende beloning.'}</p>
+      <p class="section-label">${T('Level omhoog', '升级了')}</p>
+      <h2 id="modal-title">${T('Level', '等级')} ${up.to} · ${esc(levelTitle(up.to))}</h2>
+      <p>${T(`Goed bezig, ${esc(S.me.name.split(' ')[0])}!`, `做得好，${esc(S.me.name.split(' ')[0])}！`)} ${rewards.length > 4 ? T(`Je hebt <strong>${rewards.length} nieuwe dingen</strong> voor je avatar vrijgespeeld.`, `你为头像解锁了 <strong>${rewards.length} 样新东西</strong>。`)
+        : rewards.length ? `${T('Nieuw voor je avatar:', '头像新物品：')} <strong>${rewards.map(esc).join(T(', ', '、'))}</strong>.` : T('Blijf zo doorgaan voor de volgende beloning.', '继续加油，下一个奖励在等你。')}</p>
     </div>
-    <div class="form-actions"><button type="button" data-close>Sluiten</button>${rewards.length ? '<button type="button" class="primary" id="lu-avatar">Avatar aanpassen</button>' : ''}</div>`);
+    <div class="form-actions"><button type="button" data-close>${T('Sluiten', '关闭')}</button>${rewards.length ? `<button type="button" class="primary" id="lu-avatar">${T('Avatar aanpassen', '修改头像')}</button>` : ''}</div>`);
   const b = $('#lu-avatar', d);
   if (b) b.addEventListener('click', () => { modal.close(); openAvatarEditor(); });
 }
@@ -375,26 +451,28 @@ const moneyInput = n => n == null ? '' : num(n, 2).replace(/\s/g, '');
 
 // [key, label, options]; the same fields for the person and for a manager.
 const PROFILE_FIELDS = [
-  ['phone', 'Telefoon', { type: 'tel', max: 30, auto: 'tel' }],
-  ['email', 'E-mail', { type: 'email', max: 120, auto: 'email' }],
-  ['birth_date', 'Geboortedatum', { date: true, auto: 'bday' }],
-  ['national_id', 'Rijksregisternummer', { max: 15, ph: '00.00.00-000.00', mono: true, mode: 'numeric', help: 'Staat op de achterkant van je identiteitskaart.' }],
-  ['street', 'Straat en huisnummer', { max: 120, auto: 'address-line1', wide: true }],
-  ['postcode', 'Postcode', { max: 10, auto: 'postal-code', mode: 'numeric' }],
-  ['city', 'Gemeente', { max: 80, auto: 'address-level2' }],
-  ['iban', 'Rekeningnummer (IBAN)', { max: 42, ph: 'BE00 0000 0000 0000', mono: true, wide: true, help: 'Hierop krijg je je loon.' }],
-  ['emergency_name', 'Noodcontact: naam', { max: 80 }],
-  ['emergency_phone', 'Noodcontact: telefoon', { type: 'tel', max: 30 }],
+  ['phone', 'Telefoon', { type: 'tel', max: 30, auto: 'tel', zh: '电话' }],
+  ['email', 'E-mail', { type: 'email', max: 120, auto: 'email', zh: '电子邮件' }],
+  ['birth_date', 'Geboortedatum', { date: true, auto: 'bday', zh: '出生日期' }],
+  ['national_id', 'Rijksregisternummer', { max: 15, ph: '00.00.00-000.00', mono: true, mode: 'numeric', help: 'Staat op de achterkant van je identiteitskaart.',
+    zh: '国民编号（Rijksregisternummer）', zhHelp: '在你身份证的背面。' }],
+  ['street', 'Straat en huisnummer', { max: 120, auto: 'address-line1', wide: true, zh: '街道和门牌号' }],
+  ['postcode', 'Postcode', { max: 10, auto: 'postal-code', mode: 'numeric', zh: '邮编' }],
+  ['city', 'Gemeente', { max: 80, auto: 'address-level2', zh: '城市' }],
+  ['iban', 'Rekeningnummer (IBAN)', { max: 42, ph: 'BE00 0000 0000 0000', mono: true, wide: true, help: 'Hierop krijg je je loon.',
+    zh: '银行账号（IBAN）', zhHelp: '工资会打到这个账户。' }],
+  ['emergency_name', 'Noodcontact: naam', { max: 80, zh: '紧急联系人：姓名' }],
+  ['emergency_phone', 'Noodcontact: telefoon', { type: 'tel', max: 30, zh: '紧急联系人：电话' }],
 ];
 const FIELD_LABEL = Object.fromEntries(PROFILE_FIELDS.map(([k, l]) => [k, l]));
 const showValue = (k, v) => k === 'national_id' ? fmtNid(v) : k === 'iban' ? fmtIban(v) : /date/.test(k) ? isoToDMY(v) : (v ?? '');
 
 function profileFields(prefix, pr) {
   return PROFILE_FIELDS.map(([k, label, o]) => `
-    <div class="field${o.wide ? ' wide' : ''}"><label for="${prefix}-${k}">${label}</label>
+    <div class="field${o.wide ? ' wide' : ''}"><label for="${prefix}-${k}">${T(label, o.zh || label)}</label>
       <input id="${prefix}-${k}" data-k="${k}" ${o.type ? `type="${o.type}"` : ''} maxlength="${o.max || 10}" ${o.auto ? `autocomplete="${o.auto}"` : 'autocomplete="off"'}
-        ${o.mode ? `inputmode="${o.mode}"` : ''} ${o.date ? 'inputmode="numeric" placeholder="dd/mm/jjjj"' : o.ph ? `placeholder="${o.ph}"` : ''} class="${o.mono ? 'mono-field' : ''}"
-        value="${esc(showValue(k, pr[k]))}">${o.help ? `<span class="help">${o.help}</span>` : ''}</div>`).join('');
+        ${o.mode ? `inputmode="${o.mode}"` : ''} ${o.date ? `inputmode="numeric" placeholder="${T('dd/mm/jjjj', '日/月/年')}"` : o.ph ? `placeholder="${o.ph}"` : ''} class="${o.mono ? 'mono-field' : ''}"
+        value="${esc(showValue(k, pr[k]))}">${o.help ? `<span class="help">${T(o.help, o.zhHelp || o.help)}</span>` : ''}</div>`).join('');
 }
 // Reads the fields back; returns { values } or { error }.
 function readProfile(root) {
@@ -403,15 +481,15 @@ function readProfile(root) {
     const k = inp.dataset.k, v = inp.value.trim();
     if (k === 'birth_date' || k === 'start_date') {
       const iso = parseDMY(v);
-      if (iso == null) return { error: `Vul de ${k === 'birth_date' ? 'geboortedatum' : 'datum van indiensttreding'} in als dd/mm/jjjj, bv. 30/07/1999.`, field: inp };
+      if (iso == null) return { error: T(`Vul de ${k === 'birth_date' ? 'geboortedatum' : 'datum van indiensttreding'} in als dd/mm/jjjj, bv. 30/07/1999.`, `请按 日/月/年 填写${k === 'birth_date' ? '出生日期' : '入职日期'}，例如 30/07/1999。`), field: inp };
       out[k] = iso;
     } else if (k === 'national_id') {
       const d = cleanNid(v);
-      if (d && !Loonfiche.validNationalId(d)) return { error: 'Dat rijksregisternummer klopt niet. Het heeft 11 cijfers, bv. 85.07.30-033.28.', field: inp };
+      if (d && !Loonfiche.validNationalId(d)) return { error: T('Dat rijksregisternummer klopt niet. Het heeft 11 cijfers, bv. 85.07.30-033.28.', '国民编号不对。它有 11 位数字，例如 85.07.30-033.28。'), field: inp };
       out[k] = d;
     } else if (k === 'iban') {
       const d = cleanIban(v);
-      if (d && !Loonfiche.validIban(d)) return { error: 'Dat rekeningnummer klopt niet. Controleer de IBAN, bv. BE68 5390 0754 7034.', field: inp };
+      if (d && !Loonfiche.validIban(d)) return { error: T('Dat rekeningnummer klopt niet. Controleer de IBAN, bv. BE68 5390 0754 7034.', '银行账号不对。请检查 IBAN，例如 BE68 5390 0754 7034。'), field: inp };
       out[k] = d;
     } else out[k] = v;
   }
@@ -439,7 +517,7 @@ function toast(msg, kind = '') {
 }
 
 async function busy(btn, fn) {
-  if (btn) { btn.disabled = true; btn.dataset.label = btn.textContent; btn.textContent = 'Bezig…'; }
+  if (btn) { btn.disabled = true; btn.dataset.label = btn.textContent; btn.textContent = T('Bezig…', '请稍候…'); }
   try { return await fn(); }
   catch (e) { if (e.code !== 'auth') toast(e.message, 'error'); throw e; }
   finally { if (btn && btn.isConnected) { btn.disabled = false; btn.textContent = btn.dataset.label; } }
@@ -456,6 +534,7 @@ const ICONS = {
   team: '<svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round"><circle cx="12" cy="8" r="4"/><path d="M4 21c0-4 4-6 8-6s8 2 8 6"/></svg>',
   profile: '<svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"><circle cx="12" cy="12" r="9"/><circle cx="9" cy="10" r=".6" fill="currentColor"/><circle cx="15" cy="10" r=".6" fill="currentColor"/><path d="M8.5 14.5c1.8 2 5.2 2 7 0"/></svg>',
   ranking: '<svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"><path d="M8 21h8M12 17v4M7 4h10v5a5 5 0 0 1-10 0z"/><path d="M7 6H4a3 3 0 0 0 3 4M17 6h3a3 3 0 0 1-3 4"/></svg>',
+  home: '<svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"><path d="M3 11l9-7 9 7"/><path d="M5 10v10h14V10"/><path d="M10 20v-6h4v6"/></svg>',
   route: '<svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"><circle cx="6" cy="19" r="2"/><circle cx="18" cy="5" r="2"/><path d="M8 19h8.5a3.5 3.5 0 0 0 0-7h-9a3.5 3.5 0 0 1 0-7H16"/></svg>',
   more: '<svg viewBox="0 0 24 24" fill="currentColor"><circle cx="5" cy="12" r="2"/><circle cx="12" cy="12" r="2"/><circle cx="19" cy="12" r="2"/></svg>',
   signout: '<svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"><path d="M14 4h4a2 2 0 0 1 2 2v12a2 2 0 0 1-2 2h-4M10 16l-4-4 4-4M6 12h10"/></svg>',
@@ -468,7 +547,7 @@ const ICONS = {
 // Light is the default. theme.js sets it before the page draws; this keeps
 // it in step when someone changes it, and follows the phone in "auto".
 const THEME_KEY = 'prikklok.theme';
-const THEMES = [['light', 'Licht'], ['dark', 'Donker'], ['auto', 'Zoals mijn toestel']];
+const THEMES = [['light', 'Licht', '浅色'], ['dark', 'Donker', '深色'], ['auto', 'Zoals mijn toestel', '跟随手机']];
 const darkQuery = window.matchMedia ? window.matchMedia('(prefers-color-scheme: dark)') : null;
 function themePref() {
   try { return localStorage.getItem(THEME_KEY) || 'light'; } catch (e) { return 'light'; }
@@ -482,8 +561,8 @@ function applyTheme() {
   if (meta) meta.setAttribute('content', dark ? '#4A0D12' : '#6E141A');
   $$('[data-theme-btn]').forEach(b => {
     b.innerHTML = dark ? ICONS.sun : ICONS.moon;
-    b.setAttribute('aria-label', dark ? 'Licht thema' : 'Donker thema');
-    b.title = dark ? 'Licht thema' : 'Donker thema';
+    b.setAttribute('aria-label', dark ? T('Licht thema', '浅色主题') : T('Donker thema', '深色主题'));
+    b.title = dark ? T('Licht thema', '浅色主题') : T('Donker thema', '深色主题');
   });
   $$('[data-theme-pick]').forEach(b => {
     const on = b.dataset.themePick === pref;
@@ -499,12 +578,13 @@ if (darkQuery && darkQuery.addEventListener) darkQuery.addEventListener('change'
 function tabsFor() {
   if (isViewer()) return [['family', L('Kalender', '排班')], ['famstaff', L('Personeel', '员工')]];
   if (isDriver()) return [['clock', 'Klok'], ['hours', 'Mijn uren'], ['profile', 'Profiel']];
-  return isManager()
-    ? [['today', 'Vandaag'], ['schedule', 'Planning'], ['monthly', 'Overzicht'], ['requests', 'Aanvragen'],
-       ...(S.settings.has_drivers ? [['routes', 'Ritten']] : []), ['team', 'Team'], ['ranking', 'Ranglijst'], ['profile', 'Profiel']]
-    : [['clock', 'Klok'], ['shifts', 'Shiften'], ['hours', 'Mijn uren'], ['ranking', 'Ranglijst'], ['profile', 'Profiel']];
+  if (isManager()) return [['today', 'Vandaag'], ['schedule', 'Planning'], ['monthly', 'Overzicht'], ['requests', 'Aanvragen'],
+    ...(S.settings.has_drivers ? [['routes', 'Ritten']] : []), ['team', 'Team'], ['ranking', 'Ranglijst'], ['profile', 'Profiel']];
+  // Who doesn't clock in gets a start page instead of the clock.
+  return [['clock', canClock() ? T('Klok', '打卡') : T('Start', '首页')], ['shifts', T('Shiften', '班次')],
+    ['hours', T('Mijn uren', '我的工时')], ['ranking', T('Ranglijst', '排行榜')], ['profile', T('Profiel', '我的资料')]];
 }
-const ICON_FOR = { clock: 'clock', shifts: 'shifts', hours: 'hours', profile: 'profile', ranking: 'ranking', today: 'today', schedule: 'shifts', monthly: 'monthly', requests: 'requests', team: 'team', routes: 'route' };
+const ICON_FOR = { home: 'home', clock: 'clock', shifts: 'shifts', hours: 'hours', profile: 'profile', ranking: 'ranking', today: 'today', schedule: 'shifts', monthly: 'monthly', requests: 'requests', team: 'team', routes: 'route' };
 
 /* --------------------------------------------------------------- modal */
 
@@ -522,7 +602,7 @@ const modal = {
     return d;
   },
   close() { const d = $('#modal'); if (d.open) d.close(); d.innerHTML = ''; d.classList.remove('wide', 'sheet'); },
-  confirm({ title, body = '', ok = 'Bevestigen', cancel = 'Annuleren', danger = false }) {
+  confirm({ title, body = '', ok = T('Bevestigen', '确定'), cancel = T('Annuleren', '取消'), danger = false }) {
     return new Promise(resolve => {
       let done = false;
       const finish = v => { if (!done) { done = true; resolve(v); } };
@@ -696,7 +776,7 @@ async function signOut({ silent = false } = {}) {
   $('#toast').hidden = true;
   stopPolling();
   if (!silent && t) quiet(rpc('logout', { p_token: t }, { auth: false }));
-  await showSignIn(silent ? 'Je bent afgemeld. Meld je opnieuw aan.' : '');
+  await showSignIn(silent ? L('Je bent afgemeld. Meld je opnieuw aan.', '你已退出登录，请重新登录。') : '');
 }
 
 // The logo from config.js, or the business name in text.
@@ -705,7 +785,7 @@ const logoHTML = cls => CFG.logo
   : `<span class="${cls} logo-text">${esc(S.settings.business_name)}</span>`;
 
 async function askSignOut() {
-  const t = isViewer() ? L : nl => nl;
+  const t = isViewer() ? L : T;
   if (await modal.confirm({
     title: t('Afmelden?', '退出登录？'), body: t('Je hebt je naam en pincode nodig om je opnieuw aan te melden.', '再次登录需要你的名字和密码。'),
     ok: t('Afmelden', '退出'), cancel: t('Annuleren', '取消'),
@@ -720,12 +800,12 @@ function bottomTabs() {
 function openMore() {
   const { more } = bottomTabs();
   const d = modal.open(`
-    <h2 id="modal-title">Meer</h2>
+    <h2 id="modal-title">${T('Meer', '更多')}</h2>
     <div class="sheet-list">
       ${more.map(([k, l]) => `<button type="button" class="sheet-item" data-sheet-tab="${k}">${ICONS[ICON_FOR[k]]}<span>${l}</span></button>`).join('')}
-      <button type="button" class="sheet-item" id="sheet-signout">${ICONS.signout}<span>Afmelden</span></button>
+      <button type="button" class="sheet-item" id="sheet-signout">${ICONS.signout}<span>${T('Afmelden', '退出登录')}</span></button>
     </div>
-    <div class="form-actions"><button type="button" data-close>Sluiten</button></div>`, null, { sheet: true });
+    <div class="form-actions"><button type="button" data-close>${T('Sluiten', '关闭')}</button></div>`, null, { sheet: true });
   $$('[data-sheet-tab]', d).forEach(b => b.addEventListener('click', () => { modal.close(); location.hash = b.dataset.sheetTab; }));
   $('#sheet-signout', d).addEventListener('click', () => { modal.close(); askSignOut(); });
 }
@@ -735,27 +815,28 @@ function renderShell() {
   const tabs = tabsFor(), { main, more } = bottomTabs();
   const badge = k => k === 'requests' ? '<span class="count" data-badge hidden></span>' : '';
   document.title = `${S.settings.business_name} · Prikklok`;
+  document.documentElement.lang = zhUI() ? 'zh-Hans' : 'nl-BE';
   $('#app').innerHTML = `
     <header class="topbar">
       <div class="topbar-inner">
         <div class="brand">
-          <button class="me-btn" id="me-btn" aria-label="Mijn profiel" title="Mijn profiel">${personPic(S.me, 'lg')}${S.me.avatar ? '' : '<span class="me-plus" aria-hidden="true">+</span>'}</button>
+          <button class="me-btn" id="me-btn" aria-label="${T('Mijn profiel', '我的资料')}" title="${T('Mijn profiel', '我的资料')}">${personPic(S.me, 'lg')}${S.me.avatar ? '' : '<span class="me-plus" aria-hidden="true">+</span>'}</button>
           <div class="brand-text">
             <div class="biz">${esc(S.me.name)}</div>
-            <div class="who">${isManager() ? 'Verantwoordelijke' : isDriver() ? 'Chauffeur' : `Level ${S.me.xp ? S.me.xp.level : 1} · ${esc(levelTitle(S.me.xp ? S.me.xp.level : 1))}`}</div>
+            <div class="who">${isManager() ? 'Verantwoordelijke' : isDriver() ? 'Chauffeur' : `${T('Level', '等级')} ${S.me.xp ? S.me.xp.level : 1} · ${esc(levelTitle(S.me.xp ? S.me.xp.level : 1))}`}</div>
           </div>
         </div>
-        <a class="logo-link" href="#" aria-label="${esc(S.settings.business_name)}, naar het begin">${logoHTML('logo')}</a>
-        <div class="topbar-end"><button type="button" class="icon ghost theme-btn" data-theme-btn></button><button class="ghost sm" id="signout">Afmelden</button></div>
+        <a class="logo-link" href="#" aria-label="${esc(S.settings.business_name)}${T(', naar het begin', '，回到首页')}">${logoHTML('logo')}</a>
+        <div class="topbar-end"><button type="button" class="icon ghost theme-btn" data-theme-btn></button><button class="ghost sm" id="signout">${T('Afmelden', '退出登录')}</button></div>
       </div>
-      <nav class="tabs" aria-label="Onderdelen"><div class="tabs-inner">
+      <nav class="tabs" aria-label="${T('Onderdelen', '页面')}"><div class="tabs-inner">
         ${tabs.map(([k, l]) => `<button class="tab" data-tab="${k}">${l}${badge(k)}</button>`).join('')}
       </div></nav>
     </header>
     <main class="view" id="view"></main>
-    <nav class="bnav" aria-label="Onderdelen">
-      ${main.map(([k, l]) => `<button data-tab="${k}">${ICONS[ICON_FOR[k]]}<span>${l}</span>${badge(k)}</button>`).join('')}
-      ${more.length ? `<button id="bnav-more" data-more="${more.map(t => t[0]).join(' ')}" aria-haspopup="dialog">${ICONS.more}<span>Meer</span></button>` : ''}
+    <nav class="bnav" aria-label="${T('Onderdelen', '页面')}">
+      ${main.map(([k, l]) => `<button data-tab="${k}">${ICONS[k === 'clock' && !canClock() && !isManager() ? 'home' : ICON_FOR[k]]}<span>${l}</span>${badge(k)}</button>`).join('')}
+      ${more.length ? `<button id="bnav-more" data-more="${more.map(t => t[0]).join(' ')}" aria-haspopup="dialog">${ICONS.more}<span>${T('Meer', '更多')}</span></button>` : ''}
     </nav>`;
   $('#signout').addEventListener('click', askSignOut);
   $('[data-theme-btn]').addEventListener('click', () => setTheme(isDark() ? 'light' : 'dark'));
@@ -827,7 +908,7 @@ async function renderView() {
   const seq = ++S.renderSeq;
   const key = S.view === 'member' ? `member/${S.memberId}` : S.view;
   if (!el.dataset.view || el.dataset.key !== key) {
-    el.innerHTML = '<div class="empty">Laden…</div>';
+    el.innerHTML = `<div class="empty">${T('Laden…', '加载中…')}</div>`;
     el.dataset.view = S.view;
     el.dataset.key = key;
   }
@@ -836,7 +917,7 @@ async function renderView() {
     if (seq === S.renderSeq) showLevelUp();
   } catch (e) {
     if (e.code === 'auth') return;
-    if (seq === S.renderSeq) el.innerHTML = `<div class="card"><h2>Deze pagina kon niet geladen worden</h2><p class="muted">${esc(e.message)}</p><div class="form-actions"><button class="primary" id="retry">Opnieuw proberen</button></div></div>`;
+    if (seq === S.renderSeq) el.innerHTML = `<div class="card"><h2>${T('Deze pagina kon niet geladen worden', '这个页面无法加载')}</h2><p class="muted">${esc(e.message)}</p><div class="form-actions"><button class="primary" id="retry">${T('Opnieuw proberen', '重试')}</button></div></div>`;
     const r = $('#retry'); if (r) r.addEventListener('click', renderView);
   }
 }
@@ -885,32 +966,34 @@ function punchCard({ compact = false } = {}) {
     const longOpen = minutesBetween(since, t) > 14 * 60;
     const early = sh && t < new Date(new Date(sh.ends_at).getTime() - grace * 60000);
     body = `
-      <div class="punch-status"><span class="dot"></span>Ingeklokt sinds ${sameDay(since, t) ? fmt.time(since) : fmt.when(since)}</div>
+      <div class="punch-status"><span class="dot"></span>${T('Ingeklokt sinds', '上班打卡于')} ${sameDay(since, t) ? fmt.time(since) : fmt.when(since)}</div>
       <div class="punch-elapsed" data-live="since" data-since="${e.clock_in}">${fmt.dur(minutesBetween(since, t))}</div>
-      ${sh ? `<div class="punch-meta">Shift ${fmt.range(sh.starts_at, sh.ends_at)}${sh.label ? ' · ' + esc(sh.label) : ''}</div>` : ''}
-      ${longOpen ? `<p class="hint bad">Je bent ingeklokt sinds ${fmt.when(since)}. Vergeten uit te klokken? <button class="link" data-act="forgot-out">Vul in wanneer je vertrok</button></p>`
-        : early ? `<p class="hint warn">Je shift eindigt om ${fmt.time(sh.ends_at)}. Als je nu uitklokt, telt dat als vroeger vertrokken.</p>` : ''}
+      ${sh ? `<div class="punch-meta">${T('Shift', '班次')} ${fmt.range(sh.starts_at, sh.ends_at)}${sh.label ? ' · ' + esc(partName(sh.label)) : ''}</div>` : ''}
+      ${longOpen ? `<p class="hint bad">${T(`Je bent ingeklokt sinds ${fmt.when(since)}. Vergeten uit te klokken?`, `你从${fmt.when(since)}起一直是上班状态。忘记下班打卡了？`)} <button class="link" data-act="forgot-out">${T('Vul in wanneer je vertrok', '填写你离开的时间')}</button></p>`
+        : early ? `<p class="hint warn">${T(`Je shift eindigt om ${fmt.time(sh.ends_at)}. Als je nu uitklokt, telt dat als vroeger vertrokken.`, `你的班次 ${fmt.time(sh.ends_at)} 结束。现在下班打卡算提前离开。`)}</p>` : ''}
       <div class="field">
-        <label for="out-note">Opmerking voor je verantwoordelijke (optioneel)</label>
-        <input id="out-note" maxlength="300" placeholder="${early ? 'bv. vroeger weg, afspraak bij de dokter' : 'bv. de bar overgenomen na 17u'}">
+        <label for="out-note">${T('Opmerking voor je verantwoordelijke (optioneel)', '给负责人的备注（可不填）')}</label>
+        <input id="out-note" maxlength="300" placeholder="${early ? T('bv. vroeger weg, afspraak bij de dokter', '例如：提前走，去看医生') : T('bv. de bar overgenomen na 17u', '例如：17点后接了吧台')}">
       </div>
-      <button class="big stop" data-act="clock-out">Uitklokken</button>`;
+      <button class="big stop" data-act="clock-out">${T('Uitklokken', '下班打卡')}</button>`;
   } else {
     const can = clockInState();
     const soon = can.from && can.from - t < 18 * 3600000;
+    const from = can.from && (sameDay(can.from, t) ? fmt.time(can.from) : fmt.when(can.from)), early = S.settings.clock_in_early_minutes;
     body = `
-      <div class="punch-status"><span class="dot"></span>Je bent niet ingeklokt</div>
-      ${next ? `<div class="punch-meta">${new Date(next.starts_at) <= t ? 'Je shift is nu bezig' : 'Volgende shift'}: ${fmt.when(next.starts_at)} – ${fmt.time(next.ends_at)}${next.label ? ' · ' + esc(next.label) : ''}</div>`
-        : '<div class="punch-meta muted">Geen shiften gepland. Neem er een op bij Shiften.</div>'}
-      ${can.ok ? '<button class="big go" data-act="clock-in">Inklokken</button>' : `
-        <button class="big go" disabled aria-describedby="in-why">Inklokken</button>
+      <div class="punch-status"><span class="dot"></span>${T('Je bent niet ingeklokt', '你还没有上班打卡')}</div>
+      ${next ? `<div class="punch-meta">${new Date(next.starts_at) <= t ? T('Je shift is nu bezig', '你的班次正在进行') : T('Volgende shift', '下一个班次')}: ${fmt.when(next.starts_at)} – ${fmt.time(next.ends_at)}${next.label ? ' · ' + esc(partName(next.label)) : ''}</div>`
+        : `<div class="punch-meta muted">${T('Geen shiften gepland. Neem er een op bij Shiften.', '还没有排班。去“班次”页选一个。')}</div>`}
+      ${can.ok ? `<button class="big go" data-act="clock-in">${T('Inklokken', '上班打卡')}</button>` : `
+        <button class="big go" disabled aria-describedby="in-why">${T('Inklokken', '上班打卡')}</button>
         <p class="hint info" id="in-why" ${soon ? `data-unlock-at="${can.from.toISOString()}"` : ''}>${soon
-          ? `Je kan inklokken vanaf <strong>${sameDay(can.from, t) ? fmt.time(can.from) : fmt.when(can.from)}</strong>, ${S.settings.clock_in_early_minutes ? `${S.settings.clock_in_early_minutes} minuten voor je shift begint` : 'als je shift begint'}.`
-          : 'Je kan alleen inklokken tijdens een shift waarvoor je ingepland bent. Neem er een op bij Shiften.'}
-          Gewerkt zonder in te klokken? <button class="link" data-act="forgot-in">Vergeten uren toevoegen</button></p>`}`;
+          ? T(`Je kan inklokken vanaf <strong>${from}</strong>, ${early ? `${early} minuten voor je shift begint` : 'als je shift begint'}.`,
+              `你可以从 <strong>${from}</strong> 开始打卡（${early ? `班次开始前 ${early} 分钟` : '班次开始时'}）。`)
+          : T('Je kan alleen inklokken tijdens een shift waarvoor je ingepland bent. Neem er een op bij Shiften.', '只有在排给你的班次期间才能打卡。去“班次”页选一个。')}
+          ${T('Gewerkt zonder in te klokken?', '上班了却没打卡？')} <button class="link" data-act="forgot-in">${T('Vergeten uren toevoegen', '补登工时')}</button></p>`}`;
   }
   return `
-    <section class="punch ${e ? 'is-on' : ''} ${compact ? 'compact' : ''}" aria-label="In- en uitklokken">
+    <section class="punch ${e ? 'is-on' : ''} ${compact ? 'compact' : ''}" aria-label="${T('In- en uitklokken', '打卡')}">
       <div class="punch-top">
         <span class="punch-clock" data-live="clock">${fmt.clock(t)}</span>
         <span class="punch-date">${fmt.dayLong(t)}</span>
@@ -924,15 +1007,15 @@ function bindPunch(root, after) {
   if (inBtn) inBtn.addEventListener('click', () => busy(inBtn, async () => {
     await rpc('clock_in');
     await refreshMe();
-    toast(`Ingeklokt om ${fmt.time(now())}`);
+    toast(T(`Ingeklokt om ${fmt.time(now())}`, `${fmt.time(now())} 上班打卡成功`));
     after();
   }).catch(() => {}));
   const outBtn = $('[data-act=clock-out]', root);
   if (outBtn) outBtn.addEventListener('click', () => busy(outBtn, async () => {
     await rpc('clock_out', { p_note: ($('#out-note', root) || {}).value || '' });
     await refreshMe();
-    toast(`Uitgeklokt om ${fmt.time(now())}`);
-    after();
+    toast(T(`Uitgeklokt om ${fmt.time(now())}`, `${fmt.time(now())} 下班打卡成功`));
+    if (canClock()) after(); else renderShell(); // the clock was only there to clock out
   }).catch(() => {}));
   const forgot = $('[data-act=forgot-out]', root);
   if (forgot) forgot.addEventListener('click', () => forgotCheckout(after));
@@ -947,26 +1030,27 @@ function forgotCheckout(after) {
   let guess = e.shift ? new Date(e.shift.ends_at) : new Date(since.getTime() + 8 * 3600000);
   if (guess > now()) guess = now();
   modal.open(`
-    <h2 id="modal-title">Wanneer ben je vertrokken?</h2>
-    <p>Je klokte in ${fmt.when(since)}. We klokken je nu uit en sturen het juiste uur naar je verantwoordelijke om goed te keuren.</p>
+    <h2 id="modal-title">${T('Wanneer ben je vertrokken?', '你几点离开的？')}</h2>
+    <p>${T(`Je klokte in ${fmt.when(since)}. We klokken je nu uit en sturen het juiste uur naar je verantwoordelijke om goed te keuren.`,
+      `你在${fmt.when(since)}上班打卡。现在帮你下班打卡，并把正确的时间发给负责人审核。`)}</p>
     <form id="forgot-form" novalidate>
       <div class="form-grid">
-        <div class="field"><label for="f-day">Dag</label>${dateField('f-day', guess, since, now())}</div>
-        <div class="field"><label for="f-out">Ik vertrok om</label>${timeField('f-out', toTimeInput(guess))}</div>
-        <div class="field wide"><label for="f-reason">Reden</label><input id="f-reason" maxlength="300" value="Vergeten uit te klokken"></div>
+        <div class="field"><label for="f-day">${T('Dag', '日期')}</label>${dateField('f-day', guess, since, now())}</div>
+        <div class="field"><label for="f-out">${T('Ik vertrok om', '我离开的时间')}</label>${timeField('f-out', toTimeInput(guess))}</div>
+        <div class="field wide"><label for="f-reason">${T('Reden', '原因')}</label><input id="f-reason" maxlength="300" value="${T('Vergeten uit te klokken', '忘记下班打卡')}"></div>
       </div>
       <p class="form-error" id="f-err"></p>
-      <div class="form-actions"><button type="button" data-close>Annuleren</button><button type="submit" class="primary">Uitklokken en versturen</button></div>
+      <div class="form-actions"><button type="button" data-close>${T('Annuleren', '取消')}</button><button type="submit" class="primary">${T('Uitklokken en versturen', '下班打卡并发送')}</button></div>
     </form>`, d => {
     $('#forgot-form', d).addEventListener('submit', async ev => {
       ev.preventDefault();
       const hm = parseHM($('#f-out', d).value);
       const reason = $('#f-reason', d).value.trim();
       const err = $('#f-err', d);
-      if (!hm) { err.textContent = 'Vul in hoe laat je vertrok, bv. 22:30.'; return; }
+      if (!hm) { err.textContent = T('Vul in hoe laat je vertrok, bv. 22:30.', '请填写你离开的时间，例如 22:30。'); return; }
       const out = atTime(new Date($('#f-day', d).value + 'T00:00'), hm);
-      if (out <= since || out > now()) { err.textContent = 'Kies een uur tussen je inklokken en nu.'; return; }
-      if (reason.length < 3) { err.textContent = 'Geef een korte reden.'; return; }
+      if (out <= since || out > now()) { err.textContent = T('Kies een uur tussen je inklokken en nu.', '请选一个在上班打卡之后、现在之前的时间。'); return; }
+      if (reason.length < 3) { err.textContent = T('Geef een korte reden.', '请简单写个原因。'); return; }
       const btn = $('button[type=submit]', d);
       btn.disabled = true;
       try {
@@ -974,7 +1058,7 @@ function forgotCheckout(after) {
         await rpc('request_time_edit', { p_entry_id: e.id, p_in: since.toISOString(), p_out: out.toISOString(), p_reason: reason });
         modal.close();
         await refreshMe();
-        toast('Uitgeklokt. Je verantwoordelijke keurt het ingevulde uur goed.');
+        toast(T('Uitgeklokt. Je verantwoordelijke keurt het ingevulde uur goed.', '已下班打卡。负责人会审核你填的时间。'));
         after();
       } catch (x) { err.textContent = x.message; btn.disabled = false; }
     });
@@ -983,7 +1067,68 @@ function forgotCheckout(after) {
 
 /* ------------------------------------------------------------ staff: clock */
 
+const hello = () => { const h = now().getHours(); return h < 12 ? T('Goedemorgen', '早上好') : h < 18 ? T('Goedemiddag', '下午好') : T('Goedenavond', '晚上好'); };
+const helloHead = () => `
+    <div class="view-head"><div class="hello">
+      <button class="hello-pic" data-go="profile" aria-label="${T('Mijn profiel', '我的资料')}">${personPic(S.me, 'xl')}</button>
+      <div><h1>${hello()}${T(', ', '，')}${esc(S.me.name.split(' ')[0])}</h1>
+        <p class="lvl-line">${levelPill(S.me.xp)} <span>${esc(levelTitle(S.me.xp.level))}</span> <span class="muted">· ${S.me.xp.xp} XP</span></p></div>
+    </div></div>`;
+const avatarCta = () => S.me.avatar ? '' : `<section class="card avatar-cta">
+          <div class="cta-pic" aria-hidden="true">${Avatar.render(Avatar.DEFAULT, { view: 'bust' })}</div>
+          <div><h2>${T('Maak je avatar', '创建你的头像')}</h2><p class="muted small">${T('Kies je kapsel, je kleren en je schoenen. Met elk level krijg je nieuwe dingen om te dragen.', '选发型、衣服和鞋子。每升一级都能解锁新的装扮。')}</p>
+          <button class="primary sm" id="make-avatar">${T('Maak je avatar', '创建你的头像')}</button></div></section>`;
+function nextShiftsCard(mine, open) {
+  return `<section class="card">
+          <div class="card-head"><h2>${T('Je volgende shiften', '你接下来的班次')}</h2><button class="sm" data-go="shifts">${T('Alle shiften', '所有班次')}</button></div>
+          ${mine.length ? `<div class="rows">${mine.map(s => `
+            <div class="row"><div class="row-main"><span class="row-title">${fmt.dayLong(s.starts_at)}</span>
+            <span class="row-sub"><span class="time">${fmt.range(s.starts_at, s.ends_at)}</span>${s.label ? ' · ' + esc(partName(s.label)) : ''}</span></div>
+            <span class="pill">${fmt.dur(minutesBetween(s.starts_at, s.ends_at))}</span></div>`).join('')}</div>`
+            : `<p class="empty">${T('Nog niets gepland.', '还没有排班。')}</p>`}
+          ${open.length ? `<p class="hint info" style="margin-top:12px">${T(`${plural(open.length, 'open shift', 'open shiften')} de komende twee weken.`, `未来两周有 ${open.length} 个空班次。`)} <button class="link" data-go="shifts">${T('Neem er een op', '去选一个')}</button></p>` : ''}
+        </section>`;
+}
+function bindHome(el) {
+  $$('[data-go]', el).forEach(b => b.addEventListener('click', () => { location.hash = b.dataset.go; }));
+  const mk = $('#make-avatar', el);
+  if (mk) mk.addEventListener('click', () => openAvatarEditor());
+}
+
+// Who doesn't clock in (Team → Instellingen) starts here: their level, the XP
+// that comes in every day, and their shifts.
+async function viewStart(el, current) {
+  await refreshMe();
+  const t = now(), wk = startOfWeek(t);
+  const shifts = await rpc('list_shifts', { p_from: wk.toISOString(), p_to: addDays(wk, 14).toISOString() });
+  if (!current()) return;
+  const open = shifts.filter(s => !s.staff_id && new Date(s.ends_at) > t);
+  const planned = shifts.filter(s => s.mine && new Date(s.starts_at) < addDays(wk, 7)).reduce((a, s) => a + minutesBetween(s.starts_at, s.ends_at), 0);
+  const xp = S.me.xp, per = S.settings.daily_xp || 0;
+  el.innerHTML = `${helloHead()}
+    <div class="grid-2">
+      <section class="card xp-card">
+        <div class="card-head"><h2>${T('Jouw level', '你的等级')}</h2>${levelPill(xp)}</div>
+        <p class="xp-title">${esc(levelTitle(xp.level))}</p>
+        ${xpBar(xp)}
+        ${per ? `<p class="hint good">${T(`Elke dag krijg je <strong>+${per} XP</strong>, gewoon omdat je bij het team bent. Kom morgen terug voor meer.`,
+          `每天你都会得到 <strong>+${per} XP</strong>，因为你是团队的一员。明天再来看看。`)}</p>` : ''}
+        <div class="form-actions"><button class="sm" data-go="ranking">${T('Ranglijst', '排行榜')}</button><button class="sm" data-go="profile">${T('Avatar aanpassen', '修改头像')}</button></div>
+      </section>
+      <div style="display:flex;flex-direction:column;gap:18px;min-width:0">
+        ${avatarCta()}
+        <div class="stats">
+          <div class="stat"><span class="v">${fmt.dur(planned)}</span><span class="k">${T('Ingepland deze week', '本周排班')}</span></div>
+          <div class="stat good"><span class="v">+${per}</span><span class="k">${T('XP per dag', '每天 XP')}</span></div>
+        </div>
+        ${nextShiftsCard(S.nextShifts, open)}
+      </div>
+    </div>`;
+  bindHome(el);
+}
+
 async function viewClock(el, current) {
+  if (!canClock()) return viewStart(el, current);
   await refreshMe();
   const monthStart = startOfMonth(now()), wk = startOfWeek(now());
   const from = monthStart < wk ? monthStart : wk;
@@ -999,42 +1144,21 @@ async function viewClock(el, current) {
   const mine = S.nextShifts;
   const rate = month.hourly_rate != null ? Number(month.hourly_rate) : null;
   const monthName = fmt.monthName(now());
-  const hour = now().getHours();
-  const hello = hour < 12 ? 'Goedemorgen' : hour < 18 ? 'Goedemiddag' : 'Goedenavond';
-  const xp = S.me.xp;
-  el.innerHTML = `
-    <div class="view-head"><div class="hello">
-      <button class="hello-pic" data-go="profile" aria-label="Mijn profiel">${personPic(S.me, 'xl')}</button>
-      <div><h1>${hello}, ${esc(S.me.name.split(' ')[0])}</h1>
-        <p class="lvl-line">${levelPill(xp)} <span>${esc(levelTitle(xp.level))}</span> <span class="muted">· ${xp.xp} XP</span></p></div>
-    </div></div>
+  el.innerHTML = `${helloHead()}
     <div class="grid-2">
       ${punchCard()}
       <div style="display:flex;flex-direction:column;gap:18px;min-width:0">
-        ${S.me.avatar ? '' : `<section class="card avatar-cta">
-          <div class="cta-pic" aria-hidden="true">${Avatar.render(Avatar.DEFAULT, { view: 'bust' })}</div>
-          <div><h2>Maak je avatar</h2><p class="muted small">Kies je kapsel, je kleren en je schoenen. Met elk level krijg je nieuwe dingen om te dragen.</p>
-          <button class="primary sm" id="make-avatar">Maak je avatar</button></div></section>`}
+        ${avatarCta()}
         <div class="stats stats-3">
-          <div class="stat"><span class="v">${fmt.dur(weekMins)}</span><span class="k">Gewerkt deze week</span></div>
-          <div class="stat good"><span class="v">${fmt.dur(mins)}</span><span class="k">Gewerkt in ${monthName}</span></div>
-          <div class="stat"><span class="v">${rate != null ? fmt.money(mins / 60 * rate) : '—'}</span><span class="k">${rate != null ? `Verdiend in ${monthName}` : 'Je verdiensten verschijnen zodra je uurloon is ingesteld'}</span></div>
+          <div class="stat"><span class="v">${fmt.dur(weekMins)}</span><span class="k">${T('Gewerkt deze week', '本周工时')}</span></div>
+          <div class="stat good"><span class="v">${fmt.dur(mins)}</span><span class="k">${T(`Gewerkt in ${monthName}`, `${monthName}工时`)}</span></div>
+          <div class="stat"><span class="v">${rate != null ? fmt.money(mins / 60 * rate) : '—'}</span><span class="k">${rate != null ? T(`Verdiend in ${monthName}`, `${monthName}收入`) : T('Je verdiensten verschijnen zodra je uurloon is ingesteld', '设置时薪后会显示你的收入')}</span></div>
         </div>
-        <section class="card">
-          <div class="card-head"><h2>Je volgende shiften</h2><button class="sm" data-go="shifts">Alle shiften</button></div>
-          ${mine.length ? `<div class="rows">${mine.map(s => `
-            <div class="row"><div class="row-main"><span class="row-title">${fmt.dayLong(s.starts_at)}</span>
-            <span class="row-sub"><span class="time">${fmt.range(s.starts_at, s.ends_at)}</span>${s.label ? ' · ' + esc(s.label) : ''}</span></div>
-            <span class="pill">${fmt.dur(minutesBetween(s.starts_at, s.ends_at))}</span></div>`).join('')}</div>`
-            : '<p class="empty">Nog niets gepland.</p>'}
-          ${open.length ? `<p class="hint info" style="margin-top:12px">${plural(open.length, 'open shift', 'open shiften')} de komende twee weken. <button class="link" data-go="shifts">Neem er een op</button></p>` : ''}
-        </section>
+        ${nextShiftsCard(mine, open)}
       </div>
     </div>`;
   bindPunch(el, renderView);
-  $$('[data-go]', el).forEach(b => b.addEventListener('click', () => { location.hash = b.dataset.go; }));
-  const mk = $('#make-avatar', el);
-  if (mk) mk.addEventListener('click', () => openAvatarEditor());
+  bindHome(el);
 }
 
 /* ------------------------------------------------------------ driver */
@@ -1332,20 +1456,21 @@ async function viewDriver(el, current) {
 
 const DAY_NAMES = ['zondag', 'maandag', 'dinsdag', 'woensdag', 'donderdag', 'vrijdag', 'zaterdag'];
 const DAY_SHORT = ['zo', 'ma', 'di', 'wo', 'do', 'vr', 'za'];
+const DAY_NAMES_ZH = ['星期日', '星期一', '星期二', '星期三', '星期四', '星期五', '星期六'];
 const WEEK_ORDER = [1, 2, 3, 4, 5, 6, 0];
 
 function periodBar(label, hint, prevId, nextId) {
   return `<div class="periodbar">
-    <button class="icon" id="${prevId}" aria-label="Vorige">‹</button>
+    <button class="icon" id="${prevId}" aria-label="${T('Vorige', '上一个')}">‹</button>
     <div class="label"><strong>${label}</strong><span>${hint}</span></div>
-    <button class="icon" id="${nextId}" aria-label="Volgende">›</button>
+    <button class="icon" id="${nextId}" aria-label="${T('Volgende', '下一个')}">›</button>
   </div>`;
 }
 
 // Quick buttons for this month and the next two.
 function monthChips() {
   const first = startOfMonth(now());
-  return `<div class="chips" role="group" aria-label="Kies een maand">${[0, 1, 2].map(i => {
+  return `<div class="chips" role="group" aria-label="${T('Kies een maand', '选择月份')}">${[0, 1, 2].map(i => {
     const m = addMonths(first, i), on = S.month && sameDay(m, S.month);
     return `<button type="button" class="chip${on ? ' is-on' : ''}" data-chip-month="${toDateInput(m)}" aria-pressed="${!!on}">${fmt.monthName(m)}</button>`;
   }).join('')}</div>`;
@@ -1359,7 +1484,7 @@ function bindMonthNav(el) {
 
 // Standard shifts are only created up to 3 months ahead.
 function horizonNote(m) {
-  return m > addDays(now(), 92) ? '<p class="hint info">Vaste shiften verschijnen 3 maanden op voorhand in de kalender, dus deze maand kan nog leeg lijken.</p>' : '';
+  return m > addDays(now(), 92) ? `<p class="hint info">${T('Vaste shiften verschijnen 3 maanden op voorhand in de kalender, dus deze maand kan nog leeg lijken.', '固定班次提前 3 个月出现在日历上，所以这个月可能看起来还是空的。')}</p>` : '';
 }
 
 // One day's shifts, with identical open slots folded into one entry.
@@ -1394,26 +1519,27 @@ const groupWho = people => `<span class="cal-group"><span class="cal-pics">${peo
 // The part of the day: the shift's own name, or Middag / Avond from its start time.
 const shiftPart = s => s.label || (new Date(s.starts_at).getHours() < 16 ? 'Middag' : 'Avond');
 const partClass = part => /middag/i.test(part) ? ' is-day' : /avond/i.test(part) ? ' is-eve' : '';
+const partName = part => zhUI() ? ({ Middag: '午班', Avond: '晚班' }[part] || part) : part;
 
 function calEntry(x, manager, t, day) {
   const past = new Date(x.ends_at) <= t;
   const time = `${fmt.time(x.starts_at)} – ${fmt.time(x.ends_at)}`;
-  const part = shiftPart(x);
+  const part = shiftPart(x), name = partName(part);
   if (isGroup(x)) {
-    const inner = `<span class="cal-line"><span class="cal-tag${partClass(part)}"><span class="tag-full">${esc(part)}</span><span class="tag-short" aria-hidden="true">${esc(part.charAt(0))}</span></span><span class="t">${time}</span></span>
+    const inner = `<span class="cal-line"><span class="cal-tag${partClass(part)}"><span class="tag-full">${esc(name)}</span><span class="tag-short" aria-hidden="true">${esc(name.charAt(0))}</span></span><span class="t">${time}</span></span>
       ${groupWho(x.people)}`;
-    const title = esc(`${part}, ${time}: ${x.people.map(p => p.name).join(', ')}`);
+    const title = esc(`${name}, ${time}: ${x.people.map(p => p.name).join(', ')}`);
     return manager
       ? `<button type="button" class="cal-shift is-group${past ? ' is-past' : ''}" data-group-day="${toDateInput(day)}" title="${title}">${inner}</button>`
       : `<span class="cal-shift is-group${past ? ' is-past' : ''}" title="${title}">${inner}</span>`;
   }
-  const who = x.open ? `Open${x.count > 1 ? ` ×${x.count}` : ''}` : esc(x.staff_name) + (x.mine && !manager ? ' (jij)' : '');
+  const who = x.open ? `${T('Open', '空缺')}${x.count > 1 ? ` ×${x.count}` : ''}` : esc(x.staff_name) + (x.mine && !manager ? T(' (jij)', '（你）') : '');
   const pic = x.open ? '' : x.staff_avatar ? `<span class="cal-pic">${Avatar.head(x.staff_avatar)}</span>` : `<span class="cal-pic cal-initials">${esc(initials(x.staff_name))}</span>`;
   const cls = `cal-shift${x.open ? ' is-open' : ''}${x.mine && !manager ? ' is-mine' : ''}${past ? ' is-past' : ''}`;
   const clickable = manager || (!past && (x.open || x.mine));
-  const title = esc(`${part}, ${time}${x.open ? (manager ? ' (open)' : ' – tik om op te nemen') : ''}`);
+  const title = esc(`${name}, ${time}${x.open ? (manager ? ' (open)' : T(' – tik om op te nemen', ' – 点击认领')) : ''}`);
   // phones show only the first letter of the part of the day, and the number of open places
-  const inner = `<span class="cal-line"><span class="cal-tag${partClass(part)}"><span class="tag-full">${esc(part)}</span><span class="tag-short" aria-hidden="true">${esc(part.charAt(0))}</span></span><span class="t">${time}</span>${x.open && x.count > 1 ? `<span class="cal-count" aria-hidden="true">×${x.count}</span>` : ''}</span>
+  const inner = `<span class="cal-line"><span class="cal-tag${partClass(part)}"><span class="tag-full">${esc(name)}</span><span class="tag-short" aria-hidden="true">${esc(name.charAt(0))}</span></span><span class="t">${time}</span>${x.open && x.count > 1 ? `<span class="cal-count" aria-hidden="true">×${x.count}</span>` : ''}</span>
     <span class="cal-who">${pic}<b>${who}</b></span>`;
   return clickable
     ? `<button type="button" class="${cls}" data-shift="${x.id}" title="${title}">${inner}</button>`
@@ -1424,6 +1550,7 @@ function calendarHTML(shifts, month, { manager = false } = {}) {
   const t = now(), first = startOfMonth(month);
   const days = new Date(first.getFullYear(), first.getMonth() + 1, 0).getDate();
   const byDay = Array.from({ length: days }, (_, i) => dayEntries(shifts.filter(s => sameDay(s.starts_at, addDays(first, i))), { group: true }));
+  const names = zhUI() ? DAY_NAMES_ZH.map(n => n.replace('星期', '周')) : DAY_NAMES;
   const addBtn = d => manager ? `<button type="button" class="cal-add" data-add-day="${toDateInput(d)}" aria-label="Shift toevoegen op ${fmt.dayLong(d)}">+</button>` : '';
   const cells = [];
   for (let i = 0; i < weekdayIndex(first); i++) cells.push('<div class="cal-cell is-blank"></div>');
@@ -1439,13 +1566,13 @@ function calendarHTML(shifts, month, { manager = false } = {}) {
     <div class="cal-wrap">
       <h2 class="cal-title">${esc(fmt.month(first))}</h2>
       <div class="cal-grid">
-        ${WEEK_ORDER.map(i => DAY_NAMES[i]).map(n => `<div class="cal-head"><span class="only-wide">${n}</span><span class="only-phone" aria-hidden="true">${n.slice(0, 2)}</span></div>`).join('')}
+        ${WEEK_ORDER.map(i => names[i]).map(n => `<div class="cal-head"><span class="only-wide">${n}</span><span class="only-phone" aria-hidden="true">${n.slice(0, 2)}</span></div>`).join('')}
         ${cells.join('')}
       </div>
       <div class="cal-legend only-phone">
-        <span><span class="cal-tag is-day">M</span> Middag</span><span><span class="cal-tag is-eve">A</span> Avond</span>
-        <span><span class="lg-box is-open"></span> Open</span>${manager ? '' : '<span><span class="lg-box is-mine"></span> Jouw shift</span>'}
-        <span class="muted">Tik op een dag.</span>
+        <span><span class="cal-tag is-day">${T('M', '午')}</span> ${T('Middag', '午班')}</span><span><span class="cal-tag is-eve">${T('A', '晚')}</span> ${T('Avond', '晚班')}</span>
+        <span><span class="lg-box is-open"></span> ${T('Open', '空缺')}</span>${manager ? '' : `<span><span class="lg-box is-mine"></span> ${T('Jouw shift', '你的班次')}</span>`}
+        <span class="muted">${T('Tik op een dag.', '点一天查看。')}</span>
       </div>
     </div>`;
 }
@@ -1461,14 +1588,14 @@ function daySheet(dateStr, shifts, manager) {
   const row = x => {
     const part = shiftPart(x), past = new Date(x.ends_at) <= t;
     const who = x.open
-      ? `<span class="day-open">Open${x.count > 1 ? ` · ${x.count} plaatsen` : ''}</span>`
-      : `${personPic({ name: x.staff_name, avatar: x.staff_avatar })}<span>${esc(x.staff_name)}${x.mine && !manager ? ' (jij)' : ''}</span>`;
+      ? `<span class="day-open">${T('Open', '空缺')}${x.count > 1 ? T(` · ${x.count} plaatsen`, ` · ${x.count} 个位置`) : ''}</span>`
+      : `${personPic({ name: x.staff_name, avatar: x.staff_avatar })}<span>${esc(x.staff_name)}${x.mine && !manager ? T(' (jij)', '（你）') : ''}</span>`;
     const action = manager ? `<button type="button" class="sm" data-day-edit="${x.id}">Wijzigen</button>`
-      : past ? '' : x.open ? `<button type="button" class="primary" data-day-claim="${x.id}">Opnemen</button>`
-      : x.mine ? `<button type="button" data-day-own="${x.id}">Teruggeven</button>` : '';
+      : past ? '' : x.open ? `<button type="button" class="primary" data-day-claim="${x.id}">${T('Opnemen', '认领')}</button>`
+      : x.mine ? `<button type="button" data-day-own="${x.id}">${T('Teruggeven', '退回')}</button>` : '';
     return `<div class="day-shift${x.open ? ' is-open' : ''}${x.mine && !manager ? ' is-mine' : ''}${past ? ' is-past' : ''}">
       <div class="day-main">
-        <div class="day-when"><span class="cal-tag${partClass(part)}">${esc(part)}</span><span class="time">${fmt.range(x.starts_at, x.ends_at)}</span></div>
+        <div class="day-when"><span class="cal-tag${partClass(part)}">${esc(partName(part))}</span><span class="time">${fmt.range(x.starts_at, x.ends_at)}</span></div>
         <div class="day-who">${who}</div>
         ${x.notes ? `<p class="muted small">${esc(x.notes)}</p>` : ''}
       </div>
@@ -1476,9 +1603,9 @@ function daySheet(dateStr, shifts, manager) {
     </div>`;
   };
   const d = modal.open(`
-    <h2 id="modal-title">${esc(fmt.dayLong(day))}${sameDay(day, t) ? ' · vandaag' : ''}</h2>
+    <h2 id="modal-title">${esc(fmt.dayLong(day))}${sameDay(day, t) ? T(' · vandaag', ' · 今天') : ''}</h2>
     ${list.length ? `<div class="day-list">${list.map(row).join('')}</div>` : '<p class="empty">Nog geen shiften op deze dag.</p>'}
-    <div class="form-actions">${manager ? '<button type="button" class="primary" id="day-add">+ Shift toevoegen</button>' : ''}<button type="button" data-close>Sluiten</button></div>`, null, { sheet: true });
+    <div class="form-actions">${manager ? '<button type="button" class="primary" id="day-add">+ Shift toevoegen</button>' : ''}<button type="button" data-close>${T('Sluiten', '关闭')}</button></div>`, null, { sheet: true });
   const find = id => shifts.find(s => s.id === id);
   $$('[data-day-claim]', d).forEach(b => b.addEventListener('click', () => claimShift(find(b.dataset.dayClaim))));
   $$('[data-day-own]', d).forEach(b => b.addEventListener('click', () => ownShift(find(b.dataset.dayOwn))));
@@ -1507,40 +1634,40 @@ function bindCalendar(el, shifts, manager) {
   });
 }
 
-const shiftWhen = s => `${esc(fmt.dayLong(s.starts_at))}, <strong>${fmt.range(s.starts_at, s.ends_at)}</strong>${s.label ? ` (${esc(s.label)})` : ''}`;
+const shiftWhen = s => `${esc(fmt.dayLong(s.starts_at))}, <strong>${fmt.range(s.starts_at, s.ends_at)}</strong>${s.label ? ` (${esc(partName(s.label))})` : ''}`;
 
 async function claimShift(s) {
-  const ok = await modal.confirm({ title: 'Deze shift opnemen?', body: `${shiftWhen(s)}${s.notes ? `<br>${esc(s.notes)}` : ''}`, ok: 'Shift opnemen' });
+  const ok = await modal.confirm({ title: T('Deze shift opnemen?', '认领这个班次？'), body: `${shiftWhen(s)}${s.notes ? `<br>${esc(s.notes)}` : ''}`, ok: T('Shift opnemen', '认领班次') });
   if (!ok) return;
   busy(null, async () => {
     await rpc('claim_shift', { p_shift_id: s.id });
     await refreshMe();
-    toast('Shift opgenomen. Hij staat nu op jouw naam.');
+    toast(T('Shift opgenomen. Hij staat nu op jouw naam.', '已认领，这个班次现在是你的了。'));
     renderView();
   }).catch(() => {});
 }
 
-const DROP_REASONS = ['Ziek', 'School of examen', 'Familie', 'Andere afspraak'];
+const DROP_REASONS = [['Ziek', '生病'], ['School of examen', '上学或考试'], ['Familie', '家里有事'], ['Andere afspraak', '其他安排']];
 
 function ownShift(s) {
   const cut = S.settings.drop_cutoff_hours;
   const canDrop = new Date(s.starts_at) - now() > cut * 3600000;
   modal.open(`
-    <h2 id="modal-title">Jouw shift</h2>
+    <h2 id="modal-title">${T('Jouw shift', '你的班次')}</h2>
     <p>${shiftWhen(s)}</p>
-    ${canDrop ? `<p class="muted small">Kan je niet? Geef hem terug, dan staat hij weer open voor iemand anders. Je verantwoordelijke ziet waarom.</p>
+    ${canDrop ? `<p class="muted small">${T('Kan je niet? Geef hem terug, dan staat hij weer open voor iemand anders. Je verantwoordelijke ziet waarom.', '来不了？把它退回，别人就可以认领。负责人会看到原因。')}</p>
       <form id="drop-form" novalidate>
-        <div class="field"><label for="drop-reason">Waarom geef je hem terug?</label>
-          <div class="chips reason-chips" role="group" aria-label="Snel kiezen">${DROP_REASONS.map(r => `<button type="button" class="chip" data-reason="${esc(r)}">${esc(r)}</button>`).join('')}</div>
-          <textarea id="drop-reason" rows="2" maxlength="300" placeholder="bv. Ik heb een examen die dag."></textarea></div>
+        <div class="field"><label for="drop-reason">${T('Waarom geef je hem terug?', '为什么退回？')}</label>
+          <div class="chips reason-chips" role="group" aria-label="${T('Snel kiezen', '快速选择')}">${DROP_REASONS.map(r => T(...r)).map(r => `<button type="button" class="chip" data-reason="${esc(r)}">${esc(r)}</button>`).join('')}</div>
+          <textarea id="drop-reason" rows="2" maxlength="300" placeholder="${T('bv. Ik heb een examen die dag.', '例如：那天我有考试。')}"></textarea></div>
         <p class="form-error" id="drop-err"></p>
         <div class="form-actions">
-          <button type="button" data-close>Sluiten</button>
-          <button type="submit" class="danger solid" id="drop-it">Shift teruggeven</button>
+          <button type="button" data-close>${T('Sluiten', '关闭')}</button>
+          <button type="submit" class="danger solid" id="drop-it">${T('Shift teruggeven', '退回班次')}</button>
         </div>
       </form>`
-      : `<p class="hint info">Hij begint binnen ${cut} uur, dus je kan hem hier niet meer teruggeven. Vraag het aan je verantwoordelijke.</p>
-      <div class="form-actions"><button type="button" data-close>Sluiten</button></div>`}`, d => {
+      : `<p class="hint info">${T(`Hij begint binnen ${cut} uur, dus je kan hem hier niet meer teruggeven. Vraag het aan je verantwoordelijke.`, `这个班次 ${cut} 小时内就开始了，这里已经不能退回。请问负责人。`)}</p>
+      <div class="form-actions"><button type="button" data-close>${T('Sluiten', '关闭')}</button></div>`}`, d => {
     const f = $('#drop-form', d);
     if (!f) return;
     const box = $('#drop-reason', d), err = $('#drop-err', d), b = $('#drop-it', d);
@@ -1552,12 +1679,12 @@ function ownShift(s) {
     f.addEventListener('submit', ev => {
       ev.preventDefault();
       const reason = box.value.trim();
-      if (reason.length < 3) { err.textContent = 'Zeg kort waarom je deze shift teruggeeft.'; box.focus(); return; }
+      if (reason.length < 3) { err.textContent = T('Zeg kort waarom je deze shift teruggeeft.', '请简单说说为什么退回这个班次。'); box.focus(); return; }
       busy(b, async () => {
         await rpc('give_back_shift', { p_shift_id: s.id, p_reason: reason });
         modal.close();
         await refreshMe();
-        toast('Shift teruggegeven. Hij staat weer open voor anderen.');
+        toast(T('Shift teruggegeven. Hij staat weer open voor anderen.', '已退回，别人现在可以认领。'));
         renderView();
       }).catch(() => {});
     });
@@ -1575,14 +1702,15 @@ async function viewShifts(el, current) {
   const mineMins = mine.reduce((a, s) => a + minutesBetween(s.starts_at, s.ends_at), 0);
   el.innerHTML = `
     <div class="view-head">
-      <div><h1>Shiften</h1><p><span class="only-wide">Tik op een <span class="key-open">open</span> shift om hem op te nemen. Tik op een van jouw shiften om hem terug te geven.</span><span class="only-phone">Tik op een dag om de shiften te zien. Bij een <span class="key-open">open</span> shift tik je op Opnemen.</span></p></div>
-      ${periodBar(fmt.month(m), sameDay(m, startOfMonth(t)) ? 'Deze maand' : '', 'mo-prev', 'mo-next')}
+      <div><h1>${T('Shiften', '班次')}</h1><p>${T(`<span class="only-wide">Tik op een <span class="key-open">open</span> shift om hem op te nemen. Tik op een van jouw shiften om hem terug te geven.</span><span class="only-phone">Tik op een dag om de shiften te zien. Bij een <span class="key-open">open</span> shift tik je op Opnemen.</span>`,
+        `<span class="only-wide">点一个<span class="key-open">空缺</span>班次来认领。点你自己的班次可以退回。</span><span class="only-phone">点一天查看班次。<span class="key-open">空缺</span>班次点“认领”。</span>`)}</p></div>
+      ${periodBar(fmt.month(m), sameDay(m, startOfMonth(t)) ? T('Deze maand', '本月') : '', 'mo-prev', 'mo-next')}
     </div>
     ${monthChips()}
     <div class="stats stats-3">
-      <div class="stat ${open.length ? 'accent' : ''}"><span class="v">${open.length}</span><span class="k">Open om op te nemen</span></div>
-      <div class="stat"><span class="v">${mine.length}</span><span class="k">Jouw shiften</span></div>
-      <div class="stat"><span class="v">${fmt.dur(mineMins)}</span><span class="k">Gepland voor jou</span></div>
+      <div class="stat ${open.length ? 'accent' : ''}"><span class="v">${open.length}</span><span class="k">${T('Open om op te nemen', '可认领的空缺')}</span></div>
+      <div class="stat"><span class="v">${mine.length}</span><span class="k">${T('Jouw shiften', '你的班次')}</span></div>
+      <div class="stat"><span class="v">${fmt.dur(mineMins)}</span><span class="k">${T('Gepland voor jou', '你的排班时长')}</span></div>
     </div>
     <section class="card cal-card">${calendarHTML(shifts, m)}</section>
     ${horizonNote(m)}`;
@@ -1809,6 +1937,7 @@ function editShift(s) {
 /* ----------------------------------------------- contract types & Securex */
 
 const CONTRACTS = { student: 'Student', flexi: 'Flexi-job', extra: 'Extra (gelegenheidswerknemer)', vast: 'Vast / andere' };
+const CONTRACTS_ZH = { student: '学生', flexi: '弹性工作（Flexi-job）', extra: '临时工', vast: '固定 / 其他' };
 const CONTRACT_SHORT = { student: 'Student', flexi: 'Flexi', extra: 'Extra', vast: 'Vast' };
 const HOUR_KINDS = [['normal', 'Gewone uren'], ['sunday', 'Zondag'], ['holiday', 'Feestdag']];
 const contractOptions = sel => `<option value="">Nog niet gekozen</option>` +
@@ -2477,7 +2606,7 @@ const downloadPayslip = (id, btn) => downloadFile('get_payslip', id, btn);
 const downloadContract = (id, btn) => downloadFile('get_contract', id, btn);
 
 // Hours as on a payslip: 56 u, 32,5 u.
-const uren = h => `${Number(h).toLocaleString(LOCALE, { maximumFractionDigits: 2 })} u`;
+const uren = h => `${Number(h).toLocaleString(loc(), { maximumFractionDigits: 2 })} ${T('u', '小时')}`;
 const hasFigures = p => p && (p.hours_worked != null || p.gross_pay != null || p.net_pay != null);
 
 // The month's documents: its payslip, and a recalculation, a correction or
@@ -2485,9 +2614,9 @@ const hasFigures = p => p && (p.hours_worked != null || p.gross_pay != null || p
 function payDocs(pm) {
   const docs = pm.documents.length ? pm.documents : pm.payslip ? [{ id: pm.payslip.id, kind: 'Bezoldiging', payslip: true }] : [];
   if (pm.payslip && !docs.some(d => d.payslip)) docs.unshift({ id: pm.payslip.id, kind: 'Bezoldiging', payslip: true });
-  const label = d => d.kind === 'Ecocheque' ? 'Ecocheques'
-    : docs.length > 1 && d.calculated_at ? `Loonbrief ${fmt.short(d.calculated_at)}` : 'Loonbrief';
-  return docs.map(d => `<button class="sm" data-payslip="${d.id}" title="Downloaden">${esc(label(d))}</button>`).join('');
+  const label = d => d.kind === 'Ecocheque' ? T('Ecocheques', '环保券')
+    : docs.length > 1 && d.calculated_at ? `${T('Loonbrief', '工资单')} ${fmt.short(d.calculated_at)}` : T('Loonbrief', '工资单');
+  return docs.map(d => `<button class="sm" data-payslip="${d.id}" title="${T('Downloaden', '下载')}">${esc(label(d))}</button>`).join('');
 }
 
 // What the month's payslip says, for the person themself on Mijn uren.
@@ -2496,27 +2625,27 @@ function payslipCard(pm) {
   const p = pm.payslip, name = fmt.monthName(new Date(pm.month + 'T00:00'));
   if (!hasFigures(p)) return `
     <section class="card pay-card">
-      <div class="card-head"><h2>Je loonbrief van ${name}</h2><div class="toolbar">${payDocs(pm)}</div></div>
+      <div class="card-head"><h2>${T(`Je loonbrief van ${name}`, `你${name}的工资单`)}</h2><div class="toolbar">${payDocs(pm)}</div></div>
     </section>`;
   const leave = Number(p.hours_leave);
   return `
     <section class="card pay-card">
-      <div class="card-head"><h2>Volgens je loonbrief van ${name}</h2><div class="toolbar">${payDocs(pm)}</div></div>
+      <div class="card-head"><h2>${T(`Volgens je loonbrief van ${name}`, `根据你${name}的工资单`)}</h2><div class="toolbar">${payDocs(pm)}</div></div>
       <div class="stats">
-        ${p.hours_worked != null ? `<div class="stat good"><span class="v">${uren(p.hours_worked)}</span><span class="k">Gewerkt${Number(p.days_worked) ? ` · ${plural(Number(p.days_worked), 'dag', 'dagen')}` : ''}</span></div>` : ''}
-        <div class="stat"><span class="v">${fmt.money(p.gross_pay || 0)}</span><span class="k">Bruto verdiend</span></div>
-        <div class="stat"><span class="v">${fmt.money(p.net_pay || 0)}</span><span class="k">Netto uitbetaald</span></div>
-        ${leave ? `<div class="stat"><span class="v">${uren(leave)}</span><span class="k">Betaald, niet gewerkt: feestdag of ziekte</span></div>` : ''}
-        ${p.ecocheques != null ? `<div class="stat"><span class="v">${fmt.money(p.ecocheques)}</span><span class="k">Ecocheques</span></div>` : ''}
+        ${p.hours_worked != null ? `<div class="stat good"><span class="v">${uren(p.hours_worked)}</span><span class="k">${T('Gewerkt', '工作')}${Number(p.days_worked) ? ` · ${T(plural(Number(p.days_worked), 'dag', 'dagen'), `${Number(p.days_worked)} 天`)}` : ''}</span></div>` : ''}
+        <div class="stat"><span class="v">${fmt.money(p.gross_pay || 0)}</span><span class="k">${T('Bruto verdiend', '税前收入')}</span></div>
+        <div class="stat"><span class="v">${fmt.money(p.net_pay || 0)}</span><span class="k">${T('Netto uitbetaald', '实发工资')}</span></div>
+        ${leave ? `<div class="stat"><span class="v">${uren(leave)}</span><span class="k">${T('Betaald, niet gewerkt: feestdag of ziekte', '带薪未工作：节假日或病假')}</span></div>` : ''}
+        ${p.ecocheques != null ? `<div class="stat"><span class="v">${fmt.money(p.ecocheques)}</span><span class="k">${T('Ecocheques', '环保券')}</span></div>` : ''}
       </div>
-      ${pm.documents.length > 1 ? '<p class="muted small" style="margin-top:10px">Deze maand werd meer dan eens berekend. De cijfers tellen alles samen: wat eerder al betaald werd, staat bij het netto.</p>' : ''}
+      ${pm.documents.length > 1 ? `<p class="muted small" style="margin-top:10px">${T('Deze maand werd meer dan eens berekend. De cijfers tellen alles samen: wat eerder al betaald werd, staat bij het netto.', '这个月的工资算了不止一次。数字是合计：之前已付的部分也算在实发里。')}</p>` : ''}
     </section>`;
 }
 
 // Per month: hours and pay from the payslips next to the hours clocked in the
 // app, with a total per year: a table, and on a phone a list with the net
 // first. open: the month shown above (Mijn uren).
-function payMonthsTable(months, { open = null, clickable = false } = {}) {
+function payMonthsTable(months, { open = null, clickable = false, clocked: showClocked = true } = {}) {
   const list = months.filter(x => x.payslip || x.clocked_minutes);
   if (!list.length) return '';
   const dash = '<span class="muted">—</span>';
@@ -2537,9 +2666,10 @@ function payMonthsTable(months, { open = null, clickable = false } = {}) {
         <tr ${attrs}>
           <td><strong>${v.name}</strong>${v.docs}</td>
           <td class="num">${v.hours || dash}</td><td class="num">${v.gross || dash}</td>
-          <td class="num">${v.net || dash}</td><td class="num">${v.clocked || dash}</td>
+          <td class="num">${v.net || dash}</td>${showClocked ? `<td class="num">${v.clocked || dash}</td>` : ''}
         </tr>`);
-      const sub = [v.hours && `${v.hours} gewerkt`, v.gross && `bruto ${v.gross}`, v.clocked && `geklokt ${v.clocked}`].filter(Boolean);
+      const sub = [v.hours && T(`${v.hours} gewerkt`, `工作 ${v.hours}`), v.gross && T(`bruto ${v.gross}`, `税前 ${v.gross}`),
+        showClocked && v.clocked && T(`geklokt ${v.clocked}`, `打卡 ${v.clocked}`)].filter(Boolean);
       items.push(`
         <div ${attrs.replace('class="', 'class="pay-item ')}>
           <div class="pay-item-head"><strong>${v.name}</strong>${v.net ? `<span class="pay-net">${v.net}</span>` : ''}</div>
@@ -2548,19 +2678,20 @@ function payMonthsTable(months, { open = null, clickable = false } = {}) {
     }
     const sum = k => ms.reduce((a, x) => a + (hasFigures(x.payslip) ? Number(x.payslip[k] || 0) : 0), 0);
     const clocked = ms.reduce((a, x) => a + Number(x.clocked_minutes || 0), 0);
+    const total = T(`Totaal ${year}`, `${year} 年合计`);
     rows.push(`
-        <tr class="pay-total"><td>Totaal ${year}</td><td class="num">${uren(sum('hours_worked'))}</td>
+        <tr class="pay-total"><td>${total}</td><td class="num">${uren(sum('hours_worked'))}</td>
           <td class="num">${fmt.money(sum('gross_pay'))}</td><td class="num">${fmt.money(sum('net_pay'))}</td>
-          <td class="num">${clocked ? clockedH(clocked) : dash}</td></tr>`);
+          ${showClocked ? `<td class="num">${clocked ? clockedH(clocked) : dash}</td>` : ''}</tr>`);
     items.push(`
         <div class="pay-item pay-total">
-          <div class="pay-item-head"><strong>Totaal ${year}</strong><span class="pay-net">${fmt.money(sum('net_pay'))}</span></div>
-          <div class="pay-item-sub">${uren(sum('hours_worked'))} gewerkt · bruto ${fmt.money(sum('gross_pay'))}${clocked ? ` · geklokt ${clockedH(clocked)}` : ''}</div>
+          <div class="pay-item-head"><strong>${total}</strong><span class="pay-net">${fmt.money(sum('net_pay'))}</span></div>
+          <div class="pay-item-sub">${T(`${uren(sum('hours_worked'))} gewerkt · bruto ${fmt.money(sum('gross_pay'))}`, `工作 ${uren(sum('hours_worked'))} · 税前 ${fmt.money(sum('gross_pay'))}`)}${showClocked && clocked ? T(` · geklokt ${clockedH(clocked)}`, ` · 打卡 ${clockedH(clocked)}`) : ''}</div>
         </div>`);
   }
   return `
     <div class="table-wrap only-wide-block"><table class="pay-table">
-      <thead><tr><th>Maand</th><th class="num">Gewerkt</th><th class="num">Bruto</th><th class="num">Netto</th><th class="num">Geklokt</th></tr></thead>
+      <thead><tr><th>${T('Maand', '月份')}</th><th class="num">${T('Gewerkt', '工作')}</th><th class="num">${T('Bruto', '税前')}</th><th class="num">${T('Netto', '实发')}</th>${showClocked ? `<th class="num">${T('Geklokt', '打卡')}</th>` : ''}</tr></thead>
       <tbody>${rows.join('')}</tbody>
     </table></div>
     <div class="pay-list only-phone-block">${items.join('')}</div>`;
@@ -2594,20 +2725,20 @@ function readAsBase64(file) {
 function entryFlags(x, grace) {
   const f = [];
   const g = grace * 60000;
-  if (!x.clock_out) f.push('<span class="pill warn">Nog ingeklokt</span>');
+  if (!x.clock_out) f.push(`<span class="pill warn">${T('Nog ingeklokt', '还在上班')}</span>`);
   const sStart = x.shift ? x.shift.starts_at : x.shift_start;
   const sEnd = x.shift ? x.shift.ends_at : x.shift_end;
-  if (sStart && new Date(x.clock_in) - new Date(sStart) > g) f.push('<span class="pill bad">Te laat</span>');
-  if (sEnd && x.clock_out && new Date(sEnd) - new Date(x.clock_out) > g) f.push('<span class="pill warn">Vroeger vertrokken</span>');
-  if (x.pending) f.push('<span class="pill accent">Aanpassing wacht op goedkeuring</span>');
-  else if (x.edited) f.push('<span class="pill">Aangepast</span>');
+  if (sStart && new Date(x.clock_in) - new Date(sStart) > g) f.push(`<span class="pill bad">${T('Te laat', '迟到')}</span>`);
+  if (sEnd && x.clock_out && new Date(sEnd) - new Date(x.clock_out) > g) f.push(`<span class="pill warn">${T('Vroeger vertrokken', '提前离开')}</span>`);
+  if (x.pending) f.push(`<span class="pill accent">${T('Aanpassing wacht op goedkeuring', '修改等待审核')}</span>`);
+  else if (x.edited) f.push(`<span class="pill">${T('Aangepast', '已修改')}</span>`);
   return f.join('');
 }
 
 function stamps(x) {
-  return `<span class="stamp in"><b>IN</b>${fmt.time(x.clock_in)}</span>${x.clock_out
-    ? `<span class="stamp out"><b>UIT</b>${fmt.time(x.clock_out)}${sameDay(x.clock_in, x.clock_out) ? '' : ' +1'}</span>`
-    : '<span class="stamp open"><b>UIT</b>—</span>'}`;
+  return `<span class="stamp in"><b>${T('IN', '上')}</b>${fmt.time(x.clock_in)}</span>${x.clock_out
+    ? `<span class="stamp out"><b>${T('UIT', '下')}</b>${fmt.time(x.clock_out)}${sameDay(x.clock_in, x.clock_out) ? '' : ' +1'}</span>`
+    : `<span class="stamp open"><b>${T('UIT', '下')}</b>—</span>`}`;
 }
 
 async function viewHours(el, current) {
@@ -2625,20 +2756,23 @@ async function viewHours(el, current) {
   const mins = done.reduce((a, x) => a + minutesBetween(x.clock_in, x.clock_out), 0);
   const pendingReqs = data.requests.filter(r => r.status === 'pending');
   const decided = data.requests.filter(r => r.status !== 'pending');
+  // who doesn't clock in sees their payslips; clocked times only if there are any
+  const clocks = canClock() || data.entries.length > 0;
   el.innerHTML = `
     <div class="view-head">
-      <div><h1>Mijn uren</h1><p>Je urenkaart. Klopt er iets niet? Tik op <strong>Uren aanpassen</strong> en je verantwoordelijke keurt het goed.</p></div>
-      ${periodBar(fmt.month(m), sameDay(m, startOfMonth(now())) ? 'Deze maand' : '', 'mo-prev', 'mo-next')}
+      <div><h1>${T('Mijn uren', '我的工时')}</h1><p>${clocks ? T('Je urenkaart. Klopt er iets niet? Tik op <strong>Uren aanpassen</strong> en je verantwoordelijke keurt het goed.', '你的工时表。有不对的地方？点<strong>修改工时</strong>，负责人会审核。')
+        : T('Wat je loonbrieven zeggen: de uren die je betaald kreeg, bruto en netto.', '你的工资单：发了工资的工时、税前和实发金额。')}</p></div>
+      ${periodBar(fmt.month(m), sameDay(m, startOfMonth(now())) ? T('Deze maand', '本月') : '', 'mo-prev', 'mo-next')}
     </div>
-    ${!data.entries.length && hasFigures(pm && pm.payslip) ? '' : `<div class="stats">
-      <div class="stat good"><span class="v">${fmt.dur(mins)}</span><span class="k">Geklokt · ${fmt.hours(mins)} uur</span></div>
-      <div class="stat"><span class="v">${rate != null ? fmt.money(mins / 60 * rate) : '—'}</span><span class="k">${rate != null ? `Verdiend (bruto) · ${fmt.money(rate)}/u` : 'Je verdiensten verschijnen zodra je verantwoordelijke je uurloon instelt'}</span></div>
-      <div class="stat"><span class="v">${done.length}</span><span class="k">${isDriver() ? 'Keer gewerkt' : 'Gewerkte shiften'}</span></div>
-      <div class="stat ${pendingReqs.length ? 'alert' : ''}"><span class="v">${pendingReqs.length}</span><span class="k">Aanpassingen in behandeling</span></div>
+    ${!clocks || (!data.entries.length && hasFigures(pm && pm.payslip)) ? '' : `<div class="stats">
+      <div class="stat good"><span class="v">${fmt.dur(mins)}</span><span class="k">${T(`Geklokt · ${fmt.hours(mins)} uur`, `打卡 · ${fmt.hours(mins)} 小时`)}</span></div>
+      <div class="stat"><span class="v">${rate != null ? fmt.money(mins / 60 * rate) : '—'}</span><span class="k">${rate != null ? T(`Verdiend (bruto) · ${fmt.money(rate)}/u`, `收入（税前）· ${fmt.money(rate)}/小时`) : T('Je verdiensten verschijnen zodra je verantwoordelijke je uurloon instelt', '负责人设置时薪后会显示你的收入')}</span></div>
+      <div class="stat"><span class="v">${done.length}</span><span class="k">${isDriver() ? 'Keer gewerkt' : T('Gewerkte shiften', '上过的班次')}</span></div>
+      <div class="stat ${pendingReqs.length ? 'alert' : ''}"><span class="v">${pendingReqs.length}</span><span class="k">${T('Aanpassingen in behandeling', '待审核的修改')}</span></div>
     </div>`}
     ${payslipCard(pm)}
-    <section class="card">
-      <div class="card-head"><h2>Urenkaart</h2><button class="sm" id="add-missing">+ Vergeten uren toevoegen</button></div>
+    ${clocks ? `<section class="card">
+      <div class="card-head"><h2>${T('Urenkaart', '工时表')}</h2>${canClock() ? `<button class="sm" id="add-missing">${T('+ Vergeten uren toevoegen', '+ 补登工时')}</button>` : ''}</div>
       ${data.entries.length ? `<div class="rows">${data.entries.map(x => `
         <div class="entry">
           <div class="row-main">
@@ -2648,41 +2782,43 @@ async function viewHours(el, current) {
           </div>
           <div class="row-actions" style="flex-direction:column;align-items:flex-end">
             <span class="entry-dur">${x.clock_out ? fmt.dur(minutesBetween(x.clock_in, x.clock_out)) : '—'}</span>
-            <button class="sm" data-fix="${x.id}">Uren aanpassen</button>
+            <button class="sm" data-fix="${x.id}">${T('Uren aanpassen', '修改工时')}</button>
           </div>
           ${x.note ? `<p class="entry-note">${esc(x.note)}</p>` : ''}
-          ${x.pending ? `<p class="entry-note">Gevraagd om aan te passen naar ${fmt.time(x.pending.proposed_in)} – ${x.pending.proposed_out ? fmt.time(x.pending.proposed_out) : 'nog bezig'}: “${esc(x.pending.reason)}”</p>` : ''}
+          ${x.pending ? `<p class="entry-note">${T('Gevraagd om aan te passen naar', '申请改为')} ${fmt.time(x.pending.proposed_in)} – ${x.pending.proposed_out ? fmt.time(x.pending.proposed_out) : T('nog bezig', '进行中')}: “${esc(x.pending.reason)}”</p>` : ''}
         </div>`).join('')}</div>`
-        : `<div class="empty"><strong>Geen uren in ${fmt.month(m)}.</strong>Als je inklokt bij Klok, verschijnt het hier.</div>`}
-    </section>
+        : `<div class="empty"><strong>${T(`Geen uren in ${fmt.month(m)}.`, `${fmt.month(m)}没有工时。`)}</strong>${T('Als je inklokt bij Klok, verschijnt het hier.', '在“打卡”页打卡后会显示在这里。')}</div>`}
+    </section>` : ''}
     <section class="card">
-      <h2>Per maand</h2>
-      <p class="muted small" style="margin-top:6px">Wat je loonbrieven zeggen: de uren die je betaald kreeg, bruto en netto. Daarnaast de uren die je in de app klokte. Tik op een maand om ze te openen.</p>
-      ${payMonthsTable(months, { open: toDateInput(m), clickable: true }) || '<p class="empty">Je loonbrieven verschijnen hier zodra ze er zijn.</p>'}
-      <p class="muted small" style="margin-top:10px">Het verdiende bedrag bovenaan is een schatting uit je geklokte uren. Je loonbrief toont wat je echt betaald krijgt.</p>
+      <h2>${T('Per maand', '每月')}</h2>
+      <p class="muted small" style="margin-top:6px">${clocks ? T('Wat je loonbrieven zeggen: de uren die je betaald kreeg, bruto en netto. Daarnaast de uren die je in de app klokte. Tik op een maand om ze te openen.', '工资单上的数字：发了工资的工时、税前和实发。旁边是你在 app 里打卡的工时。点一个月份查看。')
+        : T('Tik op een maand om ze te openen.', '点一个月份查看。')}</p>
+      ${payMonthsTable(months, { open: toDateInput(m), clickable: true, clocked: clocks }) || `<p class="empty">${T('Je loonbrieven verschijnen hier zodra ze er zijn.', '工资单出来后会显示在这里。')}</p>`}
+      ${clocks ? `<p class="muted small" style="margin-top:10px">${T('Het verdiende bedrag bovenaan is een schatting uit je geklokte uren. Je loonbrief toont wat je echt betaald krijgt.', '上面的收入是根据打卡工时估算的。实际工资以工资单为准。')}</p>` : ''}
     </section>
     ${pendingReqs.length || decided.length ? `<section class="card">
-      <h2>Je aanvragen</h2>
+      <h2>${T('Je aanvragen', '你的申请')}</h2>
       <div class="rows">${[...pendingReqs, ...decided].map(r => `
         <div class="row">
           <div class="row-main">
-            <span class="row-title">${r.entry_id ? 'Aanpassen' : 'Toevoegen'} ${fmt.day(r.proposed_in)}: <span class="time">${fmt.time(r.proposed_in)} – ${r.proposed_out ? fmt.time(r.proposed_out) : 'nog bezig'}</span></span>
+            <span class="row-title">${r.entry_id ? T('Aanpassen', '修改') : T('Toevoegen', '补登')} ${fmt.day(r.proposed_in)}: <span class="time">${fmt.time(r.proposed_in)} – ${r.proposed_out ? fmt.time(r.proposed_out) : T('nog bezig', '进行中')}</span></span>
             <span class="row-sub">“${esc(r.reason)}”</span>
           </div>
           <div class="row-actions">
-            ${r.status === 'pending' ? `<span class="pill accent">In behandeling</span><button class="sm" data-cancel="${r.id}">Annuleren</button>`
-              : r.status === 'approved' ? '<span class="pill on">Goedgekeurd</span>' : '<span class="pill bad">Niet goedgekeurd</span>'}
+            ${r.status === 'pending' ? `<span class="pill accent">${T('In behandeling', '审核中')}</span><button class="sm" data-cancel="${r.id}">${T('Annuleren', '取消')}</button>`
+              : r.status === 'approved' ? `<span class="pill on">${T('Goedgekeurd', '已通过')}</span>` : `<span class="pill bad">${T('Niet goedgekeurd', '未通过')}</span>`}
           </div>
         </div>`).join('')}</div>
     </section>` : ''}`;
   $('#mo-prev', el).addEventListener('click', () => { S.month = addMonths(S.month, -1); renderView(); });
   $('#mo-next', el).addEventListener('click', () => { S.month = addMonths(S.month, 1); renderView(); });
-  $('#add-missing', el).addEventListener('click', () => timeFixModal(null));
+  const addMissing = $('#add-missing', el);
+  if (addMissing) addMissing.addEventListener('click', () => timeFixModal(null));
   bindPayMonths(el);
   $$('[data-fix]', el).forEach(b => b.addEventListener('click', () => timeFixModal(data.entries.find(x => x.id === b.dataset.fix))));
   $$('[data-cancel]', el).forEach(b => b.addEventListener('click', () => busy(b, async () => {
     await rpc('cancel_time_edit', { p_edit_id: b.dataset.cancel });
-    toast('Aanvraag geannuleerd.');
+    toast(T('Aanvraag geannuleerd.', '申请已取消。'));
     renderView();
   }).catch(() => {})));
 }
@@ -2693,18 +2829,19 @@ function timeFixModal(entry) {
   const outV = entry ? (entry.clock_out ? new Date(entry.clock_out) : null) : atTime(addDays(t, -1), '22:30');
   const stillIn = entry && !entry.clock_out;
   modal.open(`
-    <h2 id="modal-title">${entry ? 'Uren aanpassen' : 'Vergeten uren toevoegen'}</h2>
-    <p>${entry ? `Nu: ${fmt.day(entry.clock_in)}, ${fmt.time(entry.clock_in)} – ${entry.clock_out ? fmt.time(entry.clock_out) : 'nog ingeklokt'}. ` : 'Voor een shift die je gewerkt hebt maar waarvoor je niet inklokte. '}Je verantwoordelijke keurt de wijziging goed voor ze meetelt.</p>
+    <h2 id="modal-title">${entry ? T('Uren aanpassen', '修改工时') : T('Vergeten uren toevoegen', '补登工时')}</h2>
+    <p>${entry ? T(`Nu: ${fmt.day(entry.clock_in)}, ${fmt.time(entry.clock_in)} – ${entry.clock_out ? fmt.time(entry.clock_out) : 'nog ingeklokt'}. `, `现在：${fmt.day(entry.clock_in)}，${fmt.time(entry.clock_in)} – ${entry.clock_out ? fmt.time(entry.clock_out) : '还在上班'}。`)
+      : T('Voor een shift die je gewerkt hebt maar waarvoor je niet inklokte. ', '用于你上了班却没有打卡的班次。')}${T('Je verantwoordelijke keurt de wijziging goed voor ze meetelt.', '负责人审核通过后才会计入。')}</p>
     <form id="fix-form" novalidate>
       <div class="form-grid">
-        <div class="field wide"><label for="fx-day">Dag</label>${dateField('fx-day', inV, addDays(t, -45), t)}</div>
-        <div class="field"><label for="fx-in">Ingeklokt</label>${timeField('fx-in', toTimeInput(inV))}</div>
-        <div class="field"><label for="fx-out">Uitgeklokt</label>${timeField('fx-out', outV ? toTimeInput(outV) : '', { required: !stillIn })}
-          ${stillIn ? '<span class="help">Laat leeg als je nog aan het werken bent.</span>' : '<span class="help">Vroeger dan het inklokken betekent de volgende dag.</span>'}</div>
-        <div class="field wide"><label for="fx-reason">Wat is er gebeurd?</label><input id="fx-reason" maxlength="300" placeholder="bv. vergeten uit te klokken, vertrokken om 15:30" required></div>
+        <div class="field wide"><label for="fx-day">${T('Dag', '日期')}</label>${dateField('fx-day', inV, addDays(t, -45), t)}</div>
+        <div class="field"><label for="fx-in">${T('Ingeklokt', '上班时间')}</label>${timeField('fx-in', toTimeInput(inV))}</div>
+        <div class="field"><label for="fx-out">${T('Uitgeklokt', '下班时间')}</label>${timeField('fx-out', outV ? toTimeInput(outV) : '', { required: !stillIn })}
+          <span class="help">${stillIn ? T('Laat leeg als je nog aan het werken bent.', '如果还在上班就留空。') : T('Vroeger dan het inklokken betekent de volgende dag.', '早于上班时间表示第二天。')}</span></div>
+        <div class="field wide"><label for="fx-reason">${T('Wat is er gebeurd?', '发生了什么？')}</label><input id="fx-reason" maxlength="300" placeholder="${T('bv. vergeten uit te klokken, vertrokken om 15:30', '例如：忘记下班打卡，15:30 离开')}" required></div>
       </div>
       <p class="form-error" id="fx-err"></p>
-      <div class="form-actions"><button type="button" data-close>Annuleren</button><button type="submit" class="primary">Naar verantwoordelijke sturen</button></div>
+      <div class="form-actions"><button type="button" data-close>${T('Annuleren', '取消')}</button><button type="submit" class="primary">${T('Naar verantwoordelijke sturen', '发给负责人')}</button></div>
     </form>`, d => {
     $('#fx-reason', d).focus();
     $('#fix-form', d).addEventListener('submit', async ev => {
@@ -2712,18 +2849,18 @@ function timeFixModal(entry) {
       const err = $('#fx-err', d);
       const inHM = parseHM($('#fx-in', d).value), outRaw = $('#fx-out', d).value.trim(), outHM = parseHM(outRaw);
       const reason = $('#fx-reason', d).value.trim();
-      if (!inHM) { err.textContent = 'Vul in wanneer je inklokte, bv. 17:30.'; return; }
-      if (outRaw && !outHM) { err.textContent = 'Vul in wanneer je uitklokte, bv. 22:30.'; return; }
-      if (!outHM && !stillIn) { err.textContent = 'Vul in wanneer je uitklokte.'; return; }
+      if (!inHM) { err.textContent = T('Vul in wanneer je inklokte, bv. 17:30.', '请填写上班时间，例如 17:30。'); return; }
+      if (outRaw && !outHM) { err.textContent = T('Vul in wanneer je uitklokte, bv. 22:30.', '请填写下班时间，例如 22:30。'); return; }
+      if (!outHM && !stillIn) { err.textContent = T('Vul in wanneer je uitklokte.', '请填写下班时间。'); return; }
       const { a, b } = spanFor($('#fx-day', d).value, inHM, outHM);
-      if (a > now() || (b && b > now())) { err.textContent = 'Uren kunnen niet in de toekomst liggen.'; return; }
-      if (reason.length < 3) { err.textContent = 'Zeg kort wat er gebeurd is.'; return; }
+      if (a > now() || (b && b > now())) { err.textContent = T('Uren kunnen niet in de toekomst liggen.', '时间不能在将来。'); return; }
+      if (reason.length < 3) { err.textContent = T('Zeg kort wat er gebeurd is.', '请简单说说发生了什么。'); return; }
       const btn = $('button[type=submit]', d);
       btn.disabled = true;
       try {
         await rpc('request_time_edit', { p_entry_id: entry ? entry.id : null, p_in: a.toISOString(), p_out: b ? b.toISOString() : null, p_reason: reason });
         modal.close();
-        toast('Verstuurd. Je verantwoordelijke bekijkt het.');
+        toast(T('Verstuurd. Je verantwoordelijke bekijkt het.', '已发送，负责人会查看。'));
         renderView();
       } catch (e) { err.textContent = e.message; btn.disabled = false; }
     });
@@ -2734,18 +2871,25 @@ function timeFixModal(entry) {
 
 const LOCK_ICON = '<svg viewBox="0 0 24 24" width="12" height="12" fill="none" stroke="currentColor" stroke-width="2.4" stroke-linecap="round" aria-hidden="true"><rect x="5" y="11" width="14" height="10" rx="2"/><path d="M8 11V8a4 4 0 0 1 8 0v3"/></svg>';
 const AV_TABS = [
-  ['face', 'Gezicht', ['body', 'skin', 'eyes', 'eyeColor', 'brows', 'mouth', 'beard', 'extra']],
-  ['hair', 'Haar', ['hair', 'hairColor']],
-  ['clothes', 'Kleren', ['top', 'topColor', 'outer', 'outerColor', 'bottom', 'bottomColor']],
-  ['shoes', 'Schoenen', ['shoes', 'shoeColor']],
-  ['extras', "Extra's", ['hat', 'hatColor', 'glasses', 'neck', 'neckColor', 'earrings', 'piercing', 'aura']],
+  ['face', 'Gezicht', '脸', ['body', 'skin', 'eyes', 'eyeColor', 'brows', 'mouth', 'beard', 'extra']],
+  ['hair', 'Haar', '头发', ['hair', 'hairColor']],
+  ['clothes', 'Kleren', '衣服', ['top', 'topColor', 'outer', 'outerColor', 'bottom', 'bottomColor']],
+  ['shoes', 'Schoenen', '鞋子', ['shoes', 'shoeColor']],
+  ['extras', "Extra's", '配饰', ['hat', 'hatColor', 'glasses', 'neck', 'neckColor', 'earrings', 'piercing', 'aura']],
 ];
 const AV_GROUP = {
   skin: 'Huidskleur', eyes: 'Ogen', eyeColor: 'Kleur van je ogen', brows: 'Wenkbrauwen', mouth: 'Mond', beard: 'Baard en snor',
   extra: 'Sproeten en blos', hair: 'Kapsel', hairColor: 'Haarkleur', top: 'Bovenstuk', topColor: 'Kleur', outer: 'Jas',
   outerColor: 'Kleur van je jas', bottom: 'Broek of rok', bottomColor: 'Kleur', shoes: 'Schoenen', shoeColor: 'Kleur',
-  hat: 'Op je hoofd', hatColor: 'Kleur', glasses: 'Bril', earrings: 'Oorbellen', piercing: 'Piercing',
+  hat: 'Op je hoofd', hatColor: 'Kleur', glasses: 'Bril', earrings: 'Oorbellen', piercing: 'Op je neus',
   body: 'Figuur', neck: 'Rond je hals', neckColor: 'Kleur', aura: 'Rond je avatar',
+};
+const AV_GROUP_ZH = {
+  skin: '肤色', eyes: '眼睛', eyeColor: '眼睛颜色', brows: '眉毛', mouth: '嘴巴', beard: '胡子',
+  extra: '雀斑和腮红', hair: '发型', hairColor: '发色', top: '上衣', topColor: '颜色', outer: '外套',
+  outerColor: '外套颜色', bottom: '裤子或裙子', bottomColor: '颜色', shoes: '鞋子', shoeColor: '颜色',
+  hat: '头上', hatColor: '颜色', glasses: '眼镜', earrings: '耳饰', piercing: '鼻子上',
+  body: '身形', neck: '脖子上', neckColor: '颜色', aura: '光环',
 };
 // The part of the drawing each tile shows.
 const AV_CROP = {
@@ -2761,12 +2905,19 @@ const COLOR_NAMES = {
   blonde: 'blond', platinum: 'platinablond', auburn: 'roodbruin', ginger: 'rossig', hazel: 'hazelnoot',
   ruby: 'robijnrood',
 };
+const COLOR_NAMES_ZH = {
+  white: '白色', black: '黑色', navy: '藏青', maroon: '酒红', red: '红色', pink: '粉色', lilac: '淡紫', sky: '浅蓝',
+  green: '绿色', olive: '橄榄绿', mustard: '芥末黄', beige: '米色', gray: '灰色', cream: '奶油色', grey: '灰色',
+  blue: '蓝色', light: '浅色', indigo: '深蓝', chestnut: '栗色', dark: '深棕', brown: '棕色',
+  blonde: '金色', platinum: '铂金色', auburn: '赤褐色', ginger: '姜红色', hazel: '榛色', ruby: '宝石红',
+};
 // Long Dutch compounds in the small tiles break at the seam: Paarden-staart.
 const SOFT_HYPHENS = ['Paarden|staart', 'Konijnen|sloffen', 'Monster|sloffen', 'Draken|sloffen', 'Midden|scheiding', 'Zij|scheiding',
   'Mannen|knot', 'Vissers|hoedje', 'Hartjes|bril', 'Kop|telefoon', 'Body|warmer', 'Zonne|bril', 'Jogging|broek', 'Fantasie|kleuren', 'Gouden| sneakers'];
 const hyph = label => SOFT_HYPHENS.reduce((t, w) => t.replace(w.replace('|', ''), w.replace('|', '\u00AD')), esc(label));
-const colorName = (k, v) => k === 'skin' ? `huidskleur ${v.slice(1)}` : COLOR_NAMES[v] || v;
-const avShown = (k, c) => !((k === 'topColor' && ['chef', 'garden'].includes(c.top)) || (k === 'outerColor' && c.outer === 'none') ||
+const colorName = (k, v) => k === 'skin' ? T(`huidskleur ${v.slice(1)}`, `肤色 ${v.slice(1)}`) : (zhUI() ? COLOR_NAMES_ZH : COLOR_NAMES)[v] || v;
+const avLabel = (k, v) => Avatar.label(k, v, zhUI() ? 'zh' : 'nl');
+const avShown = (k, c) => !((k === 'topColor' && ['chef', 'garden', 'clown'].includes(c.top)) || (k === 'outerColor' && c.outer === 'none') ||
   (k === 'neckColor' && !['scarf', 'bowtie'].includes(c.neck)) ||
   (k === 'shoeColor' && !['sneakers', 'boots'].includes(c.shoes)) || (k === 'hatColor' && !['beanie', 'cap', 'bandana'].includes(c.hat)));
 
@@ -2776,52 +2927,54 @@ function openAvatarEditor() {
   let c = saved ? { ...saved } : { ...Avatar.DEFAULT }, tab = 'face';
   const need = (k, v) => Avatar.levelOf(k, v);
   const locked = (k, v) => need(k, v) > level && !(saved && saved[k] === v);
-  const lockNote = (k, v) => locked(k, v) ? `<span class="av-lock">${LOCK_ICON}Level ${need(k, v)}</span>` : '';
+  const lockNote = (k, v) => locked(k, v) ? `<span class="av-lock">${LOCK_ICON}${T('Level', '等级')} ${need(k, v)}</span>` : '';
+  const from = (k, v) => T(`vanaf level ${need(k, v)}`, `${need(k, v)} 级解锁`);
 
   function group(k) {
     if (!avShown(k, c)) return '';
     let body;
     if (k === 'extra') {
-      body = `<div class="av-tiles">${[['freckles', 'Sproeten'], ['blush', 'Blos']].map(([t, l]) => `
+      body = `<div class="av-tiles">${[['freckles', T('Sproeten', '雀斑')], ['blush', T('Blos', '腮红')]].map(([t, l]) => `
         <button type="button" class="av-tile" data-toggle="${t}" aria-pressed="${!!c[t]}">
           <span class="av-tile-pic">${Avatar.render({ ...c, [t]: true }, { view: '56 70 88 88' })}</span><span class="av-tile-label">${l}</span></button>`).join('')}</div>`;
     } else if (Avatar.COLORS[k]) {
       body = `<div class="swatches">${Object.entries(Avatar.COLORS[k]).map(([v, hexColor]) => `
         <button type="button" class="swatch${locked(k, v) ? ' is-locked' : ''}" data-k="${k}" data-v="${v}" style="--c:${hexColor}" aria-pressed="${c[k] === v}"
-          aria-label="${esc(colorName(k, v))}${locked(k, v) ? `, vanaf level ${need(k, v)}` : ''}" title="${esc(colorName(k, v))}${locked(k, v) ? ` · vanaf level ${need(k, v)}` : ''}" ${locked(k, v) ? 'disabled' : ''}>${locked(k, v) ? LOCK_ICON : ''}</button>`).join('')}</div>`;
+          aria-label="${esc(colorName(k, v))}${locked(k, v) ? `, ${from(k, v)}` : ''}" title="${esc(colorName(k, v))}${locked(k, v) ? ` · ${from(k, v)}` : ''}" ${locked(k, v) ? 'disabled' : ''}>${locked(k, v) ? LOCK_ICON : ''}</button>`).join('')}</div>`;
     } else {
-      body = `<div class="av-tiles">${Avatar.STYLES[k].map(([v, label]) => {
+      body = `<div class="av-tiles">${Avatar.STYLES[k].map(([v]) => {
+        const label = avLabel(k, v);
         const look = { ...c, [k]: v };
         if (k === 'hair') look.hat = 'none';
         if (k === 'top') look.outer = 'none';
         return `<button type="button" class="av-tile${locked(k, v) ? ' is-locked' : ''}" data-k="${k}" data-v="${v}" aria-pressed="${c[k] === v}" ${locked(k, v) ? 'disabled' : ''}
-          title="${esc(label)}${locked(k, v) ? ` · vanaf level ${need(k, v)}` : ''}">
+          title="${esc(label)}${locked(k, v) ? ` · ${from(k, v)}` : ''}">
           <span class="av-tile-pic">${Avatar.render(look, { view: AV_CROP[k] || 'tile' })}</span><span class="av-tile-label">${hyph(label)}</span>${lockNote(k, v)}</button>`;
       }).join('')}</div>`;
     }
-    return `<div class="av-group"><h3>${AV_GROUP[k]}</h3>${body}</div>`;
+    return `<div class="av-group"><h3>${(zhUI() ? AV_GROUP_ZH : AV_GROUP)[k]}</h3>${body}</div>`;
   }
 
   const d = modal.open(`
-    <h2 id="modal-title">${saved ? 'Je avatar aanpassen' : 'Maak je avatar'}</h2>
-    <p>Je bent level ${level}. Dingen met een slotje krijg je op een hoger level.</p>
+    <h2 id="modal-title">${saved ? T('Je avatar aanpassen', '修改你的头像') : T('Maak je avatar', '创建你的头像')}</h2>
+    <p>${T(`Je bent level ${level}. Dingen met een slotje krijg je op een hoger level.`, `你现在是 ${level} 级。带锁的东西升级后才能用。`)}</p>
     <div class="av-editor">
       <div class="av-preview" id="av-preview"></div>
       <div class="av-side">
-        <div class="chips av-tabs" role="tablist" aria-label="Onderdelen">${AV_TABS.map(([k, l]) => `<button type="button" class="chip" role="tab" data-av-tab="${k}">${l}</button>`).join('')}</div>
+        <div class="chips av-tabs" role="tablist" aria-label="${T('Onderdelen', '部分')}">${AV_TABS.map(([k, nl, zh]) => `<button type="button" class="chip" role="tab" data-av-tab="${k}">${T(nl, zh)}</button>`).join('')}</div>
         <div class="av-groups" id="av-groups"></div>
       </div>
     </div>
     <p class="form-error" id="av-err"></p>
     <div class="form-actions av-actions">
-      <button type="button" id="av-random">Willekeurig</button>
-      <span class="toolbar"><button type="button" data-close>Annuleren</button><button type="button" class="primary" id="av-save">Opslaan</button></span>
+      <button type="button" id="av-random">${T('Willekeurig', '随机')}</button>
+      <span class="toolbar"><button type="button" data-close>${T('Annuleren', '取消')}</button><button type="button" class="primary" id="av-save">${T('Opslaan', '保存')}</button></span>
     </div>`, d => {
     const groups = $('#av-groups', d);
     const draw = () => {
-      $('#av-preview', d).innerHTML = Avatar.render(c, { title: 'Je avatar' });
+      $('#av-preview', d).innerHTML = Avatar.render(c, { title: T('Je avatar', '你的头像') });
       const keep = groups.scrollTop;
-      groups.innerHTML = AV_TABS.find(t => t[0] === tab)[2].map(group).join('');
+      groups.innerHTML = AV_TABS.find(t => t[0] === tab)[3].map(group).join('');
       groups.scrollTop = keep;
       $$('[data-av-tab]', d).forEach(b => { b.classList.toggle('is-on', b.dataset.avTab === tab); b.setAttribute('aria-selected', b.dataset.avTab === tab); });
     };
@@ -2839,7 +2992,7 @@ function openAvatarEditor() {
       await rpc('save_my_avatar', { p_avatar: c });
       await refreshMe();
       modal.close();
-      toast('Je avatar is opgeslagen.');
+      toast(T('Je avatar is opgeslagen.', '头像已保存。'));
       renderShell();
     }).catch(e => { $('#av-err', d).textContent = e.message; }));
     draw();
@@ -2853,7 +3006,7 @@ function rewardTiles(avatar, level) {
   for (const [k, items] of Object.entries(Avatar.UNLOCKS)) {
     for (const [v, l] of Object.entries(items)) {
       if (k === 'hairColor') { if (seen.has(k)) continue; seen.add(k); }
-      const label = k === 'hairColor' ? 'Fantasiekleuren voor je haar' : Avatar.STYLES[k].find(x => x[0] === v)[1];
+      const label = k === 'hairColor' ? T('Fantasiekleuren voor je haar', '彩色头发') : avLabel(k, v);
       out.push({ k, v, l, label });
     }
   }
@@ -2864,22 +3017,52 @@ function rewardTiles(avatar, level) {
     const on = level >= r.l;
     return `<div class="reward ${on ? 'is-on' : 'is-locked'}">
       <span class="reward-pic">${Avatar.render(look, { view: AV_CROP[r.k] })}</span>
-      <span class="reward-lvl">${on ? '✓ ' : LOCK_ICON}Level ${r.l}</span><span class="reward-name">${hyph(r.label)}</span></div>`;
+      <span class="reward-lvl">${on ? '✓ ' : LOCK_ICON}${T('Level', '等级')} ${r.l}</span><span class="reward-name">${hyph(r.label)}</span></div>`;
   }).join('');
 }
 
-const fmtDate = iso => new Date(iso + 'T00:00').toLocaleDateString(LOCALE, { day: 'numeric', month: 'long', year: 'numeric' });
-const contractPeriod = c => c.starts_on ? (c.ends_on ? `${isoToDMY(c.starts_on)} – ${isoToDMY(c.ends_on)}` : `vanaf ${isoToDMY(c.starts_on)}`) : 'zonder datum';
+const fmtDate = iso => new Date(iso + 'T00:00').toLocaleDateString(loc(), { day: 'numeric', month: 'long', year: 'numeric' });
+const contractPeriod = c => c.starts_on ? (c.ends_on ? `${isoToDMY(c.starts_on)} – ${isoToDMY(c.ends_on)}` : T(`vanaf ${isoToDMY(c.starts_on)}`, `${isoToDMY(c.starts_on)} 起`)) : T('zonder datum', '无日期');
 function contractRows(list, manager) {
-  if (!list.length) return `<p class="empty">${manager ? 'Nog geen contracten.' : 'Je verantwoordelijke heeft nog geen contract toegevoegd.'}</p>`;
+  if (!list.length) return `<p class="empty">${manager ? 'Nog geen contracten.' : T('Je verantwoordelijke heeft nog geen contract toegevoegd.', '负责人还没有上传合同。')}</p>`;
   const today = toDateInput(now());
   return `<div class="rows">${list.map(c => {
-    const state = c.ends_on && c.ends_on < today ? '<span class="pill">Afgelopen</span>' : (!c.starts_on || c.starts_on <= today) ? '<span class="pill on">Loopt</span>' : '<span class="pill accent">Begint later</span>';
+    const state = c.ends_on && c.ends_on < today ? `<span class="pill">${T('Afgelopen', '已结束')}</span>` : (!c.starts_on || c.starts_on <= today) ? `<span class="pill on">${T('Loopt', '有效')}</span>` : `<span class="pill accent">${T('Begint later', '尚未开始')}</span>`;
     return `<div class="row">
       <div class="row-main"><span class="row-title">${esc(c.title)} ${state}</span><span class="row-sub">${contractPeriod(c)} · ${esc(c.file_name)} · ${fmtSize(c.size_bytes)}</span></div>
-      <div class="row-actions"><button class="sm${manager ? '' : ' primary'}" data-contract="${c.id}">Downloaden</button>${manager ? `<button class="sm danger" data-contract-rm="${c.id}" data-title="${esc(c.title)}">Verwijderen</button>` : ''}</div>
+      <div class="row-actions"><button class="sm${manager ? '' : ' primary'}" data-contract="${c.id}">${T('Downloaden', '下载')}</button>${manager ? `<button class="sm danger" data-contract-rm="${c.id}" data-title="${esc(c.title)}">Verwijderen</button>` : ''}</div>
     </div>`;
   }).join('')}</div>`;
+}
+
+// The language picker for staff (Profiel); it is kept on the server, so the
+// app opens in that language on every phone.
+const LANGS = [['nl', 'Nederlands', 'nl-BE'], ['zh', '中文', 'zh-Hans']];
+function langCard() {
+  return `<section class="card"><h2>${T('Taal', '语言')} <span class="muted small">· ${T('语言', 'Taal')}</span></h2>
+    <p class="muted small" style="margin-top:6px">${T('De taal van de app op al je toestellen. Je verantwoordelijke ziet alles in het Nederlands.', 'app 在你所有设备上的语言。负责人看到的是荷兰语。')}</p>
+    <div class="chips" role="group" aria-label="Taal · 语言" style="margin-top:12px">${LANGS.map(([k, l, a]) =>
+      `<button type="button" class="chip${lang() === k ? ' is-on' : ''}" data-my-lang="${k}" lang="${a}" aria-pressed="${lang() === k}">${l}</button>`).join('')}</div>
+  </section>`;
+}
+function bindLangCard(el) {
+  $$('[data-my-lang]', el).forEach(b => b.addEventListener('click', () => busy(b, async () => {
+    await rpc('save_my_language', { p_lang: b.dataset.myLang });
+    store.set(LANG_KEY, b.dataset.myLang);
+    S.me.lang = b.dataset.myLang;
+    renderShell();
+  }).catch(() => {})));
+}
+
+// How XP comes in, in words: by working for who clocks in, by the day for the rest.
+function xpHow(xp) {
+  const per = S.settings.daily_xp || 0;
+  const bonus = T('Je verantwoordelijke kan je ook bonus-XP geven.', '负责人也可以给你奖励 XP。');
+  return canClock()
+    ? `<ul><li>${T('<strong>10 XP</strong> per uur dat je werkt', '每工作一小时 <strong>10 XP</strong>')}</li><li>${T('<strong>+5 XP</strong> als je op tijd begint aan je shift', '准时开始班次 <strong>+5 XP</strong>')}</li><li>${T('<strong>+5 XP</strong> als je blijft tot je shift gedaan is', '待到班次结束 <strong>+5 XP</strong>')}</li></ul>
+      <p class="muted small">${T('XP komt uit je urenkaart. Een aanpassing telt mee zodra je verantwoordelijke ze goedkeurt.', 'XP 来自你的工时表。修改经负责人审核通过后才计入。')} ${bonus}</p>`
+    : `<ul><li>${T(`<strong>+${per} XP</strong> elke dag, gewoon omdat je bij het team bent`, `每天 <strong>+${per} XP</strong>，因为你是团队的一员`)}</li></ul>
+      <p class="muted small">${bonus}${xp && xp.daily ? ` ${T(`Tot nu toe ${xp.daily} XP van de dagen.`, `目前每日 XP 共 ${xp.daily}。`)}` : ''}</p>`;
 }
 
 async function viewProfile(el, current) {
@@ -2887,60 +3070,66 @@ async function viewProfile(el, current) {
   if (!current()) return;
   const xp = r.xp, lvl = xp.level, w = r.work;
   S.me.avatar = r.avatar; S.me.xp = xp;
-  const next = Avatar.rewardsAt(lvl + 1);
+  const next = Avatar.rewardsAt(lvl + 1, zhUI() ? 'zh' : 'nl');
+  const per = S.settings.daily_xp || 0;
+  const staffLang = !isManager() && !isDriver();
+  const stats = canClock() || isManager() ? `
+          <div class="stat"><span class="v">${fmt.hours(xp.minutes)}</span><span class="k">${T('Uren gewerkt', '工作小时')}</span></div>
+          <div class="stat"><span class="v">${xp.entries}</span><span class="k">${T('Keer gewerkt', '上班次数')}</span></div>
+          <div class="stat"><span class="v">${xp.entries ? Math.round(xp.on_time / xp.entries * 100) + '%' : '—'}</span><span class="k">${T('Op tijd begonnen', '准时开始')}</span></div>` : `
+          <div class="stat good"><span class="v">+${per}</span><span class="k">${T('XP per dag', '每天 XP')}</span></div>
+          <div class="stat"><span class="v">${num(xp.daily || 0, 0)}</span><span class="k">${T('XP van de dagen', '每日 XP 合计')}</span></div>
+          <div class="stat"><span class="v">${num(xp.bonus || 0, 0)}</span><span class="k">${T('Bonus-XP', '奖励 XP')}</span></div>`;
   el.innerHTML = `
-    <div class="view-head"><div><h1>Mijn profiel</h1><p>Je avatar, je level, je gegevens en je contracten.</p></div></div>
+    <div class="view-head"><div><h1>${T('Mijn profiel', '我的资料')}</h1><p>${T('Je avatar, je level, je gegevens en je contracten.', '你的头像、等级、个人信息和合同。')}</p></div></div>
     <section class="card profile-hero">
-      <button type="button" class="hero-pic" id="edit-avatar-pic" aria-label="${r.avatar ? 'Avatar aanpassen' : 'Maak je avatar'}">
-        ${r.avatar ? Avatar.render(r.avatar, { title: 'Je avatar' }) : `<span class="hero-empty">${Avatar.render(Avatar.DEFAULT)}</span><span class="hero-make">Maak je avatar</span>`}</button>
+      <button type="button" class="hero-pic" id="edit-avatar-pic" aria-label="${r.avatar ? T('Avatar aanpassen', '修改头像') : T('Maak je avatar', '创建你的头像')}">
+        ${r.avatar ? Avatar.render(r.avatar, { title: T('Je avatar', '你的头像') }) : `<span class="hero-empty">${Avatar.render(Avatar.DEFAULT)}</span><span class="hero-make">${T('Maak je avatar', '创建你的头像')}</span>`}</button>
       <div class="hero-main">
         <p class="section-label">${esc(S.me.name)}</p>
-        <h2 class="hero-level">Level ${lvl} <span>· ${esc(levelTitle(lvl))}</span></h2>
+        <h2 class="hero-level">${T('Level', '等级')} ${lvl} <span>· ${esc(levelTitle(lvl))}</span></h2>
         ${xpBar(xp)}
-        ${xp.bonus ? `<p class="muted small">Waarvan ${num(xp.bonus, 0)} bonus-XP van je verantwoordelijke.</p>` : ''}
-        ${next.length ? `<p class="small">Op level ${lvl + 1} krijg je: <strong>${next.map(esc).join(', ')}</strong></p>` : ''}
-        <div class="stats stats-3">
-          <div class="stat"><span class="v">${fmt.hours(xp.minutes)}</span><span class="k">Uren gewerkt</span></div>
-          <div class="stat"><span class="v">${xp.entries}</span><span class="k">Keer gewerkt</span></div>
-          <div class="stat"><span class="v">${xp.entries ? Math.round(xp.on_time / xp.entries * 100) + '%' : '—'}</span><span class="k">Op tijd begonnen</span></div>
+        ${xp.bonus && (canClock() || isManager()) ? `<p class="muted small">${T(`Waarvan ${num(xp.bonus, 0)} bonus-XP van je verantwoordelijke.`, `其中 ${num(xp.bonus, 0)} 是负责人给的奖励 XP。`)}</p>` : ''}
+        ${next.length ? `<p class="small">${T(`Op level ${lvl + 1} krijg je:`, `升到 ${lvl + 1} 级可以得到：`)} <strong>${next.map(esc).join(T(', ', '、'))}</strong></p>` : ''}
+        <div class="stats stats-3">${stats}
         </div>
-        <div class="toolbar"><button class="primary" id="edit-avatar">${r.avatar ? 'Avatar aanpassen' : 'Maak je avatar'}</button></div>
-        <details class="xp-how"><summary>Hoe verdien je XP?</summary>
-          <ul><li><strong>10 XP</strong> per uur dat je werkt</li><li><strong>+5 XP</strong> als je op tijd begint aan je shift</li><li><strong>+5 XP</strong> als je blijft tot je shift gedaan is</li></ul>
-          <p class="muted small">XP komt uit je urenkaart. Een aanpassing telt mee zodra je verantwoordelijke ze goedkeurt.</p></details>
+        <div class="toolbar"><button class="primary" id="edit-avatar">${r.avatar ? T('Avatar aanpassen', '修改头像') : T('Maak je avatar', '创建你的头像')}</button></div>
+        <details class="xp-how"><summary>${T('Hoe verdien je XP?', '怎么获得 XP？')}</summary>${xpHow(xp)}</details>
       </div>
     </section>
-    <section class="card"><div class="card-head"><h2>Beloningen</h2><span class="muted small">Nieuwe dingen voor je avatar, per level</span></div>
+    <section class="card"><div class="card-head"><h2>${T('Beloningen', '奖励')}</h2><span class="muted small">${T('Nieuwe dingen voor je avatar, per level', '每升一级，头像就有新东西')}</span></div>
       <div class="rewards">${rewardTiles(r.avatar, lvl)}</div></section>
     <div class="grid-2">
-      <section class="card"><h2>Mijn gegevens</h2>
-        <p class="muted small" style="margin-top:6px">Alleen jij en je verantwoordelijke zien dit. Ze zijn nodig voor je contract en je loonfiche.</p>
+      <section class="card"><h2>${T('Mijn gegevens', '我的信息')}</h2>
+        <p class="muted small" style="margin-top:6px">${T('Alleen jij en je verantwoordelijke zien dit. Ze zijn nodig voor je contract en je loonfiche.', '只有你和负责人能看到。合同和工资单需要这些信息。')}</p>
         <form id="pf-form" novalidate><div class="form-grid" style="margin-top:12px">${profileFields('pf', r.profile)}</div>
-          <p class="form-error" id="pf-err"></p><div class="form-actions"><button type="submit" class="primary">Gegevens opslaan</button></div></form>
+          <p class="form-error" id="pf-err"></p><div class="form-actions"><button type="submit" class="primary">${T('Gegevens opslaan', '保存信息')}</button></div></form>
       </section>
       <div class="stack">
-        <section class="card"><h2>Werk</h2>
+        ${staffLang ? langCard() : ''}
+        <section class="card"><h2>${T('Werk', '工作')}</h2>
           <dl class="kv">
-            <dt>Rol</dt><dd>${w.role === 'manager' ? 'Verantwoordelijke' : w.role === 'driver' ? 'Chauffeur' : 'Medewerker'}</dd>
-            <dt>Statuut</dt><dd>${w.contract_type ? CONTRACTS[w.contract_type] : '—'}</dd>
-            <dt>Uurloon</dt><dd>${w.hourly_rate != null ? fmt.money(w.hourly_rate) : '—'}</dd>
-            <dt>In dienst sinds</dt><dd>${w.start_date ? fmtDate(w.start_date) : '—'}</dd>
-            <dt>Werknemersnummer</dt><dd>${w.payroll_id ? esc(w.payroll_id) : '—'}</dd>
+            <dt>${T('Rol', '角色')}</dt><dd>${w.role === 'manager' ? 'Verantwoordelijke' : w.role === 'driver' ? 'Chauffeur' : T('Medewerker', '员工')}</dd>
+            <dt>${T('Statuut', '身份')}</dt><dd>${w.contract_type ? T(CONTRACTS[w.contract_type], CONTRACTS_ZH[w.contract_type]) : '—'}</dd>
+            <dt>${T('Uurloon', '时薪')}</dt><dd>${w.hourly_rate != null ? fmt.money(w.hourly_rate) : '—'}</dd>
+            <dt>${T('In dienst sinds', '入职日期')}</dt><dd>${w.start_date ? fmtDate(w.start_date) : '—'}</dd>
+            <dt>${T('Werknemersnummer', '员工编号')}</dt><dd>${w.payroll_id ? esc(w.payroll_id) : '—'}</dd>
+            ${w.role === 'staff' ? `<dt>${T('Inklokken', '打卡')}</dt><dd>${w.can_clock ? T('Ja, bij Klok', '是，在“打卡”页') : T('Nee, je krijgt XP per dag', '不用，每天自动得 XP')}</dd>` : ''}
           </dl>
-          <p class="muted small" style="margin-top:10px">Klopt hier iets niet? Vraag het aan je verantwoordelijke.</p></section>
-        <section class="card"><h2>Contracten</h2>${contractRows(r.contracts, false)}</section>
-        <section class="card"><h2>Pincode wijzigen</h2>
+          <p class="muted small" style="margin-top:10px">${T('Klopt hier iets niet? Vraag het aan je verantwoordelijke.', '有不对的地方？请问负责人。')}</p></section>
+        <section class="card"><h2>${T('Contracten', '合同')}</h2>${contractRows(r.contracts, false)}</section>
+        <section class="card"><h2>${T('Pincode wijzigen', '修改密码')}</h2>
           <form id="pin-form" novalidate><div class="form-grid" style="margin-top:12px">
-            <div class="field"><label for="pin-old">Huidige pincode</label><input id="pin-old" class="pin-input" type="password" inputmode="numeric" pattern="[0-9]*" maxlength="8" autocomplete="current-password"></div>
-            <div class="field"><label for="pin-new">Nieuwe pincode</label><input id="pin-new" class="pin-input" type="password" inputmode="numeric" pattern="[0-9]*" maxlength="8" autocomplete="new-password"></div>
-            <div class="field"><label for="pin-new2">Herhaal de nieuwe</label><input id="pin-new2" class="pin-input" type="password" inputmode="numeric" pattern="[0-9]*" maxlength="8" autocomplete="new-password"></div>
-          </div><p class="form-error" id="pin-err"></p><div class="form-actions"><button type="submit" class="primary">Pincode wijzigen</button></div></form>
+            <div class="field"><label for="pin-old">${T('Huidige pincode', '当前密码')}</label><input id="pin-old" class="pin-input" type="password" inputmode="numeric" pattern="[0-9]*" maxlength="8" autocomplete="current-password"></div>
+            <div class="field"><label for="pin-new">${T('Nieuwe pincode', '新密码')}</label><input id="pin-new" class="pin-input" type="password" inputmode="numeric" pattern="[0-9]*" maxlength="8" autocomplete="new-password"></div>
+            <div class="field"><label for="pin-new2">${T('Herhaal de nieuwe', '再输一次新密码')}</label><input id="pin-new2" class="pin-input" type="password" inputmode="numeric" pattern="[0-9]*" maxlength="8" autocomplete="new-password"></div>
+          </div><p class="form-error" id="pin-err"></p><div class="form-actions"><button type="submit" class="primary">${T('Pincode wijzigen', '修改密码')}</button></div></form>
         </section>
-        <section class="card"><h2>Weergave</h2>
-          <p class="muted small" style="margin-top:6px">Alleen op dit toestel.</p>
-          <div class="chips" role="group" aria-label="Thema" style="margin-top:12px">${THEMES.map(([k, l]) => `<button type="button" class="chip" data-theme-pick="${k}">${l}</button>`).join('')}</div>
+        <section class="card"><h2>${T('Weergave', '显示')}</h2>
+          <p class="muted small" style="margin-top:6px">${T('Alleen op dit toestel.', '只在这台设备上。')}</p>
+          <div class="chips" role="group" aria-label="${T('Thema', '主题')}" style="margin-top:12px">${THEMES.map(([k, nl, zh]) => `<button type="button" class="chip" data-theme-pick="${k}">${T(nl, zh)}</button>`).join('')}</div>
         </section>
-        <button type="button" class="signout-wide" id="pf-signout">${ICONS.signout}<span>Afmelden</span></button>
+        <button type="button" class="signout-wide" id="pf-signout">${ICONS.signout}<span>${T('Afmelden', '退出登录')}</span></button>
       </div>
     </div>`;
   $('#edit-avatar', el).addEventListener('click', () => openAvatarEditor());
@@ -2948,6 +3137,7 @@ async function viewProfile(el, current) {
   $('#pf-signout', el).addEventListener('click', askSignOut);
   $$('[data-theme-pick]', el).forEach(b => b.addEventListener('click', () => setTheme(b.dataset.themePick)));
   applyTheme();
+  bindLangCard(el);
   $$('[data-contract]', el).forEach(b => b.addEventListener('click', () => downloadContract(b.dataset.contract, b)));
   const pf = $('#pf-form', el);
   pf.addEventListener('submit', async ev => {
@@ -2957,7 +3147,7 @@ async function viewProfile(el, current) {
     if (r2.error) { err.textContent = r2.error; r2.field.focus(); return; }
     await busy($('button[type=submit]', pf), async () => {
       await rpc('save_my_profile', { p_profile: r2.values });
-      toast('Je gegevens zijn opgeslagen.');
+      toast(T('Je gegevens zijn opgeslagen.', '信息已保存。'));
       renderView();
     }).catch(e => { err.textContent = e.message; });
   });
@@ -2966,13 +3156,13 @@ async function viewProfile(el, current) {
     ev.preventDefault();
     const err = $('#pin-err', el); err.textContent = '';
     const old = $('#pin-old', pin).value.trim(), nw = $('#pin-new', pin).value.trim();
-    if (!old) { err.textContent = 'Vul je huidige pincode in.'; return; }
-    if (!/^\d{4,8}$/.test(nw)) { err.textContent = 'De nieuwe pincode moet 4 tot 8 cijfers hebben.'; return; }
-    if (nw !== $('#pin-new2', pin).value.trim()) { err.textContent = 'De twee nieuwe pincodes zijn niet gelijk.'; return; }
+    if (!old) { err.textContent = T('Vul je huidige pincode in.', '请输入当前密码。'); return; }
+    if (!/^\d{4,8}$/.test(nw)) { err.textContent = T('De nieuwe pincode moet 4 tot 8 cijfers hebben.', '新密码必须是 4 到 8 位数字。'); return; }
+    if (nw !== $('#pin-new2', pin).value.trim()) { err.textContent = T('De twee nieuwe pincodes zijn niet gelijk.', '两次输入的新密码不一样。'); return; }
     await busy($('button[type=submit]', pin), async () => {
       await rpc('change_my_pin', { p_old: old, p_new: nw });
       pin.reset();
-      toast('Je pincode is gewijzigd. Andere toestellen zijn afgemeld.');
+      toast(T('Je pincode is gewijzigd. Andere toestellen zijn afgemeld.', '密码已修改。其他设备已退出登录。'));
     }).catch(e => { err.textContent = e.message; });
   });
 }
@@ -2984,6 +3174,7 @@ async function viewRanking(el, current) {
   if (!current()) return;
   const mode = S.rankMode || 'all', key = mode === 'month' ? 'month_xp' : 'xp';
   const ranked = [...list].sort((a, b) => b[key] - a[key] || b.xp - a.xp || a.name.localeCompare(b.name, 'nl'));
+  const you = T('jij', '你');
   let rank = 0, prev = null;
   ranked.forEach((p, i) => { if (p[key] !== prev) { rank = i + 1; prev = p[key]; } p.rank = rank; });
   const me = ranked.find(p => p.me), month = fmt.monthName(now());
@@ -2993,27 +3184,28 @@ async function viewRanking(el, current) {
   const spot = (p, place) => p ? `
     <div class="podium-spot place-${place}${p.me ? ' is-me' : ''}">
       <div class="podium-pic">${figure(p)}</div>
-      <div class="podium-name">${esc(p.name)}${p.me ? ' <span class="pill accent">jij</span>' : ''}</div>
+      <div class="podium-name">${esc(p.name)}${p.me ? ` <span class="pill accent">${you}</span>` : ''}</div>
       <div class="podium-meta">${levelPill(p)} <span class="mono">${p[key]} XP</span></div>
       <div class="podium-step"><span>${p.rank}</span></div>
     </div>` : '<div class="podium-spot is-empty"></div>';
   el.innerHTML = `
     <div class="view-head">
-      <div><h1>Ranglijst</h1><p>Wie van het team heeft het hoogste level? XP verdien je met werken: 10 per uur, +5 als je op tijd begint en +5 als je blijft tot het einde.</p></div>
-      <div class="chips" role="group" aria-label="Periode">
-        <button type="button" class="chip${mode === 'all' ? ' is-on' : ''}" data-rank-mode="all" aria-pressed="${mode === 'all'}">Altijd</button>
-        <button type="button" class="chip${mode === 'month' ? ' is-on' : ''}" data-rank-mode="month" aria-pressed="${mode === 'month'}">Deze maand</button>
+      <div><h1>${T('Ranglijst', '排行榜')}</h1><p>${T(`Wie van het team heeft het hoogste level? XP verdien je met werken: 10 per uur, +5 als je op tijd begint en +5 als je blijft tot het einde. Wie niet inklokt, krijgt ${S.settings.daily_xp || 0} XP per dag.`,
+        `团队里谁的等级最高？工作就能得 XP：每小时 10，准时开始 +5，待到结束 +5。不用打卡的人每天得 ${S.settings.daily_xp || 0} XP。`)}</p></div>
+      <div class="chips" role="group" aria-label="${T('Periode', '时间')}">
+        <button type="button" class="chip${mode === 'all' ? ' is-on' : ''}" data-rank-mode="all" aria-pressed="${mode === 'all'}">${T('Altijd', '全部')}</button>
+        <button type="button" class="chip${mode === 'month' ? ' is-on' : ''}" data-rank-mode="month" aria-pressed="${mode === 'month'}">${T('Deze maand', '本月')}</button>
       </div>
     </div>
-    ${me ? `<p class="hint info">Jij staat <strong>${me.rank}e</strong> van ${ranked.length}${mode === 'month' ? ` in ${month}` : ''}, met ${me[key]} XP.${above && above[key] > me[key] ? ` Nog ${above[key] - me[key] + 1} XP om ${esc(above.name)} in te halen.` : ''}</p>` : ''}
-    ${anyXp ? `<section class="card podium" aria-label="Top drie">${spot(ranked[1], 2)}${spot(ranked[0], 1)}${spot(ranked[2], 3)}</section>`
-      : `<p class="empty">${mode === 'month' ? `Nog niemand heeft XP in ${month}. Wie als eerste werkt, staat bovenaan.` : 'Nog niemand heeft XP. Wie als eerste werkt, staat bovenaan.'}</p>`}
+    ${me ? `<p class="hint info">${T(`Jij staat <strong>${me.rank}e</strong> van ${ranked.length}${mode === 'month' ? ` in ${month}` : ''}, met ${me[key]} XP.`, `你${mode === 'month' ? `在${month}` : ''}排第 <strong>${me.rank}</strong>（共 ${ranked.length} 人），有 ${me[key]} XP。`)}${above && above[key] > me[key] ? T(` Nog ${above[key] - me[key] + 1} XP om ${esc(above.name)} in te halen.`, `再得 ${above[key] - me[key] + 1} XP 就能超过 ${esc(above.name)}。`) : ''}</p>` : ''}
+    ${anyXp ? `<section class="card podium" aria-label="${T('Top drie', '前三名')}">${spot(ranked[1], 2)}${spot(ranked[0], 1)}${spot(ranked[2], 3)}</section>`
+      : `<p class="empty">${mode === 'month' ? T(`Nog niemand heeft XP in ${month}. Wie als eerste werkt, staat bovenaan.`, `${month}还没有人有 XP。先上班的人排第一。`) : T('Nog niemand heeft XP. Wie als eerste werkt, staat bovenaan.', '还没有人有 XP。先上班的人排第一。')}</p>`}
     <section class="card">
-      <div class="card-head"><h2>${mode === 'month' ? `XP in ${month}` : 'Iedereen'}</h2><span class="muted small">${plural(ranked.length, 'persoon', 'personen')}</span></div>
+      <div class="card-head"><h2>${mode === 'month' ? T(`XP in ${month}`, `${month}的 XP`) : T('Iedereen', '所有人')}</h2><span class="muted small">${T(plural(ranked.length, 'persoon', 'personen'), `${ranked.length} 人`)}</span></div>
       <div class="rows rank-rows">${ranked.map(p => `
         <div class="row rank-row${p.me ? ' mine' : ''}">
           <div class="person"><span class="rank-num">${p.rank}</span>${personPic(p, 'lg')}
-            <div class="row-main"><span class="row-title">${esc(p.name)}${p.me ? ' <span class="pill accent">jij</span>' : ''}</span>
+            <div class="row-main"><span class="row-title">${esc(p.name)}${p.me ? ` <span class="pill accent">${you}</span>` : ''}</span>
               <span class="row-sub">${levelPill(p)} ${esc(levelTitle(p.level))}</span></div></div>
           <span class="rank-xp mono">${p[key]} XP</span>
         </div>`).join('')}</div>
@@ -3807,6 +3999,10 @@ async function viewTeam(el, current) {
           <div class="field"><label for="st-cur">Valutateken</label><input id="st-cur" maxlength="4" value="${esc(st.currency)}"></div>
           <div class="field wide"><label class="check"><input type="checkbox" id="st-req" ${st.require_shift ? 'checked' : ''}> Personeel kan alleen inklokken tijdens een shift waarvoor het ingepland is</label>
             <span class="help">Wie werkte zonder shift, voegt de uren toe bij Mijn uren en jij keurt ze goed. Verantwoordelijken kunnen altijd inklokken.</span></div>
+          <div class="field wide"><label id="st-who-label">Wie klokt in</label>
+            <div class="days" role="group" aria-labelledby="st-who-label">${Object.entries(CONTRACT_SHORT).map(([k, l]) => `<label><input type="checkbox" data-clock-type="${k}" ${(st.clock_types || []).includes(k) ? 'checked' : ''}><span>${l}</span></label>`).join('')}</div>
+            <span class="help">Wie aangevinkt is, ziet de klok. De anderen niet: zij krijgen elke dag XP. Verantwoordelijken, chauffeurs en wie nog geen statuut heeft, klokken altijd in.</span></div>
+          <div class="field"><label for="st-dxp">XP per dag voor wie niet inklokt</label><input id="st-dxp" type="number" inputmode="numeric" min="0" max="500" step="5" value="${st.daily_xp ?? 50}"></div>
           <div class="field"><label for="st-early">Inklokken kan vanaf</label><select id="st-early">${[0, 5, 10, 15, 30, 60].map(m => `<option value="${m}" ${m === st.clock_in_early_minutes ? 'selected' : ''}>${m ? `${m} minuten voor de shift` : 'het begin van de shift'}</option>`).join('')}${[0, 5, 10, 15, 30, 60].includes(st.clock_in_early_minutes) ? '' : `<option value="${st.clock_in_early_minutes}" selected>${st.clock_in_early_minutes} minuten voor de shift</option>`}</select></div>
           <div class="field wide"><label>Tijdzone</label>
             <div class="copybox"><code>${esc(st.timezone || 'Niet ingesteld')}</code>${deviceTz && deviceTz !== st.timezone ? `<button type="button" class="sm" id="st-tz">${esc(deviceTz)} gebruiken</button>` : ''}</div>
@@ -3871,6 +4067,8 @@ async function viewTeam(el, current) {
         p_grace_minutes: Number($('#st-grace', sf).value), p_currency: $('#st-cur', sf).value,
       });
       await rpc('mgr_save_clock_rules', { p_require_shift: $('#st-req', sf).checked, p_early_minutes: Number($('#st-early', sf).value) });
+      await rpc('mgr_save_clock_who', { p_types: $$('[data-clock-type]', sf).filter(b => b.checked).map(b => b.dataset.clockType),
+        p_daily_xp: Number($('#st-dxp', sf).value) });
       await refreshMe();
       toast('Instellingen opgeslagen.');
       renderShell();
@@ -3986,10 +4184,14 @@ async function viewMember(el, current) {
             <div class="field"><label for="pm-rate">Uurloon (€)</label><input id="pm-rate" type="number" min="0" step="0.01" inputmode="decimal" value="${p.hourly_rate ?? ''}"></div>
             <div class="field"><label for="pm-pay">Betaling</label><select id="pm-pay">${payOptions(p.pay_method)}</select>
               <span class="help">Staat ook in het familie-overzicht. Cash in het rood.</span></div>
-            <div class="field"><label for="pm-type">Statuut</label><select id="pm-type">${contractOptions(p.contract_type)}</select></div>
+            <div class="field"><label for="pm-type">Statuut</label><select id="pm-type">${contractOptions(p.contract_type)}</select>
+              ${driver ? '' : `<span class="help">${p.can_clock ? `${esc(first)} klokt in.` : `${esc(first)} klokt niet in en krijgt ${S.settings.daily_xp || 0} XP per dag.`} Wie inklokt, kies je bij <a href="#team">Team → Instellingen</a>.</span>`}</div>
             <div class="field"><label for="pm-pid">Werknemersnummer (Securex)</label><input id="pm-pid" maxlength="30" autocomplete="off" value="${esc(p.payroll_id || '')}"></div>
             <div class="field"><label for="pm-start">In dienst sinds</label><input id="pm-start" data-k="start_date" inputmode="numeric" placeholder="dd/mm/jjjj" maxlength="10" value="${esc(isoToDMY(pr.start_date))}"></div>
             <div class="field"><label for="pm-role">Rol</label><select id="pm-role">${roleOptions(p.role)}</select></div>
+            <div class="field"><label for="pm-lang">Taal van de app</label><select id="pm-lang">${[['', 'Zoals de telefoon'], ['nl', 'Nederlands'], ['zh', '中文 (Chinees)']].map(([k, l]) =>
+              `<option value="${k}" ${(p.lang || '') === k ? 'selected' : ''}>${l}</option>`).join('')}</select>
+              <span class="help">Wat ${esc(first)} ziet: klok, shiften, uren, profiel. Jouw schermen blijven Nederlands.</span></div>
             <div class="field"><label for="pm-bonus">Bonus-XP</label><input id="pm-bonus" type="number" min="0" max="100000" step="1" inputmode="numeric" value="${p.xp_bonus || 0}">
               <span class="help">XP die jij geeft, bovenop het werk. Telt voor het level, niet voor de uren of het loon. Level 20 = ${num(xpForLevel(20), 0)} XP.</span></div>
             <div class="field wide"><label class="check"><input type="checkbox" id="pm-active" ${p.active ? 'checked' : ''} ${self ? 'disabled' : ''}> Actief</label>
@@ -4101,6 +4303,8 @@ async function viewMember(el, current) {
       if (bonus !== (p.xp_bonus || 0)) await rpc('mgr_set_xp_bonus', { p_id: p.id, p_bonus: bonus });
       const pay = $('#pm-pay', pm).value || null;
       if (pay !== (p.pay_method || null)) await rpc('mgr_set_pay_method', { p_id: p.id, p_method: pay });
+      const lng = $('#pm-lang', pm).value || null;
+      if (lng !== (p.lang || null)) await rpc('mgr_set_language', { p_id: p.id, p_lang: lng });
       toast(pin ? `Opgeslagen. Nieuwe pincode: ${pin}` : 'Opgeslagen.');
       await loadStaff(true);
       if (self) { await refreshMe(); renderShell(); } else refreshTabs();
@@ -4356,12 +4560,7 @@ function contractText(mins) {
 
 // A family account sees one simple page per month: the open shifts, who works
 // which day, and per person the hours, the hourly rate and whether they're
-// paid in cash or registered. That page and the sign-in screen read in Dutch
-// or Chinese; the rest of the app is Dutch.
-const LANG_KEY = 'prikklok.lang';
-const lang = () => store.get(LANG_KEY) === 'zh' ? 'zh' : 'nl';
-const L = (nl, zh) => lang() === 'zh' ? zh : nl;
-const langAttr = () => lang() === 'zh' ? 'zh-Hans' : 'nl-BE';
+// paid in cash or registered. It reads in Dutch or Chinese, like the staff screens.
 const fam = {
   locale: () => lang() === 'zh' ? 'zh-CN' : LOCALE,
   month: d => new Date(d).toLocaleDateString(fam.locale(), { month: 'long', year: 'numeric' }),
@@ -4439,8 +4638,6 @@ function bindFamilyHead(el, m) {
   startPolling(5 * 60000);
 }
 const famSignOut = () => isViewer() ? `<button type="button" class="signout-wide" id="fam-signout">${ICONS.signout}<span>${L('Afmelden', '退出登录')}</span></button>` : '';
-
-const DAY_NAMES_ZH = ['星期日', '星期一', '星期二', '星期三', '星期四', '星期五', '星期六'];
 
 // A fixed worker's weekly hours in words: "elke dag behalve dinsdag · 11:30 – 14:30 en 17:00 – 22:30".
 function fixedText(list, t = nl => nl) {

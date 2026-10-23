@@ -29,7 +29,12 @@ create table public.settings (
   site_lng          double precision check (site_lng between -180 and 180),
   site_radius_m     int not null default 150 check (site_radius_m between 25 and 2000),
   -- also keep the driver's route by GPS (only while the app is open on his phone); off, the round comes from MATO Info
-  track_route       boolean not null default false
+  track_route       boolean not null default false,
+  -- the statuten that clock in; managers, drivers and people without a statuut always can
+  clock_types       text[] not null default '{student}' check (clock_types <@ array['student', 'flexi', 'extra', 'vast']),
+  -- who does not clock in earns daily_xp a day, from daily_xp_from on
+  daily_xp          int not null default 50 check (daily_xp between 0 and 500),
+  daily_xp_from     date not null default current_date
 );
 insert into public.settings (id) values (1);
 
@@ -70,7 +75,8 @@ create table public.staff (
   -- a driver (the app calls its role 'driver'): no schedule; clocks in and out at the
   -- restaurant, and while clocked in the app keeps the route (route_points)
   driver          boolean not null default false,
-  mato_name       text check (length(mato_name) <= 60) -- the name a driver fills under in MATO Info; empty = the first name
+  mato_name       text check (length(mato_name) <= 60), -- the name a driver fills under in MATO Info; empty = the first name
+  lang            text check (lang in ('nl', 'zh')) -- the app's language for this person; empty = what the phone chose
 );
 create unique index staff_name_key on public.staff (lower(name));
 
@@ -427,7 +433,8 @@ begin
   v := app_private.current_account(p_token);
   return json_build_object(
     'me', json_build_object('id', v.id, 'name', v.name, 'role', app_private.role_of(v), 'avatar', v.avatar,
-                            'xp', app_private.xp_json(v.id)),
+                            'xp', app_private.xp_json(v.id), 'can_clock', not v.view_only and app_private.can_clock(v),
+                            'lang', v.lang),
     'settings', (select json_build_object(
         'business_name', business_name, 'drop_cutoff_hours', drop_cutoff_hours,
         'grace_minutes', grace_minutes, 'currency', currency, 'timezone', timezone,
@@ -436,7 +443,8 @@ begin
         'site', case when v.driver or v.role = 'manager'
                 then json_build_object('lat', site_lat, 'lng', site_lng, 'radius_m', site_radius_m) end,
         'has_drivers', v.role = 'manager' and exists (select 1 from public.staff where driver and active),
-        'track_route', track_route)
+        'track_route', track_route, 'daily_xp', daily_xp,
+        'clock_types', case when v.role = 'manager' then clock_types end)
       from public.settings where id = 1),
     'open_entry', (select json_build_object('id', e.id, 'clock_in', e.clock_in, 'shift', app_private.shift_json(e.shift_id))
       from public.time_entries e where e.staff_id = v.id and e.clock_out is null and e.deleted_at is null),
@@ -461,6 +469,9 @@ begin
   v := app_private.current_staff(p_token);
   if v.driver then
     raise exception using message = 'Drivers clock in at the restaurant, with their location.', errcode = 'P0001';
+  end if;
+  if not app_private.can_clock(v) then
+    raise exception using message = 'Clocking in is off for you. Ask your manager.', errcode = 'P0001';
   end if;
   if exists (select 1 from public.time_entries where staff_id = v.id and clock_out is null) then
     raise exception using message = 'You''re already checked in.', errcode = 'P0001';
@@ -1626,7 +1637,29 @@ language sql immutable set search_path = public as $$
   select greatest(1, floor((sqrt(9 + 4 * greatest(coalesce(p_xp, 0), 0) / 12.5) - 1) / 2))::int
 $$;
 
--- XP: 10 per hour worked, +5 for starting a shift on time, +5 for staying until it ends.
+-- Who clocks in (Team → Instellingen): managers, drivers, people without a
+-- statuut, and the statuten ticked there (students by default).
+create function app_private.can_clock(p public.staff) returns boolean
+language sql stable set search_path = public as $$
+  select p.role = 'manager' or p.driver or p.contract_type is null
+      or exists (select 1 from public.settings where id = 1 and p.contract_type = any(clock_types))
+$$;
+
+-- Who does not clock in earns settings.daily_xp every day: from daily_xp_from,
+-- or the day the account was made, or p_since if later, up to today.
+create function app_private.daily_xp(p_staff uuid, p_since timestamptz) returns int
+language sql stable set search_path = public as $$
+  select coalesce((
+    select greatest(0, (now() at time zone st.tz)::date
+                       - greatest(st.daily_xp_from, (s.created_at at time zone st.tz)::date,
+                                  coalesce((p_since at time zone st.tz)::date, st.daily_xp_from)) + 1) * st.daily_xp
+      from public.staff s,
+           (select coalesce(timezone, 'UTC') as tz, daily_xp, daily_xp_from from public.settings where id = 1) st
+     where s.id = p_staff and s.active and not s.view_only and not app_private.can_clock(s)), 0)::int
+$$;
+
+-- XP: 10 per hour worked, +5 for starting a shift on time, +5 for staying until
+-- it ends; for who does not clock in, the daily XP; plus the manager's bonus.
 create function app_private.xp_json(p_staff uuid) returns json
 language sql stable set search_path = public as $$
   with g as (select make_interval(mins => grace_minutes) as grace from public.settings where id = 1),
@@ -1644,9 +1677,11 @@ language sql stable set search_path = public as $$
            coalesce(round(sum(mins)), 0)::int as minutes, count(*)::int as entries,
            (count(*) filter (where on_time))::int as on_time, (count(*) filter (where stayed))::int as stayed
       from e)
-  select json_build_object('xp', x.xp + b.bonus, 'level', app_private.level_for(x.xp + b.bonus), 'minutes', minutes,
-                           'entries', entries, 'on_time', on_time, 'stayed', stayed, 'bonus', b.bonus)
+  select json_build_object('xp', x.xp + b.bonus + d.daily, 'level', app_private.level_for(x.xp + b.bonus + d.daily),
+                           'minutes', minutes, 'entries', entries, 'on_time', on_time, 'stayed', stayed, 'bonus', b.bonus,
+                           'daily', d.daily)
     from x cross join (select coalesce((select xp_bonus from public.staff where id = p_staff), 0) as bonus) b
+    cross join (select app_private.daily_xp(p_staff, null) as daily) d
 $$;
 
 -- Checks an avatar before it is saved. Items above the person's level are refused,
@@ -1687,8 +1722,9 @@ begin
   v := app_private.current_staff(p_token);
   return json_build_object(
     'profile', app_private.profile_json(v),
-    'work', json_build_object('role', v.role, 'hourly_rate', v.hourly_rate, 'contract_type', v.contract_type,
-                              'payroll_id', v.payroll_id, 'start_date', v.start_date, 'created_at', v.created_at),
+    'work', json_build_object('role', app_private.role_of(v), 'hourly_rate', v.hourly_rate, 'contract_type', v.contract_type,
+                              'payroll_id', v.payroll_id, 'start_date', v.start_date, 'created_at', v.created_at,
+                              'can_clock', app_private.can_clock(v), 'lang', v.lang),
     'avatar', v.avatar,
     'xp', app_private.xp_json(v.id),
     'contracts', app_private.contracts_json(v.id));
@@ -1760,7 +1796,8 @@ begin
       'pay_method', s.pay_method, 'officient_id', s.officient_id, 'contract_minutes', s.contract_minutes,
       'officient_pending', s.officient_pending,
       'officient_connected', (select o.refresh_token is not null from app_private.officient o where o.id = 1),
-      'mato_name', app_private.mato_name(s), 'mato_name_own', s.mato_name),
+      'mato_name', app_private.mato_name(s), 'mato_name_own', s.mato_name,
+      'lang', s.lang, 'can_clock', not s.view_only and app_private.can_clock(s)),
     'profile', app_private.profile_json(s),
     'xp', app_private.xp_json(s.id),
     'contracts', app_private.contracts_json(s.id),
@@ -1841,6 +1878,54 @@ begin
   return json_build_object('ok', true);
 end $$;
 
+-- Which statuten clock in, and the XP a day for who does not.
+create function public.mgr_save_clock_who(p_token text, p_types jsonb, p_daily_xp int) returns json
+language plpgsql security definer set search_path = public, extensions as $$
+declare v public.staff; v_types text[];
+begin
+  v := app_private.current_manager(p_token);
+  if jsonb_typeof(p_types) is distinct from 'array' then
+    raise exception using message = 'Pick who clocks in.', errcode = 'P0001';
+  end if;
+  select coalesce(array_agg(distinct t order by t), '{}') into v_types from jsonb_array_elements_text(p_types) t;
+  if not v_types <@ array['student', 'flexi', 'extra', 'vast'] then
+    raise exception using message = 'Pick who clocks in.', errcode = 'P0001';
+  end if;
+  if p_daily_xp is null or p_daily_xp not between 0 and 500 then
+    raise exception using message = 'The XP a day must be between 0 and 500.', errcode = 'P0001';
+  end if;
+  update public.settings set clock_types = v_types, daily_xp = p_daily_xp where id = 1;
+  return json_build_object('ok', true);
+end $$;
+
+-- The app's language for yourself, or (a manager) for someone.
+create function public.save_my_language(p_token text, p_lang text) returns json
+language plpgsql security definer set search_path = public, extensions as $$
+declare v public.staff;
+begin
+  v := app_private.current_account(p_token);
+  if p_lang is not null and p_lang not in ('nl', 'zh') then
+    raise exception using message = 'Pick a language.', errcode = 'P0001';
+  end if;
+  update public.staff set lang = p_lang where id = v.id;
+  return json_build_object('ok', true);
+end $$;
+
+create function public.mgr_set_language(p_token text, p_id uuid, p_lang text) returns json
+language plpgsql security definer set search_path = public, extensions as $$
+declare v public.staff;
+begin
+  v := app_private.current_manager(p_token);
+  if p_lang is not null and p_lang not in ('nl', 'zh') then
+    raise exception using message = 'Pick a language.', errcode = 'P0001';
+  end if;
+  update public.staff set lang = p_lang where id = p_id;
+  if not found then
+    raise exception using message = 'That person wasn''t found.', errcode = 'P0001';
+  end if;
+  return json_build_object('ok', true);
+end $$;
+
 -- --------------------------------------------------------------- ranking
 
 -- XP earned since p_from, counted the same way as app_private.xp_json.
@@ -1849,7 +1934,8 @@ language sql stable set search_path = public as $$
   with g as (select make_interval(mins => grace_minutes) as grace from public.settings where id = 1)
   select (coalesce(floor(sum(extract(epoch from (e.clock_out - e.clock_in))) / 360), 0)
           + 5 * count(*) filter (where e.clock_in <= sh.starts_at + g.grace)
-          + 5 * count(*) filter (where e.clock_out >= sh.ends_at - g.grace))::int
+          + 5 * count(*) filter (where e.clock_out >= sh.ends_at - g.grace)
+          + app_private.daily_xp(p_staff, p_from))::int
     from public.time_entries e
     left join public.shifts sh on sh.id = e.shift_id
     cross join g
