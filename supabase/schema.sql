@@ -79,7 +79,9 @@ create table public.staff (
   lang            text check (lang in ('nl', 'zh')), -- the app's language for this person; empty = what the phone chose
   -- a funny title colleagues see on the person's card: a key from app_private.fun_title_level
   -- (picked by the person) or the manager's own words; empty = one the app picks
-  fun_title       text check (length(fun_title) <= 40)
+  fun_title       text check (length(fun_title) <= 40),
+  -- the manager hides the schedule from this person for now: no open shifts, only their own
+  shifts_hidden   boolean not null default false
 );
 create unique index staff_name_key on public.staff (lower(name));
 
@@ -439,7 +441,9 @@ begin
                             'xp', app_private.xp_json(v.id), 'can_clock', not v.view_only and app_private.can_clock(v),
                             'lang', v.lang,
                             -- who picks open shifts, and is reminded of them (see shift_alerts)
-                            'picks', not v.view_only and not v.driver and v.role <> 'manager' and v.contract_type is distinct from 'vast'),
+                            'picks', not v.view_only and not v.driver and v.role <> 'manager' and v.contract_type is distinct from 'vast'
+                                     and not v.shifts_hidden,
+                            'shifts', not v.shifts_hidden),
     'settings', (select json_build_object(
         'business_name', business_name, 'drop_cutoff_hours', drop_cutoff_hours,
         'grace_minutes', grace_minutes, 'currency', currency, 'timezone', timezone,
@@ -550,7 +554,8 @@ begin
       order by sh.starts_at, st.name nulls last, sh.template_slot)
     from public.shifts sh left join public.staff st on st.id = sh.staff_id
    where sh.cancelled_at is null and sh.starts_at < p_to and sh.ends_at > p_from
-     and not app_private.is_fixed_shift(sh.template_id, sh.staff_id)), '[]'::json);
+     and not app_private.is_fixed_shift(sh.template_id, sh.staff_id)
+     and (not v.shifts_hidden or sh.staff_id = v.id)), '[]'::json);
 end $$;
 
 -- What to remind someone who picks shifts of: open shifts for the rest of this
@@ -562,7 +567,7 @@ language plpgsql volatile security definer set search_path = public, extensions 
 declare v public.staff; v_tz text; v_to timestamptz;
 begin
   v := app_private.current_staff(p_token);
-  if v.role = 'manager' or v.driver or v.contract_type = 'vast' then
+  if v.role = 'manager' or v.driver or v.contract_type = 'vast' or v.shifts_hidden then
     return json_build_object('open', '[]'::json);
   end if;
   select coalesce(timezone, 'UTC') into v_tz from public.settings where id = 1;
@@ -589,6 +594,9 @@ language plpgsql security definer set search_path = public, extensions as $$
 declare v public.staff; s public.shifts;
 begin
   v := app_private.current_staff(p_token);
+  if v.shifts_hidden then
+    raise exception using message = 'Picking shifts is off for you for now. Ask your manager.', errcode = 'P0001';
+  end if;
   select * into s from public.shifts where id = p_shift_id and cancelled_at is null for update;
   if not found then
     raise exception using message = 'That shift no longer exists.', errcode = 'P0001';
@@ -1833,7 +1841,8 @@ begin
       'officient_pending', s.officient_pending,
       'officient_connected', (select o.refresh_token is not null from app_private.officient o where o.id = 1),
       'mato_name', app_private.mato_name(s), 'mato_name_own', s.mato_name,
-      'lang', s.lang, 'can_clock', not s.view_only and app_private.can_clock(s), 'fun_title', s.fun_title),
+      'lang', s.lang, 'can_clock', not s.view_only and app_private.can_clock(s), 'fun_title', s.fun_title,
+      'shifts_hidden', s.shifts_hidden),
     'profile', app_private.profile_json(s),
     'xp', app_private.xp_json(s.id),
     'contracts', app_private.contracts_json(s.id),
@@ -1931,6 +1940,19 @@ begin
     raise exception using message = 'The XP a day must be between 0 and 500.', errcode = 'P0001';
   end if;
   update public.settings set clock_types = v_types, daily_xp = p_daily_xp where id = 1;
+  return json_build_object('ok', true);
+end $$;
+
+-- Hide the schedule from someone for now (or show it again).
+create function public.mgr_set_shifts_hidden(p_token text, p_id uuid, p_hidden boolean) returns json
+language plpgsql security definer set search_path = public, extensions as $$
+declare v public.staff;
+begin
+  v := app_private.current_manager(p_token);
+  update public.staff set shifts_hidden = coalesce(p_hidden, false) where id = p_id;
+  if not found then
+    raise exception using message = 'That person wasn''t found.', errcode = 'P0001';
+  end if;
   return json_build_object('ok', true);
 end $$;
 

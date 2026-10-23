@@ -158,6 +158,7 @@ const SERVER_NL = {
   'Pick who clocks in.': 'Duid aan wie inklokt.',
   'The XP a day must be between 0 and 500.': 'De XP per dag moet tussen 0 en 500 liggen.',
   'Pick a title from the list.': 'Kies een titel uit de lijst.',
+  'Picking shifts is off for you for now. Ask your manager.': 'Shiften opnemen staat voorlopig uit voor jou. Vraag het aan je verantwoordelijke.',
 };
 // What staff can run into, for who uses the app in Chinese.
 const SERVER_ZH = {
@@ -199,6 +200,7 @@ const SERVER_ZH = {
   'Clocking in is off for you. Ask your manager.': '你不需要打卡。有问题请问负责人。',
   'Pick a language.': '请选择语言。',
   'Pick a title from the list.': '请从列表里选一个称号。',
+  'Picking shifts is off for you for now. Ask your manager.': '你暂时不能认领班次。请问负责人。',
   "That person wasn't found.": '找不到这个人。',
 };
 const SERVER_ZH_PATTERNS = [
@@ -372,6 +374,8 @@ const isDriver = () => S.me && S.me.role === 'driver';
 // Who clocks in: students and drivers (Team → Instellingen); the rest earn XP a
 // day. Someone still clocked in keeps the clock until they clock out.
 const canClock = () => !!(S.me && (S.me.can_clock || S.openEntry));
+// The manager can hide the schedule from someone for now (Team → person).
+const seesShifts = () => !S.me || S.me.shifts !== false;
 // Staff screens follow the person's language (Profiel → Taal, or 中文 on the
 // sign-in screen); manager and driver screens stay Dutch.
 const zhUI = () => lang() === 'zh' && !isManager() && !isDriver();
@@ -586,7 +590,7 @@ function tabsFor() {
   if (isManager()) return [['today', 'Vandaag'], ['schedule', 'Planning'], ['monthly', 'Overzicht'], ['requests', 'Aanvragen'],
     ...(S.settings.has_drivers ? [['routes', 'Ritten']] : []), ['team', 'Team'], ['ranking', 'Ranglijst'], ['profile', 'Profiel']];
   // Who doesn't clock in gets a start page instead of the clock.
-  return [['clock', canClock() ? T('Klok', '打卡') : T('Start', '首页')], ['shifts', T('Shiften', '班次')],
+  return [['clock', canClock() ? T('Klok', '打卡') : T('Start', '首页')], ...(seesShifts() ? [['shifts', T('Shiften', '班次')]] : []),
     ['hours', T('Mijn uren', '我的工时')], ['ranking', T('Ranglijst', '排行榜')], ['profile', T('Profiel', '我的资料')]];
 }
 const ICON_FOR = { home: 'home', clock: 'clock', shifts: 'shifts', hours: 'hours', profile: 'profile', ranking: 'ranking', today: 'today', schedule: 'shifts', monthly: 'monthly', requests: 'requests', team: 'team', routes: 'route' };
@@ -1165,7 +1169,39 @@ const VIEWS = {
 // #profile works for everyone (managers reach it through their picture);
 // #team/<id> opens one team member for managers, #family and #famstaff show
 // them what the family account sees.
+/* --------------------------------------------------------- new versions */
+
+// Phones keep the app open for days. When a new version is online, the app
+// reloads itself at a quiet moment: back on the screen or on the next tab,
+// never with a window open or while typing.
+const Updates = {
+  tag: null, pending: false, at: 0,
+  async check() {
+    if (this.pending || Date.now() - this.at < 60000) return;
+    this.at = Date.now();
+    try {
+      const tags = await Promise.all(['app.js', 'avatar.js', 'styles.css'].map(f =>
+        fetch(f, { method: 'HEAD', cache: 'no-store' }).then(r => r.ok ? r.headers.get('etag') || r.headers.get('last-modified') || '' : '')));
+      if (tags.some(t => !t)) return;
+      const tag = tags.join();
+      if (this.tag == null) this.tag = tag; else if (tag !== this.tag) this.pending = true;
+    } catch { /* offline: next time */ }
+  },
+  apply() {
+    const typing = document.activeElement && document.activeElement.matches('input, textarea, select');
+    if (!this.pending || $('#modal').open || typing) return false;
+    location.reload();
+    return true;
+  },
+};
+Updates.check();
+setInterval(() => { if (document.visibilityState === 'visible') Updates.check(); }, 10 * 60000);
+document.addEventListener('visibilitychange', () => {
+  if (document.visibilityState === 'visible') Updates.check().then(() => Updates.apply());
+});
+
 function route() {
+  if (Updates.apply()) return;
   if (!S.me) return;
   const tabs = tabsFor().map(t => t[0]);
   let v = location.hash.replace('#', ''), tab = v;
@@ -1274,7 +1310,7 @@ function punchCard({ compact = false } = {}) {
     body = `
       <div class="punch-status"><span class="dot"></span>${T('Je bent niet ingeklokt', '你还没有上班打卡')}</div>
       ${next ? `<div class="punch-meta">${new Date(next.starts_at) <= t ? T('Je shift is nu bezig', '你的班次正在进行') : T('Volgende shift', '下一个班次')}: ${fmt.when(next.starts_at)} – ${fmt.time(next.ends_at)}${next.label ? ' · ' + esc(partName(next.label)) : ''}</div>`
-        : `<div class="punch-meta muted">${T('Geen shiften gepland. Neem er een op bij Shiften.', '还没有排班。去“班次”页选一个。')}</div>`}
+        : `<div class="punch-meta muted">${seesShifts() ? T('Geen shiften gepland. Neem er een op bij Shiften.', '还没有排班。去“班次”页选一个。') : T('Geen shiften gepland.', '还没有排班。')}</div>`}
       ${can.ok ? `<button class="big go" data-act="clock-in">${T('Inklokken', '上班打卡')}</button>` : `
         <button class="big go" disabled aria-describedby="in-why">${T('Inklokken', '上班打卡')}</button>
         <p class="hint info" id="in-why" ${soon ? `data-unlock-at="${can.from.toISOString()}"` : ''}>${soon
@@ -1371,7 +1407,7 @@ const avatarCta = () => S.me.avatar ? '' : `<section class="card avatar-cta">
           <button class="primary sm" id="make-avatar">${T('Maak je avatar', '创建你的头像')}</button></div></section>`;
 function nextShiftsCard(mine, open) {
   return `<section class="card">
-          <div class="card-head"><h2>${T('Je volgende shiften', '你接下来的班次')}</h2><button class="sm" data-go="shifts">${T('Alle shiften', '所有班次')}</button></div>
+          <div class="card-head"><h2>${T('Je volgende shiften', '你接下来的班次')}</h2>${seesShifts() ? `<button class="sm" data-go="shifts">${T('Alle shiften', '所有班次')}</button>` : ''}</div>
           ${mine.length ? `<div class="rows">${mine.map(s => `
             <div class="row"><div class="row-main"><span class="row-title">${fmt.dayLong(s.starts_at)}</span>
             <span class="row-sub"><span class="time">${fmt.range(s.starts_at, s.ends_at)}</span>${s.label ? ' · ' + esc(partName(s.label)) : ''}</span></div>
@@ -4509,6 +4545,8 @@ async function viewMember(el, current) {
               <span class="help">Wat ${esc(first)} ziet: klok, shiften, uren, profiel. Jouw schermen blijven Nederlands.</span></div>
             <div class="field"><label for="pm-bonus">Bonus-XP</label><input id="pm-bonus" type="number" min="0" max="100000" step="1" inputmode="numeric" value="${p.xp_bonus || 0}">
               <span class="help">XP die jij geeft, bovenop het werk. Telt voor het level, niet voor de uren of het loon. Level 20 = ${num(xpForLevel(20), 0)} XP.</span></div>
+            ${driver || p.role === 'manager' ? '' : `<div class="field wide"><label class="check"><input type="checkbox" id="pm-noshifts" ${p.shifts_hidden ? 'checked' : ''}> Shiften verbergen voor ${esc(first)}</label>
+              <span class="help">Voorlopig geen kalender, geen open shiften en geen herinneringen. Shiften die jij aan ${esc(first)} geeft, ziet ${esc(first)} wel.</span></div>`}
             <div class="field wide"><label class="check"><input type="checkbox" id="pm-active" ${p.active ? 'checked' : ''} ${self ? 'disabled' : ''}> Actief</label>
               <span class="help">${self ? 'Je kan jezelf niet op inactief zetten.' : 'Inactieve mensen kunnen zich niet aanmelden en hun toekomstige shiften komen weer open te staan. Hun uren blijven bewaard.'}</span></div>
           </div>
@@ -4618,6 +4656,8 @@ async function viewMember(el, current) {
       if (bonus !== (p.xp_bonus || 0)) await rpc('mgr_set_xp_bonus', { p_id: p.id, p_bonus: bonus });
       const pay = $('#pm-pay', pm).value || null;
       if (pay !== (p.pay_method || null)) await rpc('mgr_set_pay_method', { p_id: p.id, p_method: pay });
+      const hide = $('#pm-noshifts', pm);
+      if (hide && hide.checked !== !!p.shifts_hidden) await rpc('mgr_set_shifts_hidden', { p_id: p.id, p_hidden: hide.checked });
       const lng = $('#pm-lang', pm).value || null;
       if (lng !== (p.lang || null)) await rpc('mgr_set_language', { p_id: p.id, p_lang: lng });
       const ti = $('#pm-title', pm);
