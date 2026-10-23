@@ -113,6 +113,18 @@ const SERVER_NL = {
   'Upload a PDF, PNG or JPG file.': 'Upload een pdf-, png- of jpg-bestand.',
   "You're already checked in.": 'Je bent al ingeklokt.',
   "You're not checked in.": 'Je bent niet ingeklokt.',
+  'Drivers clock in at the restaurant, with their location.': 'Als chauffeur klok je in aan het restaurant, met je locatie.',
+  'Drivers clock out at the restaurant, with their location.': 'Als chauffeur klok je uit aan het restaurant, met je locatie.',
+  "The restaurant's location isn't set yet. Ask your manager.": 'De plaats van het restaurant is nog niet ingesteld. Vraag het aan je verantwoordelijke.',
+  'Your location is needed to clock in or out. Allow it and try again.': 'Je locatie is nodig om in of uit te klokken. Sta ze toe en probeer opnieuw.',
+  'Only drivers can do that.': 'Dat kan alleen een chauffeur.',
+  'Send at most 500 positions at a time.': 'Stuur maximaal 500 locaties tegelijk.',
+  'Give the place a name.': 'Geef de plaats een naam.',
+  'Pick where the place is.': 'Duid aan waar de plaats is.',
+  'The zone around a place must be between 20 and 1000 metres.': 'De zone rond een plaats moet tussen 20 en 1000 meter zijn.',
+  'That place no longer exists.': 'Die plaats bestaat niet meer.',
+  'Pick where the restaurant is.': 'Duid aan waar het restaurant is.',
+  'The zone around the restaurant must be between 25 and 2000 metres.': 'De zone rond het restaurant moet tussen 25 en 2000 meter zijn.',
   'Your sign-in has expired. Please sign in again.': 'Je bent afgemeld. Meld je opnieuw aan.',
   'Pick a valid contract type.': 'Kies een geldig statuut.',
   'The employee number can be at most 30 characters.': 'Het werknemersnummer mag maximaal 30 tekens hebben.',
@@ -140,6 +152,7 @@ const SERVER_NL_PATTERNS = [
   [/^Your shift starts at (\d\d:\d\d)\. You can check in from (\d\d:\d\d)\.$/, 'Je shift begint om $1. Je kan inklokken vanaf $2.'],
   [/^That item unlocks at level (\d+)\.$/, 'Dat krijg je pas vanaf level $1.'],
   [/^Officient answered (\d+)( for .*)?\.$/, 'Officient gaf een fout ($1). Probeer het later opnieuw.'],
+  [/^You're (\d+) m from the restaurant\. Clock in and out at the restaurant\.$/, (_, m) => `Je bent ${metres(+m)} van het restaurant. In- en uitklokken kan alleen aan het restaurant.`],
 ];
 function tr(msg) {
   if (!msg) return msg;
@@ -154,13 +167,13 @@ class AppError extends Error {
   constructor(message, code) { super(message); this.code = code; }
 }
 
-async function rpc(fn, args = {}, { auth = true, path = `/rest/v1/rpc/${fn}` } = {}) {
+async function rpc(fn, args = {}, { auth = true, path = `/rest/v1/rpc/${fn}`, keepalive = false } = {}) {
   const body = auth ? { p_token: S.token, ...args } : args;
   const headers = { 'Content-Type': 'application/json', apikey: CFG.key };
   if (CFG.key.startsWith('ey')) headers.Authorization = 'Bearer ' + CFG.key;
   let res;
   try {
-    res = await fetch(`${CFG.url}${path}`, { method: 'POST', headers, body: JSON.stringify(body) });
+    res = await fetch(`${CFG.url}${path}`, { method: 'POST', headers, body: JSON.stringify(body), keepalive });
   } catch {
     throw new AppError('Kan de server niet bereiken. Controleer je verbinding en probeer opnieuw.', 'network');
   }
@@ -187,6 +200,7 @@ async function refreshMe() {
   S.offset = new Date(r.server_time).getTime() - Date.now();
   updateBadges();
   checkLevelUp();
+  syncTracker();
   return r;
 }
 
@@ -279,6 +293,7 @@ const $$ = (sel, root = document) => [...root.querySelectorAll(sel)];
 const initials = name => String(name || '?').trim().split(/\s+/).slice(0, 2).map(p => p[0]).join('').toUpperCase();
 const isManager = () => S.me && S.me.role === 'manager';
 const isViewer = () => S.me && S.me.role === 'viewer';
+const isDriver = () => S.me && S.me.role === 'driver';
 
 /* ------------------------------------------------ people, avatars, levels */
 
@@ -437,6 +452,7 @@ const ICONS = {
   team: '<svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round"><circle cx="12" cy="8" r="4"/><path d="M4 21c0-4 4-6 8-6s8 2 8 6"/></svg>',
   profile: '<svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"><circle cx="12" cy="12" r="9"/><circle cx="9" cy="10" r=".6" fill="currentColor"/><circle cx="15" cy="10" r=".6" fill="currentColor"/><path d="M8.5 14.5c1.8 2 5.2 2 7 0"/></svg>',
   ranking: '<svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"><path d="M8 21h8M12 17v4M7 4h10v5a5 5 0 0 1-10 0z"/><path d="M7 6H4a3 3 0 0 0 3 4M17 6h3a3 3 0 0 1-3 4"/></svg>',
+  route: '<svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"><circle cx="6" cy="19" r="2"/><circle cx="18" cy="5" r="2"/><path d="M8 19h8.5a3.5 3.5 0 0 0 0-7h-9a3.5 3.5 0 0 1 0-7H16"/></svg>',
   more: '<svg viewBox="0 0 24 24" fill="currentColor"><circle cx="5" cy="12" r="2"/><circle cx="12" cy="12" r="2"/><circle cx="19" cy="12" r="2"/></svg>',
   signout: '<svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"><path d="M14 4h4a2 2 0 0 1 2 2v12a2 2 0 0 1-2 2h-4M10 16l-4-4 4-4M6 12h10"/></svg>',
   sun: '<svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round"><circle cx="12" cy="12" r="4"/><path d="M12 2v2M12 20v2M4.9 4.9l1.4 1.4M17.7 17.7l1.4 1.4M2 12h2M20 12h2M4.9 19.1l1.4-1.4M17.7 6.3l1.4-1.4"/></svg>',
@@ -478,11 +494,13 @@ if (darkQuery && darkQuery.addEventListener) darkQuery.addEventListener('change'
 
 function tabsFor() {
   if (isViewer()) return [['family', L('Kalender', '排班')], ['famstaff', L('Personeel', '员工')]];
+  if (isDriver()) return [['clock', 'Klok'], ['hours', 'Mijn uren'], ['profile', 'Profiel']];
   return isManager()
-    ? [['today', 'Vandaag'], ['schedule', 'Planning'], ['monthly', 'Overzicht'], ['requests', 'Aanvragen'], ['team', 'Team'], ['ranking', 'Ranglijst'], ['profile', 'Profiel']]
+    ? [['today', 'Vandaag'], ['schedule', 'Planning'], ['monthly', 'Overzicht'], ['requests', 'Aanvragen'],
+       ...(S.settings.has_drivers ? [['routes', 'Ritten']] : []), ['team', 'Team'], ['ranking', 'Ranglijst'], ['profile', 'Profiel']]
     : [['clock', 'Klok'], ['shifts', 'Shiften'], ['hours', 'Mijn uren'], ['ranking', 'Ranglijst'], ['profile', 'Profiel']];
 }
-const ICON_FOR = { clock: 'clock', shifts: 'shifts', hours: 'hours', profile: 'profile', ranking: 'ranking', today: 'today', schedule: 'shifts', monthly: 'monthly', requests: 'requests', team: 'team' };
+const ICON_FOR = { clock: 'clock', shifts: 'shifts', hours: 'hours', profile: 'profile', ranking: 'ranking', today: 'today', schedule: 'shifts', monthly: 'monthly', requests: 'requests', team: 'team', routes: 'route' };
 
 /* --------------------------------------------------------------- modal */
 
@@ -668,6 +686,7 @@ function setToken(t) { S.token = t; store.set(TOKEN_KEY, t); }
 
 async function signOut({ silent = false } = {}) {
   const t = S.token;
+  if (Tracker.entry != null) { Tracker.flush({ keepalive: true }); Tracker.stop(); }
   setToken(null);
   S.me = null; S.staff = null;
   $('#toast').hidden = true;
@@ -719,7 +738,7 @@ function renderShell() {
           <button class="me-btn" id="me-btn" aria-label="Mijn profiel" title="Mijn profiel">${personPic(S.me, 'lg')}${S.me.avatar ? '' : '<span class="me-plus" aria-hidden="true">+</span>'}</button>
           <div class="brand-text">
             <div class="biz">${esc(S.me.name)}</div>
-            <div class="who">${isManager() ? 'Verantwoordelijke' : `Level ${S.me.xp ? S.me.xp.level : 1} · ${esc(levelTitle(S.me.xp ? S.me.xp.level : 1))}`}</div>
+            <div class="who">${isManager() ? 'Verantwoordelijke' : isDriver() ? 'Chauffeur' : `Level ${S.me.xp ? S.me.xp.level : 1} · ${esc(levelTitle(S.me.xp ? S.me.xp.level : 1))}`}</div>
           </div>
         </div>
         <a class="logo-link" href="#" aria-label="${esc(S.settings.business_name)}, naar het begin">${logoHTML('logo')}</a>
@@ -750,14 +769,21 @@ function renderShell() {
   }
 }
 
+// After a change that can add or remove a tab (the first driver: Ritten).
+async function refreshTabs() {
+  const before = tabsFor().map(t => t[0]).join();
+  await refreshMe();
+  if (tabsFor().map(t => t[0]).join() !== before) renderShell(); else renderView();
+}
+
 function updateBadges() {
   $$('[data-badge]').forEach(b => { b.hidden = !S.pending; b.textContent = S.pending; });
 }
 
 const VIEWS = {
-  clock: viewClock, shifts: viewShifts, hours: viewHours, profile: viewProfile, ranking: viewRanking,
+  clock: (el, current) => isDriver() ? viewDriver(el, current) : viewClock(el, current), shifts: viewShifts, hours: viewHours, profile: viewProfile, ranking: viewRanking,
   today: viewToday, schedule: viewSchedule, monthly: viewMonthly, requests: viewRequests, team: viewTeam, member: viewMember,
-  family: viewFamily, famstaff: viewFamilyStaff, contracts: viewContracts,
+  family: viewFamily, famstaff: viewFamilyStaff, contracts: viewContracts, routes: viewRoutes,
 };
 
 // #profile works for everyone (managers reach it through their picture);
@@ -769,10 +795,16 @@ function route() {
   let v = location.hash.replace('#', ''), tab = v;
   const member = v.match(/^team\/([0-9a-f-]{36})$/);
   const ctMonth = v.match(/^contracts(?:\/(\d{4}-\d{2}))?$/);
+  const rt = v.match(/^routes(?:\/([0-9a-f-]{36}))?(?:\/(\d{4}-\d{2}-\d{2}))?$/);
   if (ctMonth && isManager()) { v = 'contracts'; tab = 'schedule'; }
+  if (rt && isManager()) {
+    v = 'routes'; tab = 'routes';
+    if (rt[1]) S.routeStaff = rt[1];
+    S.routeDay = rt[2] ? new Date(rt[2] + 'T00:00') : rt[1] ? null : S.routeDay;
+  }
   if (member && isManager()) { S.memberId = member[1]; v = 'member'; tab = 'team'; }
   else if ((v === 'family' || v === 'famstaff') && isManager()) tab = 'team';
-  else if (v === 'contracts' && isManager()) tab = 'schedule';
+  else if ((v === 'contracts' || v === 'routes') && isManager()) { /* set above */ }
   else if (!tabs.includes(v)) { v = tabs[0]; tab = v; }
   if (S.view !== v) S.month = null;
   if (ctMonth && ctMonth[1] && v === 'contracts') S.month = new Date(ctMonth[1] + '-01T00:00');
@@ -807,7 +839,10 @@ async function renderView() {
 
 function startPolling(ms) {
   stopPolling();
-  S.poll = setInterval(() => { if (document.visibilityState === 'visible' && !$('#modal').open) renderView(); }, ms);
+  S.poll = setInterval(() => {
+    const typing = document.activeElement && document.activeElement.matches('#view input, #view textarea, #view select');
+    if (document.visibilityState === 'visible' && !$('#modal').open && !typing) renderView();
+  }, ms);
 }
 function stopPolling() { if (S.poll) clearInterval(S.poll); S.poll = null; }
 
@@ -996,6 +1031,290 @@ async function viewClock(el, current) {
   $$('[data-go]', el).forEach(b => b.addEventListener('click', () => { location.hash = b.dataset.go; }));
   const mk = $('#make-avatar', el);
   if (mk) mk.addEventListener('click', () => openAvatarEditor());
+}
+
+/* ------------------------------------------------------------ driver */
+
+// A driver clocks in and out at the restaurant with his phone's location, and
+// while he is clocked in the app keeps where he drives: a position every 30
+// seconds or 60 metres, sent every minute. Browsers only give positions while
+// the app is open on the screen, so the screen can be kept on during the round.
+// Positions wait in the phone (per person) until the server has them.
+const metres = m => m >= 1000 ? `${num(m / 1000, 1)} km` : `${Math.round(m)} m`;
+const AWAKE_KEY = 'prikklok.awake';
+
+function geoError(e) {
+  if (e && e.code === 1) return 'Je locatie staat uit voor deze app. Sta locatie toe in de instellingen van je browser (voor deze website) en probeer opnieuw.';
+  if (e && e.code === 3) return 'Je locatie zoeken duurde te lang. Probeer opnieuw, liefst buiten.';
+  return 'Je locatie kon niet bepaald worden. Zet de locatie (gps) van je telefoon aan en probeer opnieuw.';
+}
+
+const fixOf = pos => ({ at: new Date(pos.timestamp + S.offset).toISOString(), lat: +pos.coords.latitude.toFixed(6),
+  lng: +pos.coords.longitude.toFixed(6), accuracy: Math.round(pos.coords.accuracy) });
+
+// Where the phone is now: the route's own position when it is a few seconds
+// old, otherwise a new one.
+function getPosition({ timeout = 20000 } = {}) {
+  if (Tracker.last && Date.now() - Tracker.lastAt < 15000 && Tracker.last.accuracy <= 200) return Promise.resolve({ ...Tracker.last, at: now().toISOString() });
+  if (!navigator.geolocation) return Promise.reject(new AppError('Deze telefoon of browser kan je locatie niet geven. Probeer een andere browser.'));
+  return new Promise((resolve, reject) => navigator.geolocation.getCurrentPosition(
+    p => resolve(fixOf(p)), e => reject(new AppError(geoError(e))), { enableHighAccuracy: true, timeout, maximumAge: Tracker.entry == null ? 0 : 5000 }));
+}
+
+const Tracker = {
+  entry: null, watch: null, timers: [], lock: null, last: null, lastAt: 0, kept: null, error: null, sending: false, sentAt: 0,
+  key() { return `prikklok.route.${S.me ? S.me.id : ''}`; },
+  queue() { try { return JSON.parse(store.get(this.key()) || '[]'); } catch { return []; } },
+  save(q) { store.set(this.key(), q.length ? JSON.stringify(q.slice(-5000)) : null); },
+  awake() { return store.get(AWAKE_KEY) !== '0'; },
+  start(entryId) {
+    if (this.entry === entryId) return;
+    this.stop();
+    this.entry = entryId;
+    this.error = navigator.geolocation ? null : 'unsupported';
+    if (this.error) return;
+    const opts = { enableHighAccuracy: true, maximumAge: 15000, timeout: 60000 };
+    this.watch = navigator.geolocation.watchPosition(p => this.fix(p), e => this.fail(e), opts);
+    // standing still, a phone may stop reporting: ask now and then
+    this.timers.push(setInterval(() => this.nudge(), 45000), setInterval(() => this.flush(), 60000));
+    this.wake();
+    this.flush();
+  },
+  stop() {
+    if (this.watch != null && navigator.geolocation) navigator.geolocation.clearWatch(this.watch);
+    this.timers.forEach(clearInterval);
+    Object.assign(this, { entry: null, watch: null, timers: [], last: null, lastAt: 0, kept: null, error: null });
+    this.release();
+  },
+  nudge() {
+    if (this.entry == null || !navigator.geolocation || Date.now() - this.lastAt < 40000) return;
+    navigator.geolocation.getCurrentPosition(p => this.fix(p), e => this.fail(e), { enableHighAccuracy: true, maximumAge: 10000, timeout: 30000 });
+  },
+  fix(pos) {
+    if (this.entry == null) return;
+    const p = fixOf(pos);
+    this.error = null; this.last = p; this.lastAt = Date.now();
+    const k = this.kept, gap = k ? Date.parse(p.at) - Date.parse(k.at) : Infinity;
+    if (p.accuracy <= 200 && (gap >= 30000 || (gap >= 5000 && Route.distance(k, p) >= 60))) this.push(p);
+    this.paint();
+  },
+  push(p) {
+    if (p.kind !== 'here') this.kept = p;
+    const q = this.queue();
+    q.push(p);
+    this.save(q);
+    if (q.length >= 20) this.flush();
+  },
+  fail(e) { this.error = e && e.code === 1 ? 'denied' : 'nofix'; this.paint(); },
+  async flush({ keepalive = false } = {}) {
+    const q = this.queue();
+    if (this.sending || !q.length || !S.token) return;
+    this.sending = true;
+    const batch = q.slice(0, 500);
+    try {
+      await rpc('driver_track', { p_points: batch }, { keepalive });
+      this.save(this.queue().slice(batch.length));
+      this.sentAt = Date.now();
+    } catch { /* they stay in the phone for the next try */ }
+    finally { this.sending = false; this.paint(); }
+  },
+  // positions not on the server yet, for the driver's own screen
+  pending(entryId) { return this.queue().map(p => ({ ...p, acc: p.accuracy, kind: p.kind || 'track', entry_id: entryId })); },
+  async wake() {
+    if (!this.awake() || this.lock || this.entry == null || !('wakeLock' in navigator) || document.visibilityState !== 'visible') return;
+    try {
+      this.lock = await navigator.wakeLock.request('screen');
+      this.lock.addEventListener('release', () => { this.lock = null; });
+    } catch { /* not allowed right now (battery saver) */ }
+  },
+  release() { if (this.lock) { quiet(this.lock.release()); this.lock = null; } },
+  status() {
+    if (this.error === 'unsupported') return '<span class="pill bad">Geen locatie</span> Deze telefoon of browser kan geen locatie geven. Je rit wordt niet bijgehouden.';
+    if (this.error === 'denied') return '<span class="pill bad">Locatie staat uit</span> Sta locatie toe voor deze website in je browser, anders wordt je rit niet bijgehouden.';
+    const waiting = this.queue().length;
+    const wait = waiting > 3 ? ` · ${plural(waiting, 'plek wacht', 'plekken wachten')} op verbinding` : '';
+    if (!this.last) return `<span class="pill">Locatie zoeken…</span>${this.error === 'nofix' ? ' Zet de gps van je telefoon aan.' : ''}`;
+    if (Date.now() - this.lastAt > 3 * 60000) return `<span class="pill warn">Geen locatie sinds ${fmt.time(this.last.at)}</span> Laat de app open terwijl je rijdt.${wait}`;
+    return `<span class="pill on">Rit wordt bijgehouden</span> laatst ${fmt.time(this.last.at)} · tot op ${this.last.accuracy} m${wait}`;
+  },
+  paint() { const el = $('#track-line'); if (el) el.innerHTML = this.status(); },
+};
+
+function syncTracker() {
+  if (isDriver() && S.openEntry) Tracker.start(S.openEntry.id);
+  else if (Tracker.entry != null) { Tracker.flush(); Tracker.stop(); }
+}
+document.addEventListener('visibilitychange', () => {
+  if (Tracker.entry == null) return;
+  if (document.visibilityState === 'hidden') Tracker.flush({ keepalive: true });
+  else { Tracker.wake(); Tracker.nudge(); }
+});
+setInterval(() => Tracker.paint(), 5000);
+
+function driverPunch(site) {
+  const e = S.openEntry, t = now();
+  const zone = site && site.lat != null ? `tot ${metres(site.radius_m)} ervan` : '';
+  const body = e ? `
+      <div class="punch-status"><span class="dot"></span>Ingeklokt sinds ${sameDay(e.clock_in, t) ? fmt.time(e.clock_in) : fmt.when(e.clock_in)}</div>
+      <div class="punch-elapsed" data-live="since" data-since="${e.clock_in}">${fmt.dur(minutesBetween(e.clock_in, t))}</div>
+      <p class="track-line" id="track-line">${Tracker.status()}</p>
+      ${'wakeLock' in navigator ? `<label class="check small"><input type="checkbox" id="tr-awake" ${Tracker.awake() ? 'checked' : ''}> Scherm aan houden tijdens de rit</label>` : ''}
+      <div class="field">
+        <label for="out-note">Opmerking voor je verantwoordelijke (optioneel)</label>
+        <input id="out-note" maxlength="300" placeholder="bv. automaat in de Markt was leeg">
+      </div>
+      <button class="big stop" data-act="drv-out">Uitklokken</button>
+      <p class="muted small">Uitklokken kan alleen aan het restaurant. Al weg en vergeten uit te klokken? <button class="link" data-act="drv-forgot">Vul in wanneer je stopte</button></p>`
+    : `
+      <div class="punch-status"><span class="dot"></span>Je bent niet ingeklokt</div>
+      <div class="punch-meta">Inklokken kan aan het restaurant${zone ? `, ${zone}` : ''}.</div>
+      <button class="big go" data-act="drv-in">Inklokken</button>
+      <p class="muted small">De app vraagt daarvoor je locatie. Zolang je ingeklokt bent, houdt de app je rit bij; daarna niet meer. Laat de app open tijdens je ronde.</p>`;
+  return `
+    <section class="punch ${e ? 'is-on' : ''}" aria-label="In- en uitklokken">
+      <div class="punch-top">
+        <span class="punch-clock" data-live="clock">${fmt.clock(t)}</span>
+        <span class="punch-date">${fmt.dayLong(t)}</span>
+      </div>
+      ${body}
+    </section>`;
+}
+
+function bindDriverPunch(root, after) {
+  const inBtn = $('[data-act=drv-in]', root);
+  if (inBtn) inBtn.addEventListener('click', () => busy(inBtn, async () => {
+    inBtn.textContent = 'Locatie zoeken…';
+    const p = await getPosition();
+    inBtn.textContent = 'Bezig…';
+    await rpc('driver_clock_in', { p_lat: p.lat, p_lng: p.lng, p_accuracy: p.accuracy });
+    await refreshMe();
+    toast(`Ingeklokt om ${fmt.time(now())}. Goede rit!`);
+    after();
+  }).catch(() => {}));
+  const outBtn = $('[data-act=drv-out]', root);
+  if (outBtn) outBtn.addEventListener('click', () => busy(outBtn, async () => {
+    outBtn.textContent = 'Locatie zoeken…';
+    const p = await getPosition();
+    outBtn.textContent = 'Bezig…';
+    await Tracker.flush();
+    await rpc('driver_clock_out', { p_lat: p.lat, p_lng: p.lng, p_accuracy: p.accuracy, p_note: ($('#out-note', root) || {}).value || '' });
+    await refreshMe();
+    toast(`Uitgeklokt om ${fmt.time(now())}.`);
+    after();
+  }).catch(() => {}));
+  const awake = $('#tr-awake', root);
+  if (awake) awake.addEventListener('change', () => {
+    store.set(AWAKE_KEY, awake.checked ? '1' : '0');
+    if (awake.checked) Tracker.wake(); else Tracker.release();
+  });
+  const forgot = $('[data-act=drv-forgot]', root);
+  if (forgot) forgot.addEventListener('click', () => driverForgotModal(after));
+}
+
+// Away from the restaurant and forgot to clock out: clocked out now, and the
+// time he stopped goes to the manager to approve.
+function driverForgotModal(after) {
+  const e = S.openEntry;
+  if (!e) return;
+  const since = new Date(e.clock_in);
+  const guess = now();
+  modal.open(`
+    <h2 id="modal-title">Wanneer stopte je?</h2>
+    <p>Je klokte in ${fmt.when(since)}. We klokken je nu uit en sturen het uur waarop je stopte naar je verantwoordelijke om goed te keuren.</p>
+    <form id="dforgot-form" novalidate>
+      <div class="form-grid">
+        <div class="field"><label for="df-day">Dag</label>${dateField('df-day', guess, since, now())}</div>
+        <div class="field"><label for="df-out">Ik stopte om</label>${timeField('df-out', toTimeInput(guess))}</div>
+        <div class="field wide"><label for="df-reason">Reden</label><input id="df-reason" maxlength="300" value="Vergeten uit te klokken aan het restaurant"></div>
+      </div>
+      <p class="form-error" id="df-err"></p>
+      <div class="form-actions"><button type="button" data-close>Annuleren</button><button type="submit" class="primary">Uitklokken en versturen</button></div>
+    </form>`, d => {
+    $('#dforgot-form', d).addEventListener('submit', async ev => {
+      ev.preventDefault();
+      const hm = parseHM($('#df-out', d).value), reason = $('#df-reason', d).value.trim(), err = $('#df-err', d);
+      if (!hm) { err.textContent = 'Vul in hoe laat je stopte, bv. 13:30.'; return; }
+      const out = atTime(new Date($('#df-day', d).value + 'T00:00'), hm);
+      if (out <= since || out > now()) { err.textContent = 'Kies een uur tussen je inklokken en nu.'; return; }
+      if (reason.length < 3) { err.textContent = 'Geef een korte reden.'; return; }
+      const btn = $('button[type=submit]', d);
+      btn.disabled = true;
+      try {
+        await Tracker.flush();
+        await rpc('driver_forgot_out', { p_out: out.toISOString(), p_reason: reason });
+        modal.close();
+        await refreshMe();
+        toast('Uitgeklokt. Je verantwoordelijke keurt het uur goed.');
+        after();
+      } catch (x) { err.textContent = x.message; btn.disabled = false; }
+    });
+  });
+}
+
+async function viewDriver(el, current) {
+  await refreshMe();
+  const t = now(), monthStart = startOfMonth(t), wk = startOfWeek(t), day = startOfDay(t);
+  const from = monthStart < wk ? monthStart : wk;
+  const [hours, today] = await Promise.all([
+    rpc('my_hours', { p_from: addDays(from, -1).toISOString(), p_to: addDays(t, 1).toISOString() }),
+    rpc('driver_today'),
+  ]);
+  if (!current()) return;
+  const worked = since => hours.entries.reduce((a, x) => {
+    const b = x.clock_out ? new Date(x.clock_out) : now(), s = new Date(Math.max(new Date(x.clock_in), since));
+    return b > s ? a + minutesBetween(s, b) : a;
+  }, 0);
+  const todays = hours.entries.filter(x => !x.clock_out || new Date(x.clock_out) > day);
+  const a = Route.analyse({ entries: todays, points: [...today.points, ...(S.openEntry ? Tracker.pending(S.openEntry.id) : [])],
+    checkpoints: today.checkpoints, site: today.site, now: now().getTime() });
+  const here = S.openEntry && Tracker.last ? Route.placeOf({ ...Tracker.last, acc: Tracker.last.accuracy }, a.places) : null;
+  const hour = t.getHours(), hello = hour < 12 ? 'Goedemorgen' : hour < 18 ? 'Goedemiddag' : 'Goedenavond';
+  el.innerHTML = `
+    <div class="view-head"><div class="hello">
+      <button class="hello-pic" data-go="profile" aria-label="Mijn profiel">${personPic(S.me, 'xl')}</button>
+      <div><h1>${hello}, ${esc(S.me.name.split(' ')[0])}</h1><p class="muted">Chauffeur</p></div>
+    </div></div>
+    <div class="grid-2">
+      ${driverPunch(today.site)}
+      <div style="display:flex;flex-direction:column;gap:18px;min-width:0">
+        <div class="stats stats-3">
+          <div class="stat good"><span class="v">${fmt.dur(worked(day))}</span><span class="k">Vandaag gewerkt</span></div>
+          <div class="stat"><span class="v">${fmt.dur(worked(wk))}</span><span class="k">Deze week</span></div>
+          <div class="stat"><span class="v">${fmt.dur(worked(monthStart))}</span><span class="k">In ${fmt.monthName(t)}</span></div>
+        </div>
+        <section class="card">
+          <div class="card-head"><h2>Je ronde vandaag</h2>${S.openEntry ? '<button class="sm primary" id="drv-here">Ik ben hier</button>' : ''}</div>
+          ${today.checkpoints.length ? `<div class="rows">${today.checkpoints.map(cp => {
+            const v = a.visited.get(cp.id) || [];
+            return `<div class="row"><div class="row-main"><span class="row-title">${esc(cp.name)}</span>
+              ${here && here.id === cp.id ? '<span class="row-sub">Je bent hier</span>' : ''}</div>
+              ${v.length ? `<span class="pill on">✓ ${v.map(x => fmt.time(x.from)).join(', ')}</span>` : '<span class="pill">Nog niet</span>'}</div>`;
+          }).join('')}</div>`
+            : '<p class="empty">Je verantwoordelijke heeft nog geen plaatsen van de ronde aangeduid. Je rit wordt toch bijgehouden.</p>'}
+          ${S.openEntry ? '<p class="muted small" style="margin-top:10px">Aan een automaat? Tik op <strong>Ik ben hier</strong>: zo staat het zeker op je rit, ook als je telefoon even geen locatie had.</p>' : ''}
+        </section>
+        <section class="card">
+          <div class="card-head"><h2>Je uren</h2><button class="sm" data-go="hours">Alle uren</button></div>
+          ${hours.entries.length ? `<div class="rows">${hours.entries.slice(0, 7).map(x => `
+            <div class="row"><div class="row-main"><span class="row-title">${fmt.dayLong(x.clock_in)}</span>
+              <span class="row-sub"><span class="time">${fmt.time(x.clock_in)} – ${x.clock_out ? fmt.time(x.clock_out) : 'nu'}</span></span></div>
+              <span class="pill ${x.clock_out ? '' : 'on'}">${fmt.dur(minutesBetween(x.clock_in, x.clock_out || now()))}</span></div>`).join('')}</div>`
+            : '<p class="empty">Nog geen uren. Klok in aan het restaurant om te beginnen.</p>'}
+        </section>
+      </div>
+    </div>`;
+  bindDriverPunch(el, renderView);
+  $$('[data-go]', el).forEach(b => b.addEventListener('click', () => { location.hash = b.dataset.go; }));
+  const hereBtn = $('#drv-here', el);
+  if (hereBtn) hereBtn.addEventListener('click', () => busy(hereBtn, async () => {
+    const p = await getPosition({ timeout: 15000 });
+    Tracker.push({ ...p, kind: 'here' });
+    await Tracker.flush();
+    const at = Route.placeOf({ ...p, acc: p.accuracy }, a.places);
+    toast(at ? `Aangekomen bij ${at.name} om ${fmt.time(p.at)}.` : `Je plek is bewaard (${fmt.time(p.at)}). Dit is geen plaats van de ronde.`);
+    renderView();
+  }).catch(() => {}));
+  if (S.openEntry) startPolling(60000);
 }
 
 /* ------------------------------------------------------- shifts & schedule */
@@ -1267,7 +1586,7 @@ async function loadStaff(force = false) {
   return S.staff;
 }
 const workers = () => (S.staff || []).filter(p => p.role !== 'viewer');
-const activeStaff = () => workers().filter(p => p.active);
+const activeStaff = () => workers().filter(p => p.active && p.role !== 'driver'); // drivers work no shifts
 function staffOptions(selected, { openLabel = 'Open' } = {}) {
   return `<option value="">${esc(openLabel)}</option>` +
     activeStaff().map(p => `<option value="${p.id}" ${p.id === selected ? 'selected' : ''}>${esc(p.name)}</option>`).join('');
@@ -1519,6 +1838,7 @@ function payrollRows(rep) {
   for (const x of rep.entries) {
     if (!x.clock_out) continue;
     const p = people[x.staff_id] || { name: x.name };
+    if (p.driver) continue; // a driver's hours stay out of Securex and Officient
     const type = p.contract_type || 'vast';
     const end = new Date(x.clock_out);
     for (let a = new Date(x.clock_in); a < end;) {
@@ -1607,7 +1927,8 @@ function officientCompare(cal, rows) {
     app.set(x.staff_id, per);
   }
   const linked = new Set(cal.people.map(p => p.staff_id));
-  const people = cal.people.map(p => {
+  const driver = id => ((S.staff || []).find(p => p.id === id) || {}).role === 'driver';
+  const people = cal.people.filter(p => !driver(p.staff_id)).map(p => {
     const off = new Map(p.days.map(d => [d.date, d]));
     const mine = app.get(p.staff_id) || new Map();
     const days = [...new Set([...off.keys(), ...mine.keys()])].sort().map(date => {
@@ -2301,7 +2622,7 @@ async function viewHours(el, current) {
     ${!data.entries.length && hasFigures(pm && pm.payslip) ? '' : `<div class="stats">
       <div class="stat good"><span class="v">${fmt.dur(mins)}</span><span class="k">Geklokt · ${fmt.hours(mins)} uur</span></div>
       <div class="stat"><span class="v">${rate != null ? fmt.money(mins / 60 * rate) : '—'}</span><span class="k">${rate != null ? `Verdiend (bruto) · ${fmt.money(rate)}/u` : 'Je verdiensten verschijnen zodra je verantwoordelijke je uurloon instelt'}</span></div>
-      <div class="stat"><span class="v">${done.length}</span><span class="k">Gewerkte shiften</span></div>
+      <div class="stat"><span class="v">${done.length}</span><span class="k">${isDriver() ? 'Keer gewerkt' : 'Gewerkte shiften'}</span></div>
       <div class="stat ${pendingReqs.length ? 'alert' : ''}"><span class="v">${pendingReqs.length}</span><span class="k">Aanpassingen in behandeling</span></div>
     </div>`}
     ${payslipCard(pm)}
@@ -2589,7 +2910,7 @@ async function viewProfile(el, current) {
       <div class="stack">
         <section class="card"><h2>Werk</h2>
           <dl class="kv">
-            <dt>Rol</dt><dd>${w.role === 'manager' ? 'Verantwoordelijke' : 'Medewerker'}</dd>
+            <dt>Rol</dt><dd>${w.role === 'manager' ? 'Verantwoordelijke' : w.role === 'driver' ? 'Chauffeur' : 'Medewerker'}</dd>
             <dt>Statuut</dt><dd>${w.contract_type ? CONTRACTS[w.contract_type] : '—'}</dd>
             <dt>Uurloon</dt><dd>${w.hourly_rate != null ? fmt.money(w.hourly_rate) : '—'}</dd>
             <dt>In dienst sinds</dt><dd>${w.start_date ? fmtDate(w.start_date) : '—'}</dd>
@@ -2736,12 +3057,13 @@ async function viewToday(el, current) {
           <div class="card-head"><h2>Nu aan het werk</h2><span class="muted small">Wordt elke minuut bijgewerkt</span></div>
           ${ov.working.length ? `<div class="rows">${ov.working.map(w => {
             const long = minutesBetween(w.clock_in, t) > 14 * 60;
+            const driver = ((S.staff || []).find(p => p.id === w.staff_id) || {}).role === 'driver';
             return `<div class="row">
               <div class="person">${picFor(w.staff_id, w.name, 'on')}
                 <div class="row-main"><span class="row-title">${esc(w.name)}</span>
-                <span class="row-sub">Binnen ${sameDay(w.clock_in, t) ? fmt.time(w.clock_in) : fmt.when(w.clock_in)} · <span data-live="since" data-since="${w.clock_in}">${fmt.dur(minutesBetween(w.clock_in, t))}</span>${w.shift ? ` · shift eindigt om ${fmt.time(w.shift.ends_at)}` : ' · geen shift'}</span>
+                <span class="row-sub">${driver ? 'Chauffeur, onderweg sinds' : 'Binnen'} ${sameDay(w.clock_in, t) ? fmt.time(w.clock_in) : fmt.when(w.clock_in)} · <span data-live="since" data-since="${w.clock_in}">${fmt.dur(minutesBetween(w.clock_in, t))}</span>${driver ? '' : w.shift ? ` · shift eindigt om ${fmt.time(w.shift.ends_at)}` : ' · geen shift'}</span>
                 ${long ? '<span class="pill bad">Meer dan 14u, waarschijnlijk vergeten uit te klokken</span>' : ''}</div></div>
-              <div class="row-actions"><button class="sm" data-checkout="${w.entry_id}" data-name="${esc(w.name)}">Uitklokken</button></div>
+              <div class="row-actions">${driver ? `<button class="sm" data-route="${w.staff_id}">Rit volgen</button>` : ''}<button class="sm" data-checkout="${w.entry_id}" data-name="${esc(w.name)}">Uitklokken</button></div>
             </div>`;
           }).join('')}</div>` : '<p class="empty">Niemand is nu ingeklokt.</p>'}
         </section>
@@ -2772,12 +3094,277 @@ async function viewToday(el, current) {
     </div>`;
   bindPunch(el, renderView);
   $$('[data-go]', el).forEach(b => b.addEventListener('click', () => { location.hash = b.dataset.go; }));
+  $$('[data-route]', el).forEach(b => b.addEventListener('click', () => { location.hash = `routes/${b.dataset.route}`; }));
   $$('[data-checkout]', el).forEach(b => b.addEventListener('click', async () => {
     const ok = await modal.confirm({ title: `${b.dataset.name} uitklokken?`, body: 'Het uitkloktijdstip wordt nu. Vertrok die persoon eerder, pas het uur dan aan in Overzicht.', ok: 'Uitklokken' });
     if (!ok) return;
     busy(null, async () => { await rpc('mgr_check_out', { p_entry_id: b.dataset.checkout }); toast(`${b.dataset.name} is uitgeklokt.`); renderView(); }).catch(() => {});
   }));
   startPolling(60000);
+}
+
+/* ------------------------------------------------------ manager: routes */
+
+// Leaflet and the map tiles of OpenStreetMap, only loaded on these pages.
+// Leaflet is window.L: in this file L is the language helper.
+let leafletLoading = null;
+function loadLeaflet() {
+  if (window.L) return Promise.resolve(window.L);
+  if (!leafletLoading) leafletLoading = new Promise((resolve, reject) => {
+    const css = document.createElement('link');
+    css.rel = 'stylesheet'; css.href = 'vendor/leaflet/leaflet.css';
+    document.head.appendChild(css);
+    const s = document.createElement('script');
+    s.src = 'vendor/leaflet/leaflet.js';
+    s.onload = () => resolve(window.L);
+    s.onerror = () => { leafletLoading = null; reject(new AppError('De kaart kon niet geladen worden. Controleer je verbinding.')); };
+    document.head.appendChild(s);
+  });
+  return leafletLoading;
+}
+const cssVar = k => getComputedStyle(document.documentElement).getPropertyValue(k).trim();
+function makeMap(box) {
+  const map = window.L.map(box, { scrollWheelZoom: false });
+  // the site sends no referrer; OpenStreetMap's tile servers ask for one
+  window.L.tileLayer('https://tile.openstreetmap.org/{z}/{x}/{y}.png', {
+    maxZoom: 19, referrerPolicy: 'strict-origin-when-cross-origin',
+    attribution: '&copy; <a href="https://www.openstreetmap.org/copyright" target="_blank" rel="noopener">OpenStreetMap</a>',
+  }).addTo(map);
+  return map;
+}
+const placeLabel = (layer, text) => layer.bindTooltip(esc(text), { permanent: true, direction: 'top', className: 'map-label', offset: [0, -4] });
+
+// The restaurant, the places of the round, the route of each clocked time,
+// stops outside the places, and where he is now.
+function drawRoute(map, a, data) {
+  const accent = cssVar('--accent') || '#8E1B24', brand = cssVar('--brand') || '#6E141A', on = cssVar('--on') || '#008B3C', warn = cssVar('--warn') || '#8F5B00';
+  const bounds = [];
+  if (data.site && data.site.lat != null) {
+    window.L.circle([data.site.lat, data.site.lng], { radius: data.site.radius_m, color: brand, weight: 1, fillOpacity: 0.08 }).addTo(map);
+    placeLabel(window.L.circleMarker([data.site.lat, data.site.lng], { radius: 6, color: brand, fillColor: brand, fillOpacity: 1, weight: 2 }).addTo(map), 'Restaurant');
+    bounds.push([data.site.lat, data.site.lng]);
+  }
+  for (const cp of data.checkpoints) {
+    const seen = a.visited.has(cp.id);
+    window.L.circle([cp.lat, cp.lng], { radius: cp.radius_m, color: seen ? on : warn, weight: 1, fillOpacity: 0.12 }).addTo(map);
+    placeLabel(window.L.circleMarker([cp.lat, cp.lng], { radius: 5, color: seen ? on : warn, fillColor: seen ? on : warn, fillOpacity: 1, weight: 2 }).addTo(map), cp.name);
+    bounds.push([cp.lat, cp.lng]);
+  }
+  for (const s of a.sessions) {
+    const line = s.points.map(p => [p.lat, p.lng]);
+    if (line.length > 1) window.L.polyline(line, { color: accent, weight: 4, opacity: 0.8 }).addTo(map);
+    bounds.push(...line);
+    for (const it of s.items) if (it.type === 'stop') {
+      window.L.circleMarker([it.lat, it.lng], { radius: 6, color: warn, fillColor: '#fff', fillOpacity: 1, weight: 3 }).addTo(map)
+        .bindTooltip(`Stop ${fmt.time(it.from)} – ${fmt.time(it.to)}`);
+    }
+    if (s.open && s.last) {
+      window.L.circleMarker([s.last.lat, s.last.lng], { radius: 9, color: '#fff', fillColor: accent, fillOpacity: 1, weight: 3, className: 'map-now' }).addTo(map)
+        .bindTooltip(`Nu · laatst gezien ${fmt.time(s.last.at)}`, { permanent: true, direction: 'right', className: 'map-label now' });
+    }
+  }
+  if (bounds.length > 1) map.fitBounds(bounds, { padding: [30, 30], maxZoom: 16 });
+  else if (bounds.length) map.setView(bounds[0], 14);
+  else map.setView([50.85, 4.35], 8);
+}
+
+// The day as a list: clocked in, each place or stop with the drive in
+// between, the times without a position, clocked out.
+function routeTimeline(a) {
+  if (!a.sessions.length) return '<p class="empty">Niet ingeklokt op deze dag.</p>';
+  const gapNote = (s, from, to, used) => s.gaps.filter(g => !used.has(g) && g.from < to && g.to > from).map(g => {
+    used.add(g);
+    return `<span class="pill warn">Geen locatie ${fmt.time(g.from)} – ${fmt.time(g.to)}</span>`;
+  }).join(' ');
+  return a.sessions.map(s => {
+    const used = new Set(), rows = [];
+    const first = s.items[0], lastItem = s.items[s.items.length - 1];
+    rows.push(`<li class="tl-in"><span class="tl-time">${fmt.time(s.start)}</span><span class="tl-what"><strong>Ingeklokt</strong>
+      ${gapNote(s, s.start, first ? first.from : s.end, used)}</span></li>`);
+    s.items.forEach((it, i) => {
+      const mins = (it.to - it.from) / 60000;
+      rows.push(it.type === 'visit'
+        ? `<li class="tl-visit ${it.place.site ? 'is-site' : ''}"><span class="tl-time">${fmt.time(it.from)}</span><span class="tl-what"><strong>${esc(it.place.name)}</strong>
+            <span class="muted small">${fmt.time(it.from)} – ${fmt.time(it.to)} · ${fmt.dur(mins)} ter plaatse</span> ${gapNote(s, it.from, it.to, used)}</span></li>`
+        : `<li class="tl-stop"><span class="tl-time">${fmt.time(it.from)}</span><span class="tl-what"><strong>Stop, geen plaats van de ronde</strong>
+            <span class="muted small">${fmt.time(it.from)} – ${fmt.time(it.to)} · ${fmt.dur(mins)}${it.gap ? ' · deels zonder locatie' : ''}</span>
+            <button class="link small" data-stop="${it.lat.toFixed(6)},${it.lng.toFixed(6)}">Als plaats bewaren</button> ${gapNote(s, it.from, it.to, used)}</span></li>`);
+      const leg = s.legs[i];
+      if (leg) rows.push(`<li class="tl-leg"><span class="tl-time"></span><span class="tl-what">↓ ${fmt.dur(leg.minutes)} rijden · ${num(leg.km, 1)} km ${gapNote(s, leg.from, leg.to, used)}</span></li>`);
+    });
+    rows.push(s.open
+      ? `<li class="tl-out is-open"><span class="tl-time">nu</span><span class="tl-what"><strong>Nog ingeklokt</strong>
+          ${s.last ? `<span class="muted small">laatst gezien ${fmt.time(s.last.at)}</span>` : ''} ${gapNote(s, lastItem ? lastItem.to : s.start, s.end, used)}</span></li>`
+      : `<li class="tl-out"><span class="tl-time">${fmt.time(s.end)}</span><span class="tl-what"><strong>Uitgeklokt</strong>
+          ${s.entry.pending ? '<span class="pill accent">Uur wacht op goedkeuring</span>' : s.entry.edited ? '<span class="pill">Aangepast</span>' : ''}
+          ${s.entry.note ? `<span class="muted small">“${esc(s.entry.note)}”</span>` : ''} ${gapNote(s, lastItem ? lastItem.to : s.start, s.end, used)}</span></li>`);
+    return `<ol class="timeline">${rows.join('')}</ol>`;
+  }).join('');
+}
+
+async function viewRoutes(el, current) {
+  const day = S.routeDay || startOfDay(now());
+  S.routeDay = day;
+  const [data] = await Promise.all([
+    rpc('mgr_routes', { p_staff_id: S.routeStaff || null, p_from: day.toISOString(), p_to: addDays(day, 1).toISOString() }),
+    loadLeaflet().catch(e => e),
+  ]);
+  if (!current()) return;
+  S.routeStaff = data.staff_id;
+  const driver = data.drivers.find(d => d.id === data.staff_id);
+  const a = Route.analyse({ entries: data.entries, points: data.points, checkpoints: data.checkpoints, site: data.site, now: now().getTime() });
+  const isToday = sameDay(day, now());
+  const go = (id, d) => { location.hash = `routes/${id}/${toDateInput(d)}`; };
+  const working = a.sessions.some(s => s.open);
+  el.innerHTML = `
+    <div class="view-head">
+      <div><h1>Ritten</h1><p>Waar de chauffeur reed terwijl hij ingeklokt was, en hoe lang hij over elke rit deed.</p></div>
+      ${periodBar(fmt.dayLong(day), isToday ? 'Vandaag' : '', 'rt-prev', 'rt-next')}
+    </div>
+    ${data.drivers.length > 1 ? `<div class="chips">${data.drivers.map(d => `<button class="chip ${d.id === data.staff_id ? 'is-on' : ''}" data-driver="${d.id}">${esc(d.name)}${d.working ? ' ●' : ''}</button>`).join('')}</div>` : ''}
+    ${driver ? '' : '<p class="hint info">Nog geen chauffeur. Voeg iemand toe bij Team met de rol <strong>Chauffeur</strong>. Je kan de plaatsen van de ronde hieronder al aanduiden.</p>'}
+    ${driver ? `<div class="stats">
+      <div class="stat good"><span class="v">${fmt.dur(a.minutes)}</span><span class="k">${esc(driver.name.split(' ')[0])} gewerkt${working ? ' (bezig)' : ''}</span></div>
+      <div class="stat"><span class="v">${num(a.km, 1)} km</span><span class="k">Gereden</span></div>
+      <div class="stat"><span class="v">${a.visited.size}/${data.checkpoints.length}</span><span class="k">Plaatsen bezocht</span></div>
+      <div class="stat ${a.sessions.length && a.known < 0.8 ? 'alert' : ''}"><span class="v">${a.sessions.length ? Math.round(a.known * 100) + '%' : '—'}</span><span class="k">Van de tijd een locatie</span></div>
+    </div>` : ''}
+    <div class="route-grid">
+      <section class="card route-map-card"><div class="route-map" id="rt-map" role="img" aria-label="Kaart met de rit"></div>
+        <p class="muted small" style="margin-top:8px">Rode lijn: de rit. Groen: plaats bezocht, oranje: nog niet. Witte bolletjes: stops buiten de plaatsen.</p></section>
+      <section class="card">
+        <div class="card-head"><h2>Verloop</h2>${working ? '<span class="pill on">Onderweg</span>' : ''}</div>
+        ${driver ? routeTimeline(a) : '<p class="empty">Nog geen ritten.</p>'}
+        ${a.sessions.some(s => s.gaps.length) ? '<p class="muted small" style="margin-top:10px">Geen locatie: de app was dicht, het scherm stond uit of de telefoon had geen bereik. De uren tellen wel.</p>' : ''}
+      </section>
+    </div>
+    <div class="grid-2">
+      <section class="card">
+        <div class="card-head"><h2>Plaatsen van de ronde</h2><button class="sm primary" id="cp-add">+ Plaats toevoegen</button></div>
+        <p class="muted small" style="margin-top:6px">De automaten en andere plaatsen waar de chauffeur langs moet. Komt hij binnen de zone, dan telt hij als aangekomen.</p>
+        ${data.checkpoints.length ? `<div class="rows">${data.checkpoints.map(cp => {
+          const v = a.visited.get(cp.id) || [];
+          return `<div class="row"><div class="row-main"><span class="row-title">${esc(cp.name)}</span>
+            <span class="row-sub">Zone ${metres(cp.radius_m)}${v.length ? ` · ${isToday ? 'vandaag' : 'die dag'} om ${v.map(x => fmt.time(x.from)).join(', ')}` : ''}</span></div>
+            <div class="row-actions"><button class="sm" data-cp="${cp.id}">Wijzigen</button></div></div>`;
+        }).join('')}</div>` : '<p class="empty">Nog geen plaatsen. Voeg ze toe met een adres, door op de kaart te tikken, of bewaar een stop uit het verloop.</p>'}
+      </section>
+      <section class="card">
+        <div class="card-head"><h2>Inklokzone</h2><button class="sm" id="site-edit">Aanpassen</button></div>
+        <p class="muted small" style="margin-top:6px">${data.site.lat != null
+          ? `De chauffeur kan alleen in- en uitklokken binnen <strong>${metres(data.site.radius_m)}</strong> van het restaurant. Hoe nauwkeurig zijn telefoon is, telt in zijn voordeel: binnen staat een telefoon vaak 30 tot 100 m naast.`
+          : 'Duid aan waar het restaurant is. Zonder die plaats kan de chauffeur niet inklokken.'}</p>
+        <p class="muted small">Hij ziet zelf dat de app zijn rit bijhoudt, alleen terwijl hij ingeklokt is.</p>
+      </section>
+    </div>`;
+
+  const box = $('#rt-map', el);
+  if (window.L) drawRoute(makeMap(box), a, data);
+  else box.innerHTML = '<p class="empty">De kaart kon niet geladen worden. Het verloop hiernaast klopt wel.</p>';
+  $('#rt-prev', el).addEventListener('click', () => go(data.staff_id, addDays(day, -1)));
+  $('#rt-next', el).addEventListener('click', () => go(data.staff_id, addDays(day, 1)));
+  $$('[data-driver]', el).forEach(b => b.addEventListener('click', () => go(b.dataset.driver, day)));
+  $('#cp-add', el).addEventListener('click', () => placeModal({ center: data.site }));
+  $$('[data-cp]', el).forEach(b => b.addEventListener('click', () => placeModal({ place: data.checkpoints.find(c => c.id === b.dataset.cp), center: data.site })));
+  $$('[data-stop]', el).forEach(b => b.addEventListener('click', () => {
+    const [lat, lng] = b.dataset.stop.split(',').map(Number);
+    placeModal({ place: { lat, lng, radius_m: 75 }, center: data.site });
+  }));
+  $('#site-edit', el).addEventListener('click', () => placeModal({ site: data.site }));
+  if (isToday && working) startPolling(60000);
+}
+
+// Add or change a place of the round, or the restaurant's zone (site): tap the
+// map, use this phone's location, or look up an address.
+function placeModal({ place = null, site = null, center = null }) {
+  const isSite = !!site, cur = isSite ? site : place || {};
+  let pos = cur.lat != null ? { lat: cur.lat, lng: cur.lng } : null;
+  const radii = isSite ? [50, 75, 100, 150, 200, 300, 500] : [30, 50, 75, 100, 150, 200, 300];
+  const radius = cur.radius_m || (isSite ? 150 : 75);
+  const d = modal.open(`
+    <h2 id="modal-title">${isSite ? 'Inklokzone van het restaurant' : place && place.id ? 'Plaats wijzigen' : 'Plaats toevoegen'}</h2>
+    <form id="pl-form" novalidate>
+      <div class="form-grid">
+        ${isSite ? '' : `<div class="field wide"><label for="pl-name">Naam</label><input id="pl-name" maxlength="80" value="${esc(cur.name || '')}" placeholder="bv. Automaat station Torhout"></div>`}
+        <div class="field"><label for="pl-radius">Zone</label><select id="pl-radius">${[...new Set([...radii, radius])].sort((x, y) => x - y)
+          .map(r => `<option value="${r}" ${r === radius ? 'selected' : ''}>${metres(r)} rondom</option>`).join('')}</select></div>
+        <div class="field"><label>&nbsp;</label><button type="button" id="pl-here">Mijn locatie nu</button></div>
+        <div class="field wide"><label for="pl-q">Adres zoeken</label>
+          <div class="copybox"><input id="pl-q" maxlength="120" placeholder="Straat en nummer, gemeente"><button type="button" class="sm" id="pl-find">Zoeken</button></div>
+          <div id="pl-results" class="pl-results"></div></div>
+      </div>
+      <div class="pl-map" id="pl-map" role="img" aria-label="Tik op de kaart om de plaats aan te duiden"></div>
+      <p class="muted small" id="pl-pos" style="margin-top:6px"></p>
+      <p class="form-error" id="pl-err"></p>
+      <div class="form-actions">
+        ${place && place.id ? '<button type="button" class="danger" id="pl-rm">Verwijderen</button>' : ''}
+        <button type="button" data-close>Annuleren</button><button type="submit" class="primary">Opslaan</button>
+      </div>
+    </form>`, null, { wide: true });
+  const err = $('#pl-err', d), info = $('#pl-pos', d);
+  let map = null, pin = null, ring = null;
+  const show = () => {
+    info.textContent = pos ? `Aangeduid: ${pos.lat.toFixed(5)}, ${pos.lng.toFixed(5)}` : 'Tik op de kaart, zoek een adres of gebruik je locatie.';
+    if (!map || !pos) return;
+    const r = Number($('#pl-radius', d).value);
+    if (!pin) {
+      pin = window.L.marker([pos.lat, pos.lng], { draggable: true, icon: window.L.divIcon({ className: 'map-pin', iconSize: [18, 18] }) }).addTo(map);
+      pin.on('dragend', () => { const ll = pin.getLatLng(); pos = { lat: ll.lat, lng: ll.lng }; show(); });
+      ring = window.L.circle([pos.lat, pos.lng], { radius: r, color: cssVar('--accent'), weight: 1, fillOpacity: 0.12 }).addTo(map);
+    }
+    pin.setLatLng([pos.lat, pos.lng]);
+    ring.setLatLng([pos.lat, pos.lng]).setRadius(r);
+  };
+  const moveTo = (p, zoom = 17) => { pos = p; show(); if (map) map.setView([p.lat, p.lng], Math.max(map.getZoom(), zoom)); };
+  loadLeaflet().then(() => {
+    if (!d.open) return;
+    map = makeMap($('#pl-map', d));
+    const c = pos || (center && center.lat != null ? center : null);
+    map.setView(c ? [c.lat, c.lng] : [51.03, 3.1], pos ? 17 : c ? 13 : 10);
+    map.on('click', ev => { pos = { lat: ev.latlng.lat, lng: ev.latlng.lng }; show(); });
+    setTimeout(() => map.invalidateSize(), 50);
+    show();
+  }).catch(e => { $('#pl-map', d).innerHTML = `<p class="empty">${esc(e.message)} Gebruik je locatie of zoek een adres.</p>`; });
+  show();
+  $('#pl-radius', d).addEventListener('change', show);
+  $('#pl-here', d).addEventListener('click', ev => busy(ev.currentTarget, async () => moveTo(await getPosition())).catch(() => {}));
+  const find = async () => {
+    const q = $('#pl-q', d).value.trim(), out = $('#pl-results', d);
+    if (q.length < 3) { out.innerHTML = '<p class="muted small">Typ een straat en een gemeente.</p>'; return; }
+    out.innerHTML = '<p class="muted small">Zoeken…</p>';
+    try {
+      const res = await fetch(`https://nominatim.openstreetmap.org/search?format=jsonv2&limit=5&countrycodes=be,fr,nl&q=${encodeURIComponent(q)}`,
+        { referrerPolicy: 'strict-origin-when-cross-origin', headers: { 'Accept-Language': 'nl' } });
+      const list = res.ok ? await res.json() : [];
+      out.innerHTML = list.length ? list.map((x, i) => `<button type="button" class="pl-hit" data-hit="${i}">${esc(x.display_name)}</button>`).join('')
+        : '<p class="muted small">Niets gevonden. Probeer het met minder woorden, of tik op de kaart.</p>';
+      $$('[data-hit]', out).forEach(b => b.addEventListener('click', () => { const x = list[+b.dataset.hit]; moveTo({ lat: +x.lat, lng: +x.lon }); out.innerHTML = ''; }));
+    } catch { out.innerHTML = '<p class="muted small">Zoeken lukte niet. Tik op de kaart of gebruik je locatie.</p>'; }
+  };
+  $('#pl-find', d).addEventListener('click', find);
+  $('#pl-q', d).addEventListener('keydown', ev => { if (ev.key === 'Enter') { ev.preventDefault(); find(); } });
+  const rm = $('#pl-rm', d);
+  if (rm) rm.addEventListener('click', () => busy(rm, async () => {
+    await rpc('mgr_archive_checkpoint', { p_id: place.id });
+    modal.close();
+    toast(`${place.name} verwijderd.`);
+    renderView();
+  }).catch(() => {}));
+  $('#pl-form', d).addEventListener('submit', async ev => {
+    ev.preventDefault();
+    err.textContent = '';
+    const name = isSite ? '' : $('#pl-name', d).value.trim(), r = Number($('#pl-radius', d).value);
+    if (!isSite && !name) { err.textContent = 'Geef de plaats een naam.'; return; }
+    if (!pos) { err.textContent = 'Duid aan waar het is: tik op de kaart, zoek een adres of gebruik je locatie.'; return; }
+    await busy($('button[type=submit]', d), async () => {
+      if (isSite) await rpc('mgr_save_site', { p_lat: pos.lat, p_lng: pos.lng, p_radius: r });
+      else await rpc('mgr_save_checkpoint', { p_id: (place && place.id) || null, p_name: name, p_lat: pos.lat, p_lng: pos.lng, p_radius: r });
+      modal.close();
+      if (isSite) await refreshMe();
+      toast(isSite ? 'Inklokzone opgeslagen.' : `${name} opgeslagen.`);
+      renderView();
+    }).catch(x => { err.textContent = x.message; });
+  });
 }
 
 /* -------------------------------------------------------- manager: monthly */
@@ -3051,8 +3638,8 @@ async function viewRequests(el, current) {
 
 /* ----------------------------------------------------------- manager: team */
 
-const ROLE_NL = { staff: 'Medewerker', manager: 'Verantwoordelijke', viewer: 'Familie · alleen overzicht' };
-const roleOptions = sel => Object.entries({ staff: 'Medewerker', manager: 'Verantwoordelijke (ziet alles)', viewer: 'Familie (alleen het maandoverzicht)' })
+const ROLE_NL = { staff: 'Medewerker', manager: 'Verantwoordelijke', viewer: 'Familie · alleen overzicht', driver: 'Chauffeur' };
+const roleOptions = sel => Object.entries({ staff: 'Medewerker', manager: 'Verantwoordelijke (ziet alles)', viewer: 'Familie (alleen het maandoverzicht)', driver: 'Chauffeur (geen planning, klokt in aan het restaurant)' })
   .map(([k, l]) => `<option value="${k}" ${k === sel ? 'selected' : ''}>${l}</option>`).join('');
 const payOptions = sel => `<option value="">Niet ingevuld</option>${Object.entries(PAY)
   .map(([k, [l]]) => `<option value="${k}" ${k === sel ? 'selected' : ''}>${l}</option>`).join('')}`;
@@ -3097,7 +3684,8 @@ async function viewTeam(el, current) {
             <div class="field"><label for="ap-pid">Werknemersnummer (Securex)</label><input id="ap-pid" maxlength="30" autocomplete="off" placeholder="Optioneel"></div>
             <div class="field"><label for="ap-pay">Betaling</label><select id="ap-pay">${payOptions(null)}</select></div>
             <div class="field wide"><label for="ap-role">Rol</label><select id="ap-role">${roleOptions('staff')}</select>
-              <span class="help" id="ap-role-help" hidden>Een familie-account ziet alleen het maandoverzicht: wie wanneer werkt, de open shiften, de uren, het uurloon en cash of ingeschreven. In het Nederlands of het Chinees. Het kan niet inklokken en geen shiften opnemen.</span></div>
+              <span class="help" id="ap-role-help" hidden>Een familie-account ziet alleen het maandoverzicht: wie wanneer werkt, de open shiften, de uren, het uurloon en cash of ingeschreven. In het Nederlands of het Chinees. Het kan niet inklokken en geen shiften opnemen.</span>
+              <span class="help" id="ap-driver-help" hidden>Een chauffeur ziet geen planning. Hij klokt in en uit aan het restaurant, met de locatie van zijn telefoon, en ziet zijn uren per dag. Terwijl hij ingeklokt is, houdt de app zijn rit bij: dat zie je bij Ritten. Zijn uren gaan niet naar Officient.</span></div>
           </div>
           <p class="form-error" id="ap-err"></p>
           <div class="form-actions"><button type="submit" class="primary">Persoon toevoegen</button></div>
@@ -3148,7 +3736,7 @@ async function viewTeam(el, current) {
       if (!family && (type || pid)) await rpc('mgr_save_staff_payroll', { p_id: added.id, p_contract_type: type || null, p_payroll_id: pid });
       if (!family && pay) await rpc('mgr_set_pay_method', { p_id: added.id, p_method: pay });
       toast(`${name} toegevoegd. Geef de pincode door: ${pin}`);
-      renderView();
+      refreshTabs();
     }).catch(e => { err.textContent = e.message; });
   });
   $$('[data-person]', el).forEach(b => b.addEventListener('click', () => { location.hash = `team/${b.dataset.person}`; }));
@@ -3159,6 +3747,7 @@ async function viewTeam(el, current) {
     const family = apRole.value === 'viewer';
     ['#ap-rate', '#ap-type', '#ap-pid', '#ap-pay'].forEach(sel => { $(sel, ap).closest('.field').hidden = family; });
     $('#ap-role-help', ap).hidden = !family;
+    $('#ap-driver-help', ap).hidden = apRole.value !== 'driver';
   });
   const tzBtn = $('#st-tz', el);
   if (tzBtn) tzBtn.addEventListener('click', () => busy(tzBtn, async () => {
@@ -3274,12 +3863,13 @@ async function viewMember(el, current) {
   const p = r.person, pr = r.profile, xp = r.xp, self = p.id === S.me.id, first = p.name.split(' ')[0];
   const mine = templates.filter(tp => tp.staff_id === p.id);
   if (p.role === 'viewer') return familyMember(el, r);
+  const driver = p.role === 'driver';
   el.innerHTML = `
     <div class="view-head"><div class="hello">
       ${personPic(p, 'xl')}
       <div><button class="link back" id="back">‹ Team</button><h1>${esc(p.name)}</h1>
         <p class="lvl-line">${levelPill(xp)} <span>${esc(levelTitle(xp.level))}</span> <span class="muted">· ${ROLE_NL[p.role]}${p.active ? '' : ' · Inactief'}</span> ${payPill(p.pay_method)}${p.officient_id ? ' <span class="pill">Officient</span>' : ''}</p></div>
-    </div></div>
+    </div>${driver ? `<button class="sm" id="see-routes">${ICONS.route} Ritten bekijken</button>` : ''}</div>
     ${p.locked ? '<p class="hint bad">Geblokkeerd na te veel verkeerde pincodes. Stel hieronder een nieuwe pincode in om te deblokkeren.</p>' : ''}
     <div class="grid-2">
       <section class="card">
@@ -3320,7 +3910,7 @@ async function viewMember(el, current) {
         </div>
       </section>
     </div>
-    <section class="card">
+    ${driver ? `<section class="card"><h2>Chauffeur</h2><p class="muted small" style="margin-top:6px">${esc(first)} heeft geen planning. ${esc(first)} klokt in en uit aan het restaurant en ziet de eigen uren per dag. Terwijl ${esc(first)} ingeklokt is, houdt de app de rit bij: zie <a href="#routes/${p.id}">Ritten</a>. Deze uren gaan niet naar Officient.</p></section>` : `<section class="card">
       <div class="card-head"><h2>Vaste uren</h2>${p.active ? '<button class="sm" id="add-fixed">+ Vaste uren toevoegen</button>' : ''}</div>
       <p class="muted small" style="margin-top:6px">Werkt ${esc(first)} elke week op dezelfde momenten? Dan kan ${esc(first)} tijdens die uren inklokken. Vaste uren staan niet in de kalender: die is voor studenten en deeltijdsen.</p>
       ${p.contract_minutes && contractText(p.contract_minutes) ? `<p class="small" style="margin-top:6px">Contracturen volgens Officient: <strong>${esc(contractText(p.contract_minutes))}</strong></p>` : ''}
@@ -3329,7 +3919,7 @@ async function viewMember(el, current) {
           <span class="row-sub">${daysText(tp.weekdays)} · <span class="time">${tp.start_time} – ${tp.end_time}</span></span></div>
           <div class="row-actions"><button class="sm" data-template="${tp.id}">Wijzigen</button></div></div>`).join('')}</div>`
         : '<p class="empty">Geen vaste uren. Shiften neemt die persoon zelf op of krijgt ze van jou.</p>'}
-    </section>
+    </section>`}
     <section class="card">
       <div class="card-head"><h2>Persoonlijke gegevens</h2><button class="sm" id="from-slip">Invullen vanuit een loonfiche</button></div>
       <p class="muted small" style="margin-top:6px">${esc(first)} kan deze gegevens ook zelf invullen bij Profiel. Alleen die persoon en de verantwoordelijken zien ze.</p>
@@ -3368,6 +3958,8 @@ async function viewMember(el, current) {
     <input type="file" id="slip-file" accept="application/pdf,image/png,image/jpeg" hidden>`;
 
   $('#back', el).addEventListener('click', () => { location.hash = 'team'; });
+  const seeRoutes = $('#see-routes', el);
+  if (seeRoutes) seeRoutes.addEventListener('click', () => { location.hash = `routes/${p.id}`; });
   const addFixed = $('#add-fixed', el);
   if (addFixed) addFixed.addEventListener('click', () => templateModal(null, { staffId: p.id }));
   $$('[data-template]', el).forEach(b => b.addEventListener('click', () => templateModal(mine.find(x => x.id === b.dataset.template))));
@@ -3392,7 +3984,7 @@ async function viewMember(el, current) {
       if (pay !== (p.pay_method || null)) await rpc('mgr_set_pay_method', { p_id: p.id, p_method: pay });
       toast(pin ? `Opgeslagen. Nieuwe pincode: ${pin}` : 'Opgeslagen.');
       await loadStaff(true);
-      if (self) { await refreshMe(); renderShell(); } else renderView();
+      if (self) { await refreshMe(); renderShell(); } else refreshTabs();
     }).catch(e => { err.textContent = e.message; });
   });
   const pf = $('#pf-form', el);
@@ -3830,7 +4422,8 @@ function famTodayHTML(d) {
     return { sh, cls: 'bad', text: t < b ? L('Nog niet ingeklokt', '还没打卡') : L('Niet ingeklokt', '没有打卡') };
   });
   const planned = new Set(d.shifts.map(x => x.staff_id));
-  const extra = d.entries.filter(e => !planned.has(e.staff_id));
+  const extra = d.entries.filter(e => !planned.has(e.staff_id) && !e.driver);
+  const drivers = d.entries.filter(e => e.driver);
   return `
     <section class="card fam-today" lang="${langAttr()}">
       <h2>${L('Vandaag', '今天')} · ${esc(fam.day(t))}</h2>
@@ -3841,6 +4434,7 @@ function famTodayHTML(d) {
           <span class="fam-today-state">${esc(r.text)}</span>
         </div>`).join('')}</div>` : `<p class="empty">${L('Vandaag geen shiften.', '今天没有班次。')}</p>`}
       ${extra.length ? `<p class="small" style="margin-top:8px">${L('Ook ingeklokt zonder shift', '没有排班也打了卡')}: ${extra.map(e => `${esc(e.staff_name)} (${fmt.time(e.clock_in)})`).join(', ')}</p>` : ''}
+      ${drivers.length ? `<p class="small" style="margin-top:8px">${L('Chauffeur', '司机')}: ${drivers.map(e => `${esc(e.staff_name)} (${fmt.time(e.clock_in)} – ${e.clock_out ? fmt.time(e.clock_out) : L('onderweg', '在路上')})`).join(', ')}</p>` : ''}
     </section>`;
 }
 
@@ -3889,7 +4483,8 @@ async function viewFamilyStaff(el, current) {
   const owed = p => p.hourly_rate != null ? Math.round(p.worked_minutes / 60 * p.hourly_rate * 100) / 100 : null;
   const cashTotal = team.filter(p => p.pay_method === 'cash').reduce((a, p) => a + (owed(p) || 0), 0);
   const totalMins = team.reduce((a, p) => a + p.worked_minutes, 0);
-  const role = p => p.role === 'manager' ? L('Verantwoordelijke', '负责人') : L('Medewerker', '员工');
+  const role = p => p.role === 'manager' ? L('Verantwoordelijke', '负责人') : p.role === 'driver' ? L('Chauffeur', '司机') : L('Medewerker', '员工');
+  const fixed = p => p.role === 'driver' ? L('Chauffeur, rijdt de ronde', '司机，跑路线') : p.fixed ? esc(fixedText(p.fixed, L)) : `<span class="muted">${L('Volgens de kalender', '按排班')}</span>`;
   const age = p => p.age != null ? L(`${p.age} jaar`, `${p.age}岁`) : '—';
   const rate = p => p.hourly_rate != null ? fam.money(p.hourly_rate) : '—';
   const total = p => owed(p) != null ? fam.money(owed(p)) : '—';
@@ -3908,7 +4503,7 @@ async function viewFamilyStaff(el, current) {
         <thead><tr><th>${L('Naam', '名字')}</th><th class="num">${L('Leeftijd', '年龄')}</th><th>${L('Vaste uren', '固定时间')}</th><th class="num">${L('Per uur', '时薪')}</th><th class="num">${L('Gewerkt', '工作时间')}</th><th class="num">${L('Samen', '合计')}</th><th>${L('Betaling', '付款')}</th></tr></thead>
         <tbody>${team.map(p => `<tr class="${p.pay_method === 'cash' ? 'is-cash' : ''}">
           <td><span class="person">${personPic(p, 'lg')}<span><strong>${esc(p.name)}</strong><span class="row-sub">${role(p)}${p.phone ? ` · ${tel(p)}` : ''}</span></span></span></td>
-          <td class="num">${age(p)}</td><td class="fam-fixed">${p.fixed ? esc(fixedText(p.fixed, L)) : `<span class="muted">${L('Volgens de kalender', '按排班')}</span>`}</td><td class="num">${rate(p)}</td>
+          <td class="num">${age(p)}</td><td class="fam-fixed">${fixed(p)}</td><td class="num">${rate(p)}</td>
           <td class="num">${fam.dur(p.worked_minutes)}</td><td class="num fam-total">${total(p)}</td>
           <td>${payPill(p.pay_method, L)}</td></tr>`).join('')}</tbody>
       </table></div>
@@ -3917,7 +4512,7 @@ async function viewFamilyStaff(el, current) {
           <div class="fam-person-head">${personPic(p, 'lg')}<strong>${esc(p.name)}</strong>${payPill(p.pay_method, L)}</div>
           <dl class="fam-kv">
             <dt>${L('Leeftijd', '年龄')}</dt><dd>${age(p)}</dd>
-            <dt>${L('Vaste uren', '固定时间')}</dt><dd>${p.fixed ? esc(fixedText(p.fixed, L)) : `<span class="muted">${L('Volgens de kalender', '按排班')}</span>`}</dd>
+            <dt>${L('Vaste uren', '固定时间')}</dt><dd>${fixed(p)}</dd>
             <dt>${L('Per uur', '时薪')}</dt><dd>${rate(p)}</dd>
             <dt>${L('Gewerkt', '工作时间')}</dt><dd>${fam.dur(p.worked_minutes)} <span class="muted">· ${L(`${p.times} keer`, `${p.times}次`)}</span></dd>
             <dt>${L('Samen', '合计')}</dt><dd class="fam-total">${total(p)}</dd>

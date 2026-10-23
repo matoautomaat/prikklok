@@ -23,7 +23,11 @@ create table public.settings (
   wage_codes        jsonb not null default '{}'::jsonb, -- Securex wage codes per contract type and kind of hours
   require_shift     boolean not null default true, -- staff can only check in during one of their shifts
   clock_in_early_minutes int not null default 15 check (clock_in_early_minutes between 0 and 120),
-  contract_info     jsonb not null default '{}'::jsonb -- the employer's details on student contracts (Studentencontracten)
+  contract_info     jsonb not null default '{}'::jsonb, -- the employer's details on student contracts (Studentencontracten)
+  -- the restaurant: drivers clock in and out within site_radius_m of it (Ritten)
+  site_lat          double precision check (site_lat between -90 and 90),
+  site_lng          double precision check (site_lng between -180 and 180),
+  site_radius_m     int not null default 150 check (site_radius_m between 25 and 2000)
 );
 insert into public.settings (id) values (1);
 
@@ -60,7 +64,10 @@ create table public.staff (
   -- details changed in the app that Officient doesn't have yet ('phone', 'email', 'birth_date', 'national_id',
   -- 'iban', 'address'): the nightly sync keeps the app's value until the manager sends them
   officient_pending text[] not null default '{}',
-  contract_minutes jsonb -- contract hours per weekday from Officient, eg {"monday": 240, ...}
+  contract_minutes jsonb, -- contract hours per weekday from Officient, eg {"monday": 240, ...}
+  -- a driver (the app calls its role 'driver'): no schedule; clocks in and out at the
+  -- restaurant, and while clocked in the app keeps the route (route_points)
+  driver          boolean not null default false
 );
 create unique index staff_name_key on public.staff (lower(name));
 
@@ -268,10 +275,10 @@ language sql stable set search_path = public as $$
      and exists (select 1 from public.shift_templates where id = p_template and staff_id = p_staff)
 $$;
 
--- 'staff', 'manager' or 'viewer' (a family account)
+-- 'staff', 'manager', 'viewer' (a family account) or 'driver'
 create function app_private.role_of(p public.staff) returns text
 language sql immutable set search_path = public as $$
-  select case when p.view_only then 'viewer' else p.role end
+  select case when p.view_only then 'viewer' when p.driver then 'driver' else p.role end
 $$;
 
 -- The shift a check-in at p_at belongs to: one of the person's shifts that
@@ -422,7 +429,10 @@ begin
         'business_name', business_name, 'drop_cutoff_hours', drop_cutoff_hours,
         'grace_minutes', grace_minutes, 'currency', currency, 'timezone', timezone,
         'require_shift', require_shift, 'clock_in_early_minutes', clock_in_early_minutes,
-        'wage_codes', case when v.role = 'manager' then wage_codes end)
+        'wage_codes', case when v.role = 'manager' then wage_codes end,
+        'site', case when v.driver or v.role = 'manager'
+                then json_build_object('lat', site_lat, 'lng', site_lng, 'radius_m', site_radius_m) end,
+        'has_drivers', v.role = 'manager' and exists (select 1 from public.staff where driver and active))
       from public.settings where id = 1),
     'open_entry', (select json_build_object('id', e.id, 'clock_in', e.clock_in, 'shift', app_private.shift_json(e.shift_id))
       from public.time_entries e where e.staff_id = v.id and e.clock_out is null and e.deleted_at is null),
@@ -445,6 +455,9 @@ language plpgsql security definer set search_path = public, extensions as $$
 declare v public.staff; v_id uuid; v_shift uuid; st public.settings; nx public.shifts;
 begin
   v := app_private.current_staff(p_token);
+  if v.driver then
+    raise exception using message = 'Drivers clock in at the restaurant, with their location.', errcode = 'P0001';
+  end if;
   if exists (select 1 from public.time_entries where staff_id = v.id and clock_out is null) then
     raise exception using message = 'You''re already checked in.', errcode = 'P0001';
   end if;
@@ -481,6 +494,9 @@ language plpgsql security definer set search_path = public, extensions as $$
 declare v public.staff; v_id uuid;
 begin
   v := app_private.current_staff(p_token);
+  if v.driver then
+    raise exception using message = 'Drivers clock out at the restaurant, with their location.', errcode = 'P0001';
+  end if;
   update public.time_entries
      set clock_out = greatest(now(), clock_in + interval '1 second'),
          note = coalesce(nullif(app_private.clean_text(p_note, 300), ''), note)
@@ -715,11 +731,12 @@ create function public.mgr_save_staff(p_token text, p_id uuid, p_name text, p_pi
 language plpgsql security definer set search_path = public, extensions as $$
 declare v public.staff; old public.staff; v_name text; v_id uuid; v_pin text := nullif(p_pin, '');
         v_active boolean := coalesce(p_active, true); v_view boolean := p_role = 'viewer';
-        v_role text := case when p_role = 'viewer' then 'staff' else p_role end;
+        v_driver boolean := p_role = 'driver';
+        v_role text := case when p_role in ('viewer', 'driver') then 'staff' else p_role end;
 begin
   v := app_private.current_manager(p_token);
   v_name := app_private.clean_name(p_name);
-  if p_role is null or p_role not in ('staff', 'manager', 'viewer') then
+  if p_role is null or p_role not in ('staff', 'manager', 'viewer', 'driver') then
     raise exception using message = 'Pick a role.', errcode = 'P0001';
   end if;
   if p_hourly_rate is not null and (p_hourly_rate < 0 or p_hourly_rate > 10000) then
@@ -727,8 +744,8 @@ begin
   end if;
   if p_id is null then
     perform app_private.check_pin(v_pin);
-    insert into public.staff (name, pin_hash, role, view_only, hourly_rate, active)
-    values (v_name, extensions.crypt(v_pin, extensions.gen_salt('bf', 8)), v_role, v_view,
+    insert into public.staff (name, pin_hash, role, view_only, driver, hourly_rate, active)
+    values (v_name, extensions.crypt(v_pin, extensions.gen_salt('bf', 8)), v_role, v_view, v_driver,
             case when v_view then null else p_hourly_rate end, v_active)
     returning id into v_id;
   else
@@ -744,18 +761,19 @@ begin
       perform app_private.check_pin(v_pin);
     end if;
     update public.staff
-       set name = v_name, role = v_role, view_only = v_view,
+       set name = v_name, role = v_role, view_only = v_view, driver = v_driver,
            hourly_rate = case when v_view then null else p_hourly_rate end, active = v_active,
            pin_hash        = case when v_pin is null then pin_hash else extensions.crypt(v_pin, extensions.gen_salt('bf', 8)) end,
            failed_attempts = case when v_pin is null then failed_attempts else 0 end,
            locked_until    = case when v_pin is null then locked_until end
      where id = p_id;
     v_id := p_id;
-    if not v_active or v_pin is not null or v_view <> old.view_only then
+    if not v_active or v_pin is not null or v_view <> old.view_only or v_driver <> old.driver then
       update public.sessions set expires_at = now()
        where staff_id = p_id and token_hash <> app_private.hash_token(coalesce(p_token, ''));
     end if;
-    if not v_active or v_view then
+    -- a family account or a driver works no shifts: their upcoming ones open up again
+    if not v_active or v_view or v_driver then
       update public.shift_templates set archived_at = now() where staff_id = p_id and archived_at is null;
       update public.shifts set cancelled_at = now()
        where staff_id = p_id and starts_at > now() and cancelled_at is null
@@ -913,7 +931,7 @@ begin
     select json_build_object(
       'grace_minutes', v_grace,
       'staff', coalesce((select json_agg(r order by lower(r.name)) from (
-          select st.id, st.name, st.hourly_rate, st.active, st.contract_type, st.payroll_id, st.pay_method,
+          select st.id, st.name, st.hourly_rate, st.active, st.contract_type, st.payroll_id, st.pay_method, st.driver,
             coalesce((select round(sum(extract(epoch from (e.clock_out - e.clock_in))) / 60, 1)
                         from ent e where e.staff_id = st.id and e.clock_out is not null), 0) as worked_minutes,
             (select count(*) from ent e where e.staff_id = st.id) as entries,
@@ -1851,7 +1869,7 @@ begin
       order by lower(st.name))
     from public.staff st
     cross join lateral (select app_private.xp_json(st.id) as x) j
-   where st.active and not st.view_only), '[]'::json);
+   where st.active and not st.view_only and not st.driver), '[]'::json);
 end $$;
 
 -- Bonus XP a manager gives someone, on top of what their work earns. It counts
@@ -2514,7 +2532,7 @@ begin
       from public.shifts sh left join public.staff st on st.id = sh.staff_id
      where sh.cancelled_at is null and sh.starts_at < v_to and sh.ends_at > v_from), '[]'::json),
     'entries', coalesce((select json_agg(json_build_object(
-        'staff_id', e.staff_id, 'staff_name', st.name, 'clock_in', e.clock_in, 'clock_out', e.clock_out) order by e.clock_in)
+        'staff_id', e.staff_id, 'staff_name', st.name, 'clock_in', e.clock_in, 'clock_out', e.clock_out, 'driver', st.driver) order by e.clock_in)
       from public.time_entries e join public.staff st on st.id = e.staff_id
      where e.deleted_at is null and e.clock_in < v_to and coalesce(e.clock_out, now()) > v_from), '[]'::json));
 end $$;
@@ -2542,7 +2560,7 @@ language sql stable set search_path = public as $$
       'open', (select count(*) from public.time_entries t where t.staff_id = st.id and t.clock_out is null and t.deleted_at is null),
       'pending', (select count(*) from public.time_edits x where x.staff_id = st.id and x.status = 'pending'))
       order by lower(st.name)), '[]'::json)
-    from public.staff st where st.officient_id is not null
+    from public.staff st where st.officient_id is not null and not st.driver -- a driver's hours don't go to Officient
 $$;
 
 -- Notes that a manager wrote a month's hours into Officient.
@@ -2794,6 +2812,300 @@ begin
   end if;
   update public.staff set officient_id = p_oid, officient_pending = '{}' where id = p_staff and officient_id is null;
   return found;
+end $$;
+
+-- Drivers ---------------------------------------------------------------------
+-- A driver (chauffeur) refills the vending machines on a daily round. He has no
+-- schedule: he clocks in and out at the restaurant, with his phone's location,
+-- and only while he is clocked in the app keeps where he drives. The manager
+-- marks the places on the round (checkpoints) and sees when he reached each
+-- one and how long the drive in between took (Ritten).
+
+create table public.checkpoints (
+  id          uuid primary key default gen_random_uuid(),
+  name        text not null check (length(name) between 1 and 80),
+  lat         double precision not null check (lat between -90 and 90),
+  lng         double precision not null check (lng between -180 and 180),
+  radius_m    int not null default 75 check (radius_m between 20 and 1000), -- within this distance he is there
+  archived_at timestamptz, -- removed places are archived, not deleted
+  created_at  timestamptz not null default now()
+);
+alter table public.checkpoints enable row level security;
+revoke all on public.checkpoints from anon, authenticated;
+
+-- Where a driver was while clocked in: 'in' and 'out' where he clocked, 'track'
+-- his phone's position along the way, 'here' when he tapped "Ik ben hier".
+create table public.route_points (
+  id       bigint generated always as identity primary key,
+  entry_id uuid not null references public.time_entries (id) on delete cascade,
+  staff_id uuid not null references public.staff (id) on delete cascade,
+  at       timestamptz not null,
+  lat      double precision not null check (lat between -90 and 90),
+  lng      double precision not null check (lng between -180 and 180),
+  accuracy real check (accuracy >= 0), -- metres, as the phone reports it
+  kind     text not null default 'track' check (kind in ('in', 'out', 'track', 'here'))
+);
+create index route_points_entry_idx on public.route_points (entry_id, at);
+-- the phone may send a position twice (after a lost connection): it is kept once
+create unique index route_points_once on public.route_points (staff_id, at, kind);
+alter table public.route_points enable row level security;
+revoke all on public.route_points from anon, authenticated;
+
+-- Metres between two points on the earth (haversine).
+create function app_private.distance_m(p_lat1 double precision, p_lng1 double precision,
+                                       p_lat2 double precision, p_lng2 double precision) returns double precision
+language sql immutable set search_path = public as $$
+  select 2 * 6371000 * asin(least(1, sqrt(power(sin(radians(p_lat2 - p_lat1) / 2), 2)
+         + cos(radians(p_lat1)) * cos(radians(p_lat2)) * power(sin(radians(p_lng2 - p_lng1) / 2), 2))))
+$$;
+
+-- Refuses a driver's clock in or out away from the restaurant and returns the
+-- distance. How precise the phone says it is counts in his favour, at most the
+-- radius again: indoors a phone often knows its place to 50 m or worse.
+create function app_private.check_at_site(p_lat double precision, p_lng double precision,
+                                          p_accuracy double precision) returns double precision
+language plpgsql stable set search_path = public as $$
+declare st public.settings; d double precision;
+begin
+  select * into st from public.settings where id = 1;
+  if st.site_lat is null or st.site_lng is null then
+    raise exception using message = 'The restaurant''s location isn''t set yet. Ask your manager.', errcode = 'P0001';
+  end if;
+  if p_lat is null or p_lng is null or p_lat not between -90 and 90 or p_lng not between -180 and 180 then
+    raise exception using message = 'Your location is needed to clock in or out. Allow it and try again.', errcode = 'P0001';
+  end if;
+  d := app_private.distance_m(st.site_lat, st.site_lng, p_lat, p_lng);
+  if d > st.site_radius_m + least(greatest(coalesce(p_accuracy, 0), 0), st.site_radius_m) then
+    raise exception using errcode = 'P0001',
+      message = format('You''re %s m from the restaurant. Clock in and out at the restaurant.', round(d)::bigint);
+  end if;
+  return d;
+end $$;
+
+create function app_private.driver_of(p_token text) returns public.staff
+language plpgsql stable set search_path = public, extensions as $$
+declare v public.staff;
+begin
+  v := app_private.current_staff(p_token);
+  if not v.driver then
+    raise exception using message = 'Only drivers can do that.', errcode = 'P0001';
+  end if;
+  return v;
+end $$;
+
+create function app_private.checkpoints_json() returns json
+language sql stable set search_path = public as $$
+  select coalesce(json_agg(json_build_object('id', id, 'name', name, 'lat', lat, 'lng', lng, 'radius_m', radius_m)
+                  order by lower(name)), '[]'::json)
+    from public.checkpoints where archived_at is null
+$$;
+
+create function app_private.site_json() returns json
+language sql stable set search_path = public as $$
+  select json_build_object('lat', site_lat, 'lng', site_lng, 'radius_m', site_radius_m) from public.settings where id = 1
+$$;
+
+-- The positions of some time entries, oldest first.
+create function app_private.route_json(p_entries uuid[]) returns json
+language sql stable set search_path = public as $$
+  select coalesce(json_agg(json_build_object('entry_id', entry_id, 'at', at, 'lat', lat, 'lng', lng,
+                                             'acc', accuracy, 'kind', kind) order by at, id), '[]'::json)
+    from public.route_points where entry_id = any(p_entries)
+$$;
+
+revoke all on all functions in schema app_private from public, anon, authenticated;
+
+create function public.driver_clock_in(p_token text, p_lat double precision, p_lng double precision,
+                                       p_accuracy double precision) returns json
+language plpgsql security definer set search_path = public, extensions as $$
+declare v public.staff; v_id uuid; v_d double precision;
+begin
+  v := app_private.driver_of(p_token);
+  if exists (select 1 from public.time_entries where staff_id = v.id and clock_out is null) then
+    raise exception using message = 'You''re already checked in.', errcode = 'P0001';
+  end if;
+  v_d := app_private.check_at_site(p_lat, p_lng, p_accuracy);
+  insert into public.time_entries (staff_id, clock_in) values (v.id, now()) returning id into v_id;
+  insert into public.route_points (entry_id, staff_id, at, lat, lng, accuracy, kind)
+  values (v_id, v.id, now(), p_lat, p_lng, least(greatest(p_accuracy, 0), 100000), 'in');
+  return json_build_object('ok', true, 'id', v_id, 'distance_m', round(v_d));
+exception when unique_violation then
+  raise exception using message = 'You''re already checked in.', errcode = 'P0001';
+end $$;
+
+create function public.driver_clock_out(p_token text, p_lat double precision, p_lng double precision,
+                                        p_accuracy double precision, p_note text) returns json
+language plpgsql security definer set search_path = public, extensions as $$
+declare v public.staff; v_id uuid; v_at timestamptz;
+begin
+  v := app_private.driver_of(p_token);
+  select id into v_id from public.time_entries where staff_id = v.id and clock_out is null;
+  if v_id is null then
+    raise exception using message = 'You''re not checked in.', errcode = 'P0001';
+  end if;
+  perform app_private.check_at_site(p_lat, p_lng, p_accuracy);
+  update public.time_entries
+     set clock_out = greatest(now(), clock_in + interval '1 second'),
+         note = coalesce(nullif(app_private.clean_text(p_note, 300), ''), note)
+   where id = v_id
+  returning clock_out into v_at;
+  insert into public.route_points (entry_id, staff_id, at, lat, lng, accuracy, kind)
+  values (v_id, v.id, v_at, p_lat, p_lng, least(greatest(p_accuracy, 0), 100000), 'out')
+  on conflict do nothing;
+  return json_build_object('ok', true, 'id', v_id);
+end $$;
+
+-- Away from the restaurant and forgot to clock out: he is clocked out now and
+-- the time he really stopped goes to the manager to approve, like any fix.
+create function public.driver_forgot_out(p_token text, p_out timestamptz, p_reason text) returns json
+language plpgsql security definer set search_path = public, extensions as $$
+declare v public.staff; e public.time_entries; v_reason text := app_private.clean_text(p_reason, 300);
+begin
+  v := app_private.driver_of(p_token);
+  if length(v_reason) < 3 then
+    raise exception using message = 'Add a short reason so your manager knows what happened.', errcode = 'P0001';
+  end if;
+  select * into e from public.time_entries where staff_id = v.id and clock_out is null for update;
+  if not found then
+    raise exception using message = 'You''re not checked in.', errcode = 'P0001';
+  end if;
+  perform app_private.check_entry_times(e.clock_in, p_out);
+  if p_out > now() + interval '1 minute' then
+    raise exception using message = 'Times can''t be in the future.', errcode = 'P0001';
+  end if;
+  update public.time_entries set clock_out = greatest(now(), clock_in + interval '1 second'), note = v_reason
+   where id = e.id;
+  insert into public.time_edits (entry_id, staff_id, proposed_in, proposed_out, reason)
+  values (e.id, v.id, e.clock_in, p_out, v_reason);
+  return json_build_object('ok', true);
+end $$;
+
+-- Positions the driver's phone took: [{at, lat, lng, accuracy, kind}], up to
+-- 500 at a time. Only those during one of his clocked times are kept.
+create function public.driver_track(p_token text, p_points jsonb) returns json
+language plpgsql security definer set search_path = public, extensions as $$
+declare v public.staff; n int;
+begin
+  v := app_private.driver_of(p_token);
+  if jsonb_typeof(p_points) is distinct from 'array' or jsonb_array_length(p_points) > 500 then
+    raise exception using message = 'Send at most 500 positions at a time.', errcode = 'P0001';
+  end if;
+  insert into public.route_points (entry_id, staff_id, at, lat, lng, accuracy, kind)
+  select e.id, v.id, p.at, p.lat, p.lng, p.accuracy, p.kind
+    from (select (x ->> 'at')::timestamptz as at, (x ->> 'lat')::double precision as lat,
+                 (x ->> 'lng')::double precision as lng,
+                 least(greatest((x ->> 'accuracy')::double precision, 0), 100000) as accuracy,
+                 case when x ->> 'kind' = 'here' then 'here' else 'track' end as kind
+            from jsonb_array_elements(p_points) x) p
+    cross join lateral (select t.id from public.time_entries t
+                         where t.staff_id = v.id and t.deleted_at is null
+                           and p.at >= t.clock_in - interval '1 minute'
+                           and p.at <= coalesce(t.clock_out, now()) + interval '1 minute'
+                         order by t.clock_in desc limit 1) e
+   where p.at <= now() + interval '2 minutes'
+     and p.lat between -90 and 90 and p.lng between -180 and 180
+  on conflict do nothing;
+  get diagnostics n = row_count;
+  return json_build_object('ok', true, 'saved', n);
+end $$;
+
+-- The driver's own screen: the restaurant, the places on the round, and where
+-- he was today.
+create function public.driver_today(p_token text) returns json
+language plpgsql stable security definer set search_path = public, extensions as $$
+declare v public.staff; v_tz text; v_from timestamptz; v_ids uuid[];
+begin
+  v := app_private.driver_of(p_token);
+  select coalesce(timezone, 'UTC') into v_tz from public.settings where id = 1;
+  v_from := date_trunc('day', now() at time zone v_tz) at time zone v_tz;
+  select coalesce(array_agg(id), '{}') into v_ids from public.time_entries
+   where staff_id = v.id and deleted_at is null and coalesce(clock_out, now()) > v_from;
+  return json_build_object('site', app_private.site_json(), 'checkpoints', app_private.checkpoints_json(),
+                           'points', app_private.route_json(v_ids));
+end $$;
+
+-- One driver's clocked times in a range (at most 8 days) with where he drove,
+-- the places on the round, the restaurant, and every driver for the picker.
+-- Without p_staff_id: the first active driver.
+create function public.mgr_routes(p_token text, p_staff_id uuid, p_from timestamptz, p_to timestamptz) returns json
+language plpgsql stable security definer set search_path = public, extensions as $$
+declare v public.staff; v_ids uuid[]; v_staff uuid;
+begin
+  v := app_private.current_manager(p_token);
+  if p_from is null or p_to is null or p_to <= p_from or p_to - p_from > interval '8 days' then
+    raise exception using message = 'Pick a shorter date range.', errcode = 'P0001';
+  end if;
+  v_staff := coalesce(p_staff_id, (select id from public.staff where driver order by active desc, lower(name) limit 1));
+  select coalesce(array_agg(id), '{}') into v_ids from public.time_entries
+   where staff_id = v_staff and deleted_at is null and clock_in < p_to and coalesce(clock_out, now()) > p_from;
+  return json_build_object(
+    'staff_id', v_staff,
+    'drivers', coalesce((select json_agg(json_build_object('id', id, 'name', name, 'avatar', avatar, 'active', active,
+                                         'working', exists (select 1 from public.time_entries e
+                                                             where e.staff_id = st.id and e.clock_out is null and e.deleted_at is null))
+                                         order by active desc, lower(name))
+                           from public.staff st where driver), '[]'::json),
+    'site', app_private.site_json(),
+    'checkpoints', app_private.checkpoints_json(),
+    'entries', coalesce((select json_agg(json_build_object('id', e.id, 'clock_in', e.clock_in, 'clock_out', e.clock_out,
+                                         'note', e.note, 'edited', e.edited,
+                                         'pending', exists (select 1 from public.time_edits d where d.entry_id = e.id and d.status = 'pending'))
+                                         order by e.clock_in)
+                           from public.time_entries e where e.id = any(v_ids)), '[]'::json),
+    'points', app_private.route_json(v_ids));
+end $$;
+
+-- A place on the round; p_id null adds one.
+create function public.mgr_save_checkpoint(p_token text, p_id uuid, p_name text, p_lat double precision,
+                                           p_lng double precision, p_radius int) returns json
+language plpgsql security definer set search_path = public, extensions as $$
+declare v public.staff; v_name text := app_private.clean_text(p_name, 80); v_id uuid;
+begin
+  v := app_private.current_manager(p_token);
+  if v_name = '' then
+    raise exception using message = 'Give the place a name.', errcode = 'P0001';
+  end if;
+  if p_lat is null or p_lng is null or p_lat not between -90 and 90 or p_lng not between -180 and 180 then
+    raise exception using message = 'Pick where the place is.', errcode = 'P0001';
+  end if;
+  if p_radius is null or p_radius not between 20 and 1000 then
+    raise exception using message = 'The zone around a place must be between 20 and 1000 metres.', errcode = 'P0001';
+  end if;
+  if p_id is null then
+    insert into public.checkpoints (name, lat, lng, radius_m) values (v_name, p_lat, p_lng, p_radius) returning id into v_id;
+  else
+    update public.checkpoints set name = v_name, lat = p_lat, lng = p_lng, radius_m = p_radius
+     where id = p_id and archived_at is null returning id into v_id;
+    if v_id is null then
+      raise exception using message = 'That place no longer exists.', errcode = 'P0001';
+    end if;
+  end if;
+  return json_build_object('ok', true, 'id', v_id);
+end $$;
+
+create function public.mgr_archive_checkpoint(p_token text, p_id uuid) returns json
+language plpgsql security definer set search_path = public, extensions as $$
+declare v public.staff;
+begin
+  v := app_private.current_manager(p_token);
+  update public.checkpoints set archived_at = now() where id = p_id and archived_at is null;
+  return json_build_object('ok', true);
+end $$;
+
+-- Where the restaurant is, and how close a driver must be to clock in or out.
+create function public.mgr_save_site(p_token text, p_lat double precision, p_lng double precision, p_radius int) returns json
+language plpgsql security definer set search_path = public, extensions as $$
+declare v public.staff;
+begin
+  v := app_private.current_manager(p_token);
+  if p_lat is null or p_lng is null or p_lat not between -90 and 90 or p_lng not between -180 and 180 then
+    raise exception using message = 'Pick where the restaurant is.', errcode = 'P0001';
+  end if;
+  if p_radius is null or p_radius not between 25 and 2000 then
+    raise exception using message = 'The zone around the restaurant must be between 25 and 2000 metres.', errcode = 'P0001';
+  end if;
+  update public.settings set site_lat = p_lat, site_lng = p_lng, site_radius_m = p_radius where id = 1;
+  return json_build_object('ok', true);
 end $$;
 
 revoke all on all functions in schema app_private from public, anon, authenticated;

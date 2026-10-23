@@ -1,8 +1,8 @@
 /*
-  Content-Security-Policy: default-src 'self'; script-src 'self'; style-src 'self' 'unsafe-inline' https://fonts.googleapis.com; font-src https://fonts.gstatic.com; img-src 'self' data:; connect-src https://cwncvipsaqqvwjcfphno.supabase.co; manifest-src 'self'; base-uri 'none'; form-action 'none'; frame-ancestors 'none'
+  Content-Security-Policy: default-src 'self'; script-src 'self'; style-src 'self' 'unsafe-inline' https://fonts.googleapis.com; font-src https://fonts.gstatic.com; img-src 'self' data: https://tile.openstreetmap.org; connect-src https://cwncvipsaqqvwjcfphno.supabase.co https://nominatim.openstreetmap.org; manifest-src 'self'; base-uri 'none'; form-action 'none'; frame-ancestors 'none'
   X-Content-Type-Options: nosniff
   Referrer-Policy: no-referrer
-  Permissions-Policy: camera=(), microphone=(), geolocation=()
+  Permissions-Policy: camera=(), microphone=(), geolocation=(self)
 
 /
   Cache-Control: no-cache
@@ -22,6 +22,8 @@
   Cache-Control: no-cache
 /theme.js
   Cache-Control: no-cache
+/route.js
+  Cache-Control: no-cache
 /vendor/pdfjs/pdf.min.mjs
   Content-Type: text/javascript; charset=utf-8
   Cache-Control: public, max-age=604800
@@ -30,4 +32,6 @@
   Cache-Control: public, max-age=604800
 /vendor/pdf-lib/pdf-lib.esm.min.js
   Content-Type: text/javascript; charset=utf-8
+  Cache-Control: public, max-age=604800
+/vendor/leaflet/*
   Cache-Control: public, max-age=604800
