@@ -619,6 +619,127 @@ const modal = {
   },
 };
 
+/* ------------------------------------------- on your phone: install guide */
+
+// Prikklok sits on the home screen like an app (manifest.webmanifest). On a
+// phone this guide opens by itself after signing in; again three days after
+// "Later", never after "Staat er al op" or once opened from the home screen.
+// Profiel, the sign-in screen and the family page open it any time.
+const INSTALL_KEY = 'prikklok.install';
+const device = (() => {
+  const ua = navigator.userAgent;
+  const ios = /iPad|iPhone|iPod/.test(ua) || (navigator.platform === 'MacIntel' && navigator.maxTouchPoints > 1);
+  const android = /Android/i.test(ua);
+  const app = (ua.match(/MicroMessenger|FBAN|FBAV|Instagram|Line\/|Snapchat|TikTok|musical_ly/) || [])[0];
+  return {
+    ios, android, phone: ios || android, samsung: /SamsungBrowser/.test(ua), iosOther: ios && /CriOS|FxiOS|EdgiOS/.test(ua),
+    inApp: app ? ({ MicroMessenger: 'WeChat', FBAN: 'Facebook', FBAV: 'Facebook', 'Line/': 'LINE', musical_ly: 'TikTok' }[app] || app) : null,
+  };
+})();
+const installed = () => (window.matchMedia && matchMedia('(display-mode: standalone)').matches) || navigator.standalone === true;
+let installPrompt = null; // Chrome on Android: its own install question, asked from the guide's button
+window.addEventListener('beforeinstallprompt', e => { e.preventDefault(); installPrompt = e; });
+window.addEventListener('appinstalled', () => { installPrompt = null; store.set(INSTALL_KEY, 'done'); });
+if (installed()) store.set(INSTALL_KEY, 'done');
+
+const IK = {
+  share: '<svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"><path d="M12 3v12M8 7l4-4 4 4"/><path d="M8 10H6v11h12V10h-2"/></svg>',
+  add: '<svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round"><rect x="4" y="4" width="16" height="16" rx="4"/><path d="M12 8.5v7M8.5 12h7"/></svg>',
+  dots: '<svg viewBox="0 0 24 24" fill="currentColor"><circle cx="12" cy="5" r="2"/><circle cx="12" cy="12" r="2"/><circle cx="12" cy="19" r="2"/></svg>',
+  more: '<svg viewBox="0 0 24 24" fill="currentColor"><circle cx="5" cy="12" r="2"/><circle cx="12" cy="12" r="2"/><circle cx="19" cy="12" r="2"/></svg>',
+  menu: '<svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round"><path d="M4 7h16M4 12h16M4 17h16"/></svg>',
+};
+const ikey = (icon, label = '') => `<span class="ikey">${icon}${label ? `<span>${label}</span>` : ''}</span>`;
+
+// The steps for one kind of phone.
+function installSteps(kind) {
+  if (kind === 'ios') return [
+    device.iosOther
+      ? T(`Tik rechts in de adresbalk op ${ikey(IK.share)} <strong>Deel</strong>.`, `点地址栏右边的 ${ikey(IK.share)} <strong>共享</strong>（Deel）。`)
+      : T(`Tik onderaan in Safari op ${ikey(IK.share)} <strong>Deel</strong>. Zie je die knop niet, tik dan eerst op ${ikey(IK.more)}.`,
+          `在 Safari 底部点 ${ikey(IK.share)} <strong>共享</strong>（Deel）。看不到这个按钮？先点 ${ikey(IK.more)}。`),
+    T(`Scroll een beetje naar beneden en tik op ${ikey(IK.add, 'Zet op beginscherm')}.`, `往下滑一点，点 ${ikey(IK.add, '添加到主屏幕')}（Zet op beginscherm）。`),
+    T('Tik rechtsboven op <strong>Voeg toe</strong>.', '点右上角的<strong>添加</strong>（Voeg toe）。'),
+    T('Open Prikklok vanaf je beginscherm en meld je daar nog één keer aan.', '从主屏幕打开 Prikklok，再登录一次。'),
+  ];
+  if (device.samsung) return [
+    T(`Tik onderaan op ${ikey(IK.menu)}.`, `点底部的 ${ikey(IK.menu)}。`),
+    T('Tik op <strong>Pagina toevoegen aan</strong> en dan op <strong>Startscherm</strong>.', '点<strong>添加页面到</strong>，再点<strong>主屏幕</strong>。'),
+    T('Tik op <strong>Toevoegen</strong>. Prikklok staat nu op je startscherm.', '点<strong>添加</strong>。Prikklok 就会出现在主屏幕上。'),
+  ];
+  return [
+    T(`Tik in Chrome rechtsboven op ${ikey(IK.dots)}.`, `在 Chrome 右上角点 ${ikey(IK.dots)}。`),
+    T('Tik op <strong>App installeren</strong> of <strong>Toevoegen aan startscherm</strong>.', '点<strong>安装应用</strong>或<strong>添加到主屏幕</strong>（App installeren / Toevoegen aan startscherm）。'),
+    T('Tik op <strong>Installeren</strong>. Prikklok staat nu bij je apps.', '点<strong>安装</strong>（Installeren）。Prikklok 就会出现在你的应用里。'),
+  ];
+}
+
+function installGuide({ auto = false } = {}) {
+  let kind = device.android ? 'android' : 'ios';
+  const app = device.inApp, browser = device.ios ? 'Safari' : 'Chrome';
+  const link = location.origin + location.pathname;
+  const d = modal.open(`
+    <div class="install-head">
+      <img class="install-icon" src="icon-180.png" alt="" width="60" height="60">
+      <div><h2 id="modal-title">${T('Zet Prikklok op je telefoon', '把 Prikklok 添加到手机')}</h2>
+        <p class="muted small">${T('Dan open je hem met één tik vanaf je beginscherm, zonder adresbalk, net als een gewone app.', '以后在主屏幕上点一下就能打开，没有地址栏，跟普通 app 一样。')}</p></div>
+    </div>
+    ${app ? `<div class="hint warn install-app">
+      <p>${T(`Je opent Prikklok nu in <strong>${app}</strong>. Daar kan je hem niet op je telefoon zetten: open hem eerst in ${browser}.`,
+        `你现在是在 <strong>${app}</strong> 里打开 Prikklok，这里没法添加到手机。请先用 ${browser} 打开。`)}</p>
+      <ol class="install-steps">
+        <li><span>${T(`Tik rechtsboven op ${ikey(IK.more)}.`, `点右上角的 ${ikey(IK.more)}。`)}</span></li>
+        <li><span>${T(`Kies <strong>Openen in ${browser}</strong> of <strong>Openen in browser</strong>.`, `选<strong>在浏览器打开</strong>（或“在 ${browser} 中打开”）。`)}</span></li>
+      </ol>
+      <div class="copybox"><code>${esc(link)}</code><button type="button" class="sm" id="ig-copy">${T('Kopieer', '复制')}</button></div>
+    </div>` : ''}
+    <div class="chips install-pick" role="group" aria-label="${T('Mijn telefoon', '我的手机')}">
+      <button type="button" class="chip" data-ig="ios">iPhone</button><button type="button" class="chip" data-ig="android">Android</button>
+    </div>
+    <div id="ig-body"></div>
+    <div class="form-actions">${auto
+      ? `<button type="button" id="ig-never">${T('Staat er al op', '已经添加了')}</button><button type="button" class="primary" data-close>${T('Later', '以后再说')}</button>`
+      : `<button type="button" class="primary" data-close>${T('Sluiten', '关闭')}</button>`}</div>`, null, { sheet: true });
+  const draw = () => {
+    $$('[data-ig]', d).forEach(b => { b.classList.toggle('is-on', b.dataset.ig === kind); b.setAttribute('aria-pressed', b.dataset.ig === kind); });
+    const oneTap = kind === 'android' && installPrompt && !app;
+    $('#ig-body', d).innerHTML = `
+      ${oneTap ? `<button type="button" class="primary big-install" id="ig-install">${IK.add}<span>${T('Zet op mijn telefoon', '添加到我的手机')}</span></button>
+        <p class="muted small">${T('Of zelf, via het menu:', '或者自己从菜单添加：')}</p>` : ''}
+      <ol class="install-steps">${installSteps(kind).map(x => `<li><span>${x}</span></li>`).join('')}</ol>`;
+    const b = $('#ig-install', d);
+    if (b) b.addEventListener('click', async () => {
+      const p = installPrompt;
+      installPrompt = null;
+      p.prompt();
+      const { outcome } = await p.userChoice;
+      if (outcome === 'accepted') { store.set(INSTALL_KEY, 'done'); modal.close(); toast(T('Prikklok staat nu bij je apps.', 'Prikklok 已经添加到你的应用里。')); }
+      else draw();
+    });
+  };
+  $$('[data-ig]', d).forEach(b => b.addEventListener('click', () => { kind = b.dataset.ig; draw(); }));
+  const never = $('#ig-never', d);
+  if (never) never.addEventListener('click', () => { store.set(INSTALL_KEY, 'done'); modal.close(); });
+  const copy = $('#ig-copy', d);
+  if (copy) copy.addEventListener('click', async () => {
+    try { await navigator.clipboard.writeText(link); toast(T('Adres gekopieerd. Plak het in je browser.', '地址已复制，粘贴到浏览器里打开。')); }
+    catch { toast(link); }
+  });
+  draw();
+}
+
+// After a page is drawn: the guide, once, on a phone that doesn't have the app yet.
+function maybeInstallGuide() {
+  if (!device.phone || installed() || S.installAsked || !S.me || $('#modal').open) return;
+  const v = store.get(INSTALL_KEY);
+  if (v === 'done' || (v && Date.now() < Number(v))) return;
+  S.installAsked = true;
+  store.set(INSTALL_KEY, String(Date.now() + 3 * 86400000)); // "Later": ask again in three days
+  setTimeout(() => { if (S.me && !$('#modal').open) installGuide({ auto: true }); }, 1200);
+}
+const installButton = (id, cls = '') => device.phone && !installed()
+  ? `<button type="button" class="${cls}" id="${id}">${IK.add}<span>${T('Zet Prikklok op je telefoon', '把 Prikklok 添加到手机')}</span></button>` : '';
+
 /* ------------------------------------------------------------ app shell */
 
 function renderAuthShell(html) {
@@ -680,9 +801,12 @@ async function showSignIn(message) {
       <p class="form-error" id="login-error"></p>
     </form>
     <p class="muted small" lang="${langAttr()}">${L('Pincode vergeten? Vraag je verantwoordelijke om een nieuwe.', '忘记密码？请负责人给你一个新的。')}</p>
+    ${installButton('login-install', 'install-link')}
     ${langSwitch()}`);
 
   bindLang($('#app'), () => showSignIn(message));
+  const li = $('#login-install');
+  if (li) li.addEventListener('click', () => installGuide());
   const form = $('#login-form');
   form.addEventListener('submit', async ev => {
     ev.preventDefault();
@@ -914,7 +1038,7 @@ async function renderView() {
   }
   try {
     await VIEWS[S.view](el, () => seq === S.renderSeq);
-    if (seq === S.renderSeq) showLevelUp();
+    if (seq === S.renderSeq) { showLevelUp(); maybeInstallGuide(); }
   } catch (e) {
     if (e.code === 'auth') return;
     if (seq === S.renderSeq) el.innerHTML = `<div class="card"><h2>${T('Deze pagina kon niet geladen worden', '这个页面无法加载')}</h2><p class="muted">${esc(e.message)}</p><div class="form-actions"><button class="primary" id="retry">${T('Opnieuw proberen', '重试')}</button></div></div>`;
@@ -3129,12 +3253,15 @@ async function viewProfile(el, current) {
           <p class="muted small" style="margin-top:6px">${T('Alleen op dit toestel.', '只在这台设备上。')}</p>
           <div class="chips" role="group" aria-label="${T('Thema', '主题')}" style="margin-top:12px">${THEMES.map(([k, nl, zh]) => `<button type="button" class="chip" data-theme-pick="${k}">${T(nl, zh)}</button>`).join('')}</div>
         </section>
+        ${installButton('pf-install', 'signout-wide install-wide')}
         <button type="button" class="signout-wide" id="pf-signout">${ICONS.signout}<span>${T('Afmelden', '退出登录')}</span></button>
       </div>
     </div>`;
   $('#edit-avatar', el).addEventListener('click', () => openAvatarEditor());
   $('#edit-avatar-pic', el).addEventListener('click', () => openAvatarEditor());
   $('#pf-signout', el).addEventListener('click', askSignOut);
+  const pfi = $('#pf-install', el);
+  if (pfi) pfi.addEventListener('click', () => installGuide());
   $$('[data-theme-pick]', el).forEach(b => b.addEventListener('click', () => setTheme(b.dataset.themePick)));
   applyTheme();
   bindLangCard(el);
@@ -4633,11 +4760,13 @@ function bindFamilyHead(el, m) {
   $('#fam-next', el).addEventListener('click', () => { S.famMonth = addMonths(m, 1); renderView(); });
   bindLang(el, () => (isViewer() ? renderShell() : renderView()));
   $$('[data-go-fam]', el).forEach(b => b.addEventListener('click', () => { location.hash = b.dataset.goFam; }));
+  const fi = $('#fam-install', el);
+  if (fi) fi.addEventListener('click', () => installGuide());
   const so = $('#fam-signout', el);
   if (so) so.addEventListener('click', askSignOut);
   startPolling(5 * 60000);
 }
-const famSignOut = () => isViewer() ? `<button type="button" class="signout-wide" id="fam-signout">${ICONS.signout}<span>${L('Afmelden', '退出登录')}</span></button>` : '';
+const famSignOut = () => isViewer() ? `${installButton('fam-install', 'signout-wide install-wide')}<button type="button" class="signout-wide" id="fam-signout">${ICONS.signout}<span>${L('Afmelden', '退出登录')}</span></button>` : '';
 
 // A fixed worker's weekly hours in words: "elke dag behalve dinsdag · 11:30 – 14:30 en 17:00 – 22:30".
 function fixedText(list, t = nl => nl) {

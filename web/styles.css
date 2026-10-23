@@ -778,6 +778,33 @@ dialog.sheet { width: min(480px, 100vw); }
 .signout-wide svg { width: 18px; height: 18px; }
 @media (min-width: 760px) { .signout-wide { display: none; } }
 
+/* putting the app on your phone: the guide and its buttons */
+.install-wide { color: var(--accent); }
+.install-link { background: transparent; border-color: transparent; color: var(--accent); gap: 8px; }
+.install-link svg, .install-wide svg { width: 18px; height: 18px; }
+.install-head { display: flex; gap: 14px; align-items: center; margin-bottom: 12px; }
+.install-head h2 { margin-bottom: 2px; }
+.install-icon { width: 60px; height: 60px; border-radius: 14px; flex: none; box-shadow: var(--shadow); }
+.install-pick { margin-top: 4px; }
+.install-steps { list-style: none; counter-reset: step; margin: 14px 0 0; padding: 0; display: flex; flex-direction: column; gap: 14px; }
+.install-steps li { counter-increment: step; display: grid; grid-template-columns: 28px minmax(0, 1fr); gap: 10px; align-items: start; line-height: 1.6; }
+.install-steps li::before {
+  content: counter(step); width: 28px; height: 28px; border-radius: 50%; display: grid; place-items: center;
+  background: var(--brand); color: var(--brand-ink); font: 700 .85rem/1 var(--f-body);
+}
+.ikey {
+  display: inline-flex; align-items: center; gap: 5px; min-height: 26px; padding: 1px 8px; vertical-align: middle;
+  border: 1px solid var(--line); border-radius: 8px; background: var(--surface); color: var(--ink);
+  font-weight: 600; white-space: nowrap; box-shadow: var(--shadow);
+}
+.ikey svg { width: 17px; height: 17px; flex: none; }
+.install-app { margin-bottom: 14px; }
+.install-app .install-steps { margin-top: 10px; gap: 8px; }
+.install-app .copybox { margin-top: 12px; }
+.big-install { width: 100%; margin-top: 14px; min-height: 48px; gap: 8px; }
+.big-install svg { width: 20px; height: 20px; }
+.big-install + p { margin-top: 10px; }
+
 /* ------------------------------------------------- calendar pictures */
 .cal-pic {
   display: inline-grid; place-items: center; width: 18px; height: 18px; border-radius: 50%; overflow: hidden;
