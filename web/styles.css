@@ -968,3 +968,5 @@ button.pl-hit { justify-content: flex-start; min-height: 0; padding: 8px 10px; t
 .copybox input { flex: 1; min-width: 0; }
 .view-head #see-routes { display: inline-flex; gap: 6px; align-items: center; }
 .view-head #see-routes svg { width: 16px; height: 16px; }
+.stack { display: flex; flex-direction: column; gap: 18px; min-width: 0; }
+.hint .timeline { margin-top: 6px; }

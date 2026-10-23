@@ -27,7 +27,9 @@ create table public.settings (
   -- the restaurant: drivers clock in and out within site_radius_m of it (Ritten)
   site_lat          double precision check (site_lat between -90 and 90),
   site_lng          double precision check (site_lng between -180 and 180),
-  site_radius_m     int not null default 150 check (site_radius_m between 25 and 2000)
+  site_radius_m     int not null default 150 check (site_radius_m between 25 and 2000),
+  -- also keep the driver's route by GPS (only while the app is open on his phone); off, the round comes from MATO Info
+  track_route       boolean not null default false
 );
 insert into public.settings (id) values (1);
 
@@ -67,7 +69,8 @@ create table public.staff (
   contract_minutes jsonb, -- contract hours per weekday from Officient, eg {"monday": 240, ...}
   -- a driver (the app calls its role 'driver'): no schedule; clocks in and out at the
   -- restaurant, and while clocked in the app keeps the route (route_points)
-  driver          boolean not null default false
+  driver          boolean not null default false,
+  mato_name       text check (length(mato_name) <= 60) -- the name a driver fills under in MATO Info; empty = the first name
 );
 create unique index staff_name_key on public.staff (lower(name));
 
@@ -432,7 +435,8 @@ begin
         'wage_codes', case when v.role = 'manager' then wage_codes end,
         'site', case when v.driver or v.role = 'manager'
                 then json_build_object('lat', site_lat, 'lng', site_lng, 'radius_m', site_radius_m) end,
-        'has_drivers', v.role = 'manager' and exists (select 1 from public.staff where driver and active))
+        'has_drivers', v.role = 'manager' and exists (select 1 from public.staff where driver and active),
+        'track_route', track_route)
       from public.settings where id = 1),
     'open_entry', (select json_build_object('id', e.id, 'clock_in', e.clock_in, 'shift', app_private.shift_json(e.shift_id))
       from public.time_entries e where e.staff_id = v.id and e.clock_out is null and e.deleted_at is null),
@@ -1755,7 +1759,8 @@ begin
       'payroll_id', s.payroll_id, 'created_at', s.created_at, 'avatar', s.avatar, 'xp_bonus', s.xp_bonus,
       'pay_method', s.pay_method, 'officient_id', s.officient_id, 'contract_minutes', s.contract_minutes,
       'officient_pending', s.officient_pending,
-      'officient_connected', (select o.refresh_token is not null from app_private.officient o where o.id = 1)),
+      'officient_connected', (select o.refresh_token is not null from app_private.officient o where o.id = 1),
+      'mato_name', app_private.mato_name(s), 'mato_name_own', s.mato_name),
     'profile', app_private.profile_json(s),
     'xp', app_private.xp_json(s.id),
     'contracts', app_private.contracts_json(s.id),
@@ -3021,7 +3026,8 @@ begin
   select coalesce(array_agg(id), '{}') into v_ids from public.time_entries
    where staff_id = v.id and deleted_at is null and coalesce(clock_out, now()) > v_from;
   return json_build_object('site', app_private.site_json(), 'checkpoints', app_private.checkpoints_json(),
-                           'points', app_private.route_json(v_ids));
+                           'points', app_private.route_json(v_ids),
+                           'visits', app_private.visits_json(app_private.mato_name(v), v_from, v_from + interval '1 day'));
 end $$;
 
 -- One driver's clocked times in a range (at most 8 days) with where he drove,
@@ -3052,7 +3058,11 @@ begin
                                          'pending', exists (select 1 from public.time_edits d where d.entry_id = e.id and d.status = 'pending'))
                                          order by e.clock_in)
                            from public.time_entries e where e.id = any(v_ids)), '[]'::json),
-    'points', app_private.route_json(v_ids));
+    'points', app_private.route_json(v_ids),
+    'mato_name', (select app_private.mato_name(st) from public.staff st where st.id = v_staff),
+    'visits', (select app_private.visits_json(app_private.mato_name(st), p_from, p_to) from public.staff st where st.id = v_staff),
+    'mato', (select json_build_object('last_sync_at', m.last_sync_at, 'last_error', m.last_error, 'last_report', m.last_report)
+               from app_private.mato m where m.id = 1));
 end $$;
 
 -- A place on the round; p_id null adds one.
@@ -3106,6 +3116,131 @@ begin
   end if;
   update public.settings set site_lat = p_lat, site_lng = p_lng, site_radius_m = p_radius where id = 1;
   return json_build_object('ok', true);
+end $$;
+
+-- Refills from MATO Info --------------------------------------------------------
+-- MATO Info (the vending app, Supabase project bjzufmvwldoltpitkrvx) records
+-- every refill: which machine, when, how many items, by whom. The Edge Function
+-- mato (supabase/functions/mato) asks it every few minutes, through its one
+-- read-only function public.prikklok_refill_visits and a secret, for the visits
+-- of the last days, and keeps them here: a log of every machine visit. The
+-- driver's round on Ritten comes from it; no app has to stay open.
+
+create table app_private.mato (
+  id           int primary key default 1 check (id = 1),
+  url          text not null, -- MATO Info's Supabase address
+  api_key      text not null, -- its publishable key (public anyway)
+  secret       text not null, -- MATO Info keeps only its hash
+  cron_secret  text not null default encode(extensions.gen_random_bytes(24), 'hex'),
+  last_sync_at timestamptz,
+  last_error   text,
+  last_report  jsonb
+);
+
+-- One visit to one machine: what MATO Info shows under Bijvullingen. A round's
+-- stop is one visit; outside a round, changes within 30 minutes are one visit.
+create table public.machine_visits (
+  id         bigint generated always as identity primary key,
+  visit_key  text not null unique, -- machine, filler and round (or start) in MATO Info
+  machine_id uuid not null,        -- the machine in MATO Info
+  machine    text not null,
+  address    text,
+  filler     text,                 -- who filled, as MATO Info names them
+  first_at   timestamptz not null,
+  last_at    timestamptz not null,
+  added      int not null default 0, -- items put in
+  removed    int not null default 0, -- items taken out (expired, damaged)
+  via_adjust boolean not null default false, -- "Voorraad aanpassen" instead of a round
+  round_no   int,
+  round_done boolean,
+  seen_at    timestamptz not null default now(), -- first logged here
+  updated_at timestamptz not null default now()
+);
+create index machine_visits_filler_idx on public.machine_visits (lower(filler), first_at);
+alter table public.machine_visits enable row level security;
+revoke all on public.machine_visits from anon, authenticated;
+
+-- The name a driver fills under in MATO Info.
+create function app_private.mato_name(p public.staff) returns text
+language sql immutable set search_path = public as $$
+  select coalesce(nullif(btrim(p.mato_name), ''), split_part(p.name, ' ', 1))
+$$;
+
+create function app_private.visits_json(p_filler text, p_from timestamptz, p_to timestamptz) returns json
+language sql stable set search_path = public as $$
+  select coalesce(json_agg(json_build_object('id', id, 'machine', machine, 'address', address, 'first_at', first_at,
+                                             'last_at', last_at, 'added', added, 'removed', removed, 'via_adjust', via_adjust,
+                                             'round_no', round_no, 'round_done', round_done) order by first_at), '[]'::json)
+    from public.machine_visits
+   where lower(filler) = lower(p_filler) and first_at >= p_from and first_at < p_to
+$$;
+
+-- For the Edge Function: the visits MATO Info gave for [p_from, now). A visit
+-- that started in the window's first hour may be cut off by it; the earlier
+-- runs have it whole, so it is left as it is.
+create function app_private.mato_store(p_visits json, p_from timestamptz) returns json
+language plpgsql set search_path = public as $$
+declare v json; k text; v_new boolean; n_new int := 0; n_upd int := 0;
+        n int := json_array_length(coalesce(p_visits, '[]'::json));
+begin
+  for v in select * from json_array_elements(coalesce(p_visits, '[]'::json)) loop
+    continue when (v ->> 'first_at')::timestamptz < p_from + interval '1 hour';
+    k := concat_ws('|', v ->> 'machine_id', coalesce(v ->> 'filler', ''),
+                   coalesce(v ->> 'round_id', 'v' || floor(extract(epoch from (v ->> 'first_at')::timestamptz))::bigint));
+    insert into public.machine_visits as mv (visit_key, machine_id, machine, address, filler, first_at, last_at,
+                                             added, removed, via_adjust, round_no, round_done)
+    values (k, (v ->> 'machine_id')::uuid, coalesce(nullif(v ->> 'machine', ''), '?'), v ->> 'address', v ->> 'filler',
+            (v ->> 'first_at')::timestamptz, (v ->> 'last_at')::timestamptz,
+            coalesce((v ->> 'added')::int, 0), coalesce((v ->> 'removed')::int, 0),
+            coalesce((v ->> 'via_adjust')::boolean, false), (v ->> 'round_no')::int, (v ->> 'round_done')::boolean)
+    on conflict (visit_key) do update
+       set machine = excluded.machine, address = excluded.address, last_at = excluded.last_at,
+           added = excluded.added, removed = excluded.removed, via_adjust = excluded.via_adjust,
+           round_no = excluded.round_no, round_done = excluded.round_done, updated_at = now()
+     where (mv.machine, mv.address, mv.last_at, mv.added, mv.removed, mv.via_adjust, mv.round_no, mv.round_done)
+           is distinct from (excluded.machine, excluded.address, excluded.last_at, excluded.added, excluded.removed,
+                             excluded.via_adjust, excluded.round_no, excluded.round_done)
+    returning (xmax = 0) into v_new;
+    if found then
+      if v_new then n_new := n_new + 1; else n_upd := n_upd + 1; end if;
+    end if;
+  end loop;
+  update app_private.mato set last_sync_at = now(), last_error = null,
+         last_report = jsonb_build_object('fetched', n, 'new', n_new, 'updated', n_upd)
+   where id = 1;
+  return json_build_object('fetched', n, 'new', n_new, 'updated', n_upd);
+end $$;
+
+-- For the Edge Function: MATO Info could not be read.
+create function app_private.mato_failed(p_error text) returns boolean
+language sql set search_path = public as $$
+  update app_private.mato set last_error = left(p_error, 300) where id = 1 returning true
+$$;
+
+revoke all on all functions in schema app_private from public, anon, authenticated;
+
+-- Keep the route by GPS too (the app must then stay open during the round).
+create function public.mgr_save_track_route(p_token text, p_on boolean) returns json
+language plpgsql security definer set search_path = public, extensions as $$
+declare v public.staff;
+begin
+  v := app_private.current_manager(p_token);
+  update public.settings set track_route = coalesce(p_on, false) where id = 1;
+  return json_build_object('ok', true);
+end $$;
+
+-- The name a driver fills under in MATO Info; empty = the first name.
+create function public.mgr_set_mato_name(p_token text, p_id uuid, p_name text) returns json
+language plpgsql security definer set search_path = public, extensions as $$
+declare v public.staff; s public.staff;
+begin
+  v := app_private.current_manager(p_token);
+  update public.staff set mato_name = nullif(app_private.clean_text(p_name, 60), '')
+   where id = p_id and driver returning * into s;
+  if not found then
+    raise exception using message = 'That person wasn''t found.', errcode = 'P0001';
+  end if;
+  return json_build_object('ok', true, 'mato_name', app_private.mato_name(s));
 end $$;
 
 revoke all on all functions in schema app_private from public, anon, authenticated;

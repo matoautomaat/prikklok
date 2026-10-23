@@ -118,6 +118,9 @@ const SERVER_NL = {
   "The restaurant's location isn't set yet. Ask your manager.": 'De plaats van het restaurant is nog niet ingesteld. Vraag het aan je verantwoordelijke.',
   'Your location is needed to clock in or out. Allow it and try again.': 'Je locatie is nodig om in of uit te klokken. Sta ze toe en probeer opnieuw.',
   'Only drivers can do that.': 'Dat kan alleen een chauffeur.',
+  'MATO Info is not linked.': 'MATO Info is nog niet gekoppeld.',
+  'MATO Info sent something unexpected.': 'MATO Info stuurde iets onverwachts. Probeer het later opnieuw.',
+  'Not allowed.': 'Dat mag niet.',
   'Send at most 500 positions at a time.': 'Stuur maximaal 500 locaties tegelijk.',
   'Give the place a name.': 'Geef de plaats een naam.',
   'Pick where the place is.': 'Duid aan waar de plaats is.',
@@ -152,6 +155,7 @@ const SERVER_NL_PATTERNS = [
   [/^Your shift starts at (\d\d:\d\d)\. You can check in from (\d\d:\d\d)\.$/, 'Je shift begint om $1. Je kan inklokken vanaf $2.'],
   [/^That item unlocks at level (\d+)\.$/, 'Dat krijg je pas vanaf level $1.'],
   [/^Officient answered (\d+)( for .*)?\.$/, 'Officient gaf een fout ($1). Probeer het later opnieuw.'],
+  [/^MATO Info answered (\d+)(: .*)?\.$/, 'MATO Info gaf een fout ($1). Probeer het later opnieuw.'],
   [/^You're (\d+) m from the restaurant\. Clock in and out at the restaurant\.$/, (_, m) => `Je bent ${metres(+m)} van het restaurant. In- en uitklokken kan alleen aan het restaurant.`],
 ];
 function tr(msg) {
@@ -1140,8 +1144,9 @@ const Tracker = {
   paint() { const el = $('#track-line'); if (el) el.innerHTML = this.status(); },
 };
 
+// The GPS route only when the manager turned it on (Ritten → Gps-rit).
 function syncTracker() {
-  if (isDriver() && S.openEntry) Tracker.start(S.openEntry.id);
+  if (isDriver() && S.openEntry && S.settings.track_route) Tracker.start(S.openEntry.id);
   else if (Tracker.entry != null) { Tracker.flush(); Tracker.stop(); }
 }
 document.addEventListener('visibilitychange', () => {
@@ -1152,13 +1157,13 @@ document.addEventListener('visibilitychange', () => {
 setInterval(() => Tracker.paint(), 5000);
 
 function driverPunch(site) {
-  const e = S.openEntry, t = now();
+  const e = S.openEntry, t = now(), gps = !!S.settings.track_route;
   const zone = site && site.lat != null ? `tot ${metres(site.radius_m)} ervan` : '';
   const body = e ? `
       <div class="punch-status"><span class="dot"></span>Ingeklokt sinds ${sameDay(e.clock_in, t) ? fmt.time(e.clock_in) : fmt.when(e.clock_in)}</div>
       <div class="punch-elapsed" data-live="since" data-since="${e.clock_in}">${fmt.dur(minutesBetween(e.clock_in, t))}</div>
-      <p class="track-line" id="track-line">${Tracker.status()}</p>
-      ${'wakeLock' in navigator ? `<label class="check small"><input type="checkbox" id="tr-awake" ${Tracker.awake() ? 'checked' : ''}> Scherm aan houden tijdens de rit</label>` : ''}
+      ${gps ? `<p class="track-line" id="track-line">${Tracker.status()}</p>
+      ${'wakeLock' in navigator ? `<label class="check small"><input type="checkbox" id="tr-awake" ${Tracker.awake() ? 'checked' : ''}> Scherm aan houden tijdens de rit</label>` : ''}` : ''}
       <div class="field">
         <label for="out-note">Opmerking voor je verantwoordelijke (optioneel)</label>
         <input id="out-note" maxlength="300" placeholder="bv. automaat in de Markt was leeg">
@@ -1169,7 +1174,8 @@ function driverPunch(site) {
       <div class="punch-status"><span class="dot"></span>Je bent niet ingeklokt</div>
       <div class="punch-meta">Inklokken kan aan het restaurant${zone ? `, ${zone}` : ''}.</div>
       <button class="big go" data-act="drv-in">Inklokken</button>
-      <p class="muted small">De app vraagt daarvoor je locatie. Zolang je ingeklokt bent, houdt de app je rit bij; daarna niet meer. Laat de app open tijdens je ronde.</p>`;
+      <p class="muted small">${gps ? 'De app vraagt daarvoor je locatie. Zolang je ingeklokt bent, houdt de app je rit bij; daarna niet meer. Laat de app open tijdens je ronde.'
+        : 'De app vraagt daarvoor je locatie, alleen bij het in- en uitklokken. Wat je bijvult, komt vanzelf uit MATO Info.'}</p>`;
   return `
     <section class="punch ${e ? 'is-on' : ''}" aria-label="In- en uitklokken">
       <div class="punch-top">
@@ -1267,7 +1273,8 @@ async function viewDriver(el, current) {
   const todays = hours.entries.filter(x => !x.clock_out || new Date(x.clock_out) > day);
   const a = Route.analyse({ entries: todays, points: [...today.points, ...(S.openEntry ? Tracker.pending(S.openEntry.id) : [])],
     checkpoints: today.checkpoints, site: today.site, now: now().getTime() });
-  const here = S.openEntry && Tracker.last ? Route.placeOf({ ...Tracker.last, acc: Tracker.last.accuracy }, a.places) : null;
+  const gps = !!S.settings.track_route, visits = today.visits || [];
+  const here = gps && S.openEntry && Tracker.last ? Route.placeOf({ ...Tracker.last, acc: Tracker.last.accuracy }, a.places) : null;
   const hour = t.getHours(), hello = hour < 12 ? 'Goedemorgen' : hour < 18 ? 'Goedemiddag' : 'Goedenavond';
   el.innerHTML = `
     <div class="view-head"><div class="hello">
@@ -1283,15 +1290,19 @@ async function viewDriver(el, current) {
           <div class="stat"><span class="v">${fmt.dur(worked(monthStart))}</span><span class="k">In ${fmt.monthName(t)}</span></div>
         </div>
         <section class="card">
-          <div class="card-head"><h2>Je ronde vandaag</h2>${S.openEntry ? '<button class="sm primary" id="drv-here">Ik ben hier</button>' : ''}</div>
-          ${today.checkpoints.length ? `<div class="rows">${today.checkpoints.map(cp => {
+          <div class="card-head"><h2>Je ronde vandaag</h2>${gps && S.openEntry ? '<button class="sm primary" id="drv-here">Ik ben hier</button>' : ''}</div>
+          ${visits.length ? `<div class="rows">${visits.map(v => `
+            <div class="row"><div class="row-main"><span class="row-title">${esc(v.machine)}</span>
+              <span class="row-sub"><span class="time">${fmt.time(v.first_at)}</span> · ${esc(visitWhat(v))}</span></div>
+              <span class="pill on">✓</span></div>`).join('')}</div>`
+            : `<p class="empty">${gps ? 'Nog niets bijgevuld in MATO Info.' : 'Nog niets bijgevuld vandaag. Wat je in MATO Info bijvult, verschijnt hier vanzelf, binnen 5 minuten.'}</p>`}
+          ${gps && today.checkpoints.length ? `<h3 style="margin-top:14px">Plaatsen</h3><div class="rows">${today.checkpoints.map(cp => {
             const v = a.visited.get(cp.id) || [];
             return `<div class="row"><div class="row-main"><span class="row-title">${esc(cp.name)}</span>
               ${here && here.id === cp.id ? '<span class="row-sub">Je bent hier</span>' : ''}</div>
               ${v.length ? `<span class="pill on">✓ ${v.map(x => fmt.time(x.from)).join(', ')}</span>` : '<span class="pill">Nog niet</span>'}</div>`;
-          }).join('')}</div>`
-            : '<p class="empty">Je verantwoordelijke heeft nog geen plaatsen van de ronde aangeduid. Je rit wordt toch bijgehouden.</p>'}
-          ${S.openEntry ? '<p class="muted small" style="margin-top:10px">Aan een automaat? Tik op <strong>Ik ben hier</strong>: zo staat het zeker op je rit, ook als je telefoon even geen locatie had.</p>' : ''}
+          }).join('')}</div>` : ''}
+          ${gps && S.openEntry ? '<p class="muted small" style="margin-top:10px">Aan een automaat? Tik op <strong>Ik ben hier</strong>: zo staat het zeker op je rit, ook als je telefoon even geen locatie had.</p>' : ''}
         </section>
         <section class="card">
           <div class="card-head"><h2>Je uren</h2><button class="sm" data-go="hours">Alle uren</button></div>
@@ -3202,46 +3213,126 @@ function routeTimeline(a) {
   }).join('');
 }
 
+// A machine visit from MATO Info: what went in and out, and how.
+function visitWhat(v) {
+  const parts = [];
+  if (v.added) parts.push(`${v.added} ${v.added === 1 ? 'stuk' : 'stuks'} erin`);
+  if (v.removed) parts.push(`${v.removed} eruit`);
+  return parts.join(' · ') || 'nagekeken';
+}
+const visitHow = v => v.round_no != null ? `ronde ${v.round_no}${v.round_done ? '' : ', nog bezig'}` : v.via_adjust ? 'via Voorraad aanpassen' : 'bijgevuld';
+const visitSpan = v => new Date(v.last_at) - new Date(v.first_at) >= 120000 ? ` · ${fmt.time(v.first_at)} – ${fmt.time(v.last_at)}` : '';
+
+// The day from MATO Info: clocked in, each machine he filled with the time in
+// between, clocked out. Visits more than 15 minutes outside a clocked time are
+// returned apart.
+function matoTimeline(entries, visits, nowMs) {
+  const t = x => new Date(x).getTime();
+  const sessions = [...entries].sort((x, y) => t(x.clock_in) - t(y.clock_in))
+    .map(e => ({ e, start: t(e.clock_in), end: e.clock_out ? t(e.clock_out) : nowMs, visits: [] }));
+  const outside = [];
+  for (const v of visits) {
+    const at = t(v.first_at), s = sessions.find(x => at >= x.start - 15 * 60000 && at <= x.end + 15 * 60000);
+    (s ? s.visits : outside).push(v);
+  }
+  const row = (time, what, cls) => `<li class="${cls}"><span class="tl-time">${time}</span><span class="tl-what">${what}</span></li>`;
+  const leg = (mins, text) => row('', `↓ ${fmt.dur(mins)} ${text}`, 'tl-leg');
+  const html = sessions.map(s => {
+    const rows = [row(fmt.time(s.start), '<strong>Ingeklokt</strong>', 'tl-in')];
+    let prev = s.start;
+    s.visits.forEach((v, i) => {
+      const gap = (t(v.first_at) - prev) / 60000;
+      if (gap >= 1) rows.push(leg(gap, i ? 'tot de volgende automaat' : 'tot de eerste automaat'));
+      rows.push(row(fmt.time(v.first_at), `<strong>${esc(v.machine)}</strong>
+        <span class="muted small">${esc(visitWhat(v))} · ${esc(visitHow(v))}${visitSpan(v)}</span>`, 'tl-visit'));
+      prev = Math.max(prev, t(v.last_at));
+    });
+    if (!s.visits.length) rows.push(row('', '<span class="muted small">Nog niets bijgevuld in MATO Info.</span>', 'tl-leg'));
+    else if ((s.end - prev) / 60000 >= 1) rows.push(leg((s.end - prev) / 60000, s.e.clock_out ? 'tot het uitklokken' : 'sinds de laatste automaat'));
+    rows.push(s.e.clock_out
+      ? row(fmt.time(s.end), `<strong>Uitgeklokt</strong>
+          ${s.e.pending ? '<span class="pill accent">Uur wacht op goedkeuring</span>' : s.e.edited ? '<span class="pill">Aangepast</span>' : ''}
+          ${s.e.note ? `<span class="muted small">“${esc(s.e.note)}”</span>` : ''}`, 'tl-out')
+      : row('nu', '<strong>Nog ingeklokt</strong>', 'tl-out is-open'));
+    return `<ol class="timeline">${rows.join('')}</ol>`;
+  }).join('');
+  return { html, outside };
+}
+
+const visitRows = list => `<ol class="timeline">${list.map(v => `<li class="tl-visit"><span class="tl-time">${fmt.time(v.first_at)}</span>
+  <span class="tl-what"><strong>${esc(v.machine)}</strong><span class="muted small">${esc(visitWhat(v))} · ${esc(visitHow(v))}${visitSpan(v)}</span></span></li>`).join('')}</ol>`;
+
 async function viewRoutes(el, current) {
   const day = S.routeDay || startOfDay(now());
   S.routeDay = day;
+  const gps = !!S.settings.track_route;
   const [data] = await Promise.all([
     rpc('mgr_routes', { p_staff_id: S.routeStaff || null, p_from: day.toISOString(), p_to: addDays(day, 1).toISOString() }),
-    loadLeaflet().catch(e => e),
+    gps ? loadLeaflet().catch(e => e) : null,
   ]);
   if (!current()) return;
   S.routeStaff = data.staff_id;
   const driver = data.drivers.find(d => d.id === data.staff_id);
   const a = Route.analyse({ entries: data.entries, points: data.points, checkpoints: data.checkpoints, site: data.site, now: now().getTime() });
+  const visits = data.visits || [];
+  const mt = matoTimeline(data.entries, visits, now().getTime());
   const isToday = sameDay(day, now());
   const go = (id, d) => { location.hash = `routes/${id}/${toDateInput(d)}`; };
   const working = a.sessions.some(s => s.open);
+  const first = driver ? esc(driver.name.split(' ')[0]) : '';
+  const m = data.mato;
+  const matoCard = `<section class="card">
+      <div class="card-head"><h2>MATO Info</h2>${m ? '<button class="sm" id="mato-now">Nu ophalen</button>' : ''}</div>
+      ${m ? `<p class="muted small" style="margin-top:6px">Wat ${driver ? `<strong>${esc(data.mato_name)}</strong>` : 'de chauffeur'} in MATO Info bijvult, komt hier elke 5 minuten vanzelf binnen, met de automaat, het uur en het aantal stuks.${m.last_sync_at ? ` Laatst opgehaald ${esc(fmt.when(m.last_sync_at))}.` : ''}</p>
+        ${m.last_error ? `<p class="hint bad">De laatste keer lukte het niet: ${esc(tr(m.last_error))}</p>` : ''}
+        ${driver ? `<p class="muted small">Heet hij anders in MATO Info? Pas het aan bij <a href="#team/${driver.id}">Team</a>.</p>` : ''}`
+        : '<p class="muted small" style="margin-top:6px">MATO Info is nog niet gekoppeld.</p>'}
+    </section>`;
+  const zoneCard = `<section class="card">
+      <div class="card-head"><h2>Inklokzone</h2><button class="sm" id="site-edit">Aanpassen</button></div>
+      <p class="muted small" style="margin-top:6px">${data.site.lat != null
+        ? `De chauffeur kan alleen in- en uitklokken binnen <strong>${metres(data.site.radius_m)}</strong> van het restaurant. Hoe nauwkeurig zijn telefoon is, telt in zijn voordeel: binnen staat een telefoon vaak 30 tot 100 m naast.`
+        : 'Duid aan waar het restaurant is. Zonder die plaats kan de chauffeur niet inklokken.'}</p>
+    </section>`;
+  const gpsCard = `<section class="card">
+      <h2>Gps-rit</h2>
+      <label class="check" style="margin-top:10px"><input type="checkbox" id="rt-gps" ${gps ? 'checked' : ''}> Ook de gereden weg met gps bijhouden</label>
+      <p class="muted small" style="margin-top:6px">Dan zie je de rit op een kaart, met plaatsen die je zelf aanduidt. De app moet daarvoor open blijven op zijn telefoon tijdens de ronde. Uit: de ronde komt alleen uit MATO Info, en zijn locatie wordt enkel bij het in- en uitklokken gevraagd.</p>
+    </section>`;
+  const outsideNote = mt.outside.length ? `<div class="hint warn" style="margin-top:12px"><strong>Bijgevuld terwijl hij niet ingeklokt was</strong>${visitRows(mt.outside)}</div>` : '';
+  const added = visits.reduce((x, v) => x + v.added, 0);
   el.innerHTML = `
     <div class="view-head">
-      <div><h1>Ritten</h1><p>Waar de chauffeur reed terwijl hij ingeklokt was, en hoe lang hij over elke rit deed.</p></div>
+      <div><h1>Ritten</h1><p>Wanneer de chauffeur bij elke automaat was, wat hij bijvulde en hoe lang hij erover deed.</p></div>
       ${periodBar(fmt.dayLong(day), isToday ? 'Vandaag' : '', 'rt-prev', 'rt-next')}
     </div>
     ${data.drivers.length > 1 ? `<div class="chips">${data.drivers.map(d => `<button class="chip ${d.id === data.staff_id ? 'is-on' : ''}" data-driver="${d.id}">${esc(d.name)}${d.working ? ' ●' : ''}</button>`).join('')}</div>` : ''}
-    ${driver ? '' : '<p class="hint info">Nog geen chauffeur. Voeg iemand toe bij Team met de rol <strong>Chauffeur</strong>. Je kan de plaatsen van de ronde hieronder al aanduiden.</p>'}
+    ${driver ? '' : '<p class="hint info">Nog geen chauffeur. Geef iemand bij Team de rol <strong>Chauffeur</strong>.</p>'}
     ${driver ? `<div class="stats">
-      <div class="stat good"><span class="v">${fmt.dur(a.minutes)}</span><span class="k">${esc(driver.name.split(' ')[0])} gewerkt${working ? ' (bezig)' : ''}</span></div>
-      <div class="stat"><span class="v">${num(a.km, 1)} km</span><span class="k">Gereden</span></div>
-      <div class="stat"><span class="v">${a.visited.size}/${data.checkpoints.length}</span><span class="k">Plaatsen bezocht</span></div>
-      <div class="stat ${a.sessions.length && a.known < 0.8 ? 'alert' : ''}"><span class="v">${a.sessions.length ? Math.round(a.known * 100) + '%' : '—'}</span><span class="k">Van de tijd een locatie</span></div>
+      <div class="stat good"><span class="v">${fmt.dur(a.minutes)}</span><span class="k">${first} gewerkt${working ? ' (bezig)' : ''}</span></div>
+      <div class="stat"><span class="v">${visits.length}</span><span class="k">${visits.length === 1 ? 'Automaat bijgevuld' : 'Automaten bijgevuld'}</span></div>
+      <div class="stat"><span class="v">${added}</span><span class="k">Stuks erin</span></div>
+      ${gps ? `<div class="stat"><span class="v">${num(a.km, 1)} km</span><span class="k">Gereden (gps)</span></div>`
+        : `<div class="stat ${mt.outside.length ? 'alert' : ''}"><span class="v">${mt.outside.length}</span><span class="k">Buiten de geklokte uren</span></div>`}
     </div>` : ''}
     <div class="route-grid">
-      <section class="card route-map-card"><div class="route-map" id="rt-map" role="img" aria-label="Kaart met de rit"></div>
-        <p class="muted small" style="margin-top:8px">Rode lijn: de rit. Groen: plaats bezocht, oranje: nog niet. Witte bolletjes: stops buiten de plaatsen.</p></section>
+      ${gps ? `<section class="card route-map-card"><div class="route-map" id="rt-map" role="img" aria-label="Kaart met de rit"></div>
+        <p class="muted small" style="margin-top:8px">Rode lijn: de rit. Groen: plaats bezocht, oranje: nog niet. Witte bolletjes: stops buiten de plaatsen.</p></section>` : ''}
       <section class="card">
         <div class="card-head"><h2>Verloop</h2>${working ? '<span class="pill on">Onderweg</span>' : ''}</div>
-        ${driver ? routeTimeline(a) : '<p class="empty">Nog geen ritten.</p>'}
-        ${a.sessions.some(s => s.gaps.length) ? '<p class="muted small" style="margin-top:10px">Geen locatie: de app was dicht, het scherm stond uit of de telefoon had geen bereik. De uren tellen wel.</p>' : ''}
+        ${!driver ? '<p class="empty">Nog geen ritten.</p>'
+          : gps ? `${routeTimeline(a)}${a.sessions.some(s => s.gaps.length) ? '<p class="muted small" style="margin-top:10px">Geen locatie: de app was dicht, het scherm stond uit of de telefoon had geen bereik. De uren tellen wel.</p>' : ''}
+              ${visits.length ? `<h3 style="margin-top:16px">Bijgevuld volgens MATO Info</h3>${visitRows(visits)}` : ''}`
+          : data.entries.length ? mt.html : `<p class="empty">Niet ingeklokt op deze dag.</p>`}
+        ${driver ? outsideNote : ''}
+        ${driver && !gps && data.entries.length ? '<p class="muted small" style="margin-top:10px">De tijd tussen twee automaten is rijden én klaarzetten: MATO Info noteert wanneer hij een automaat bijvult, niet wanneer hij aankomt.</p>' : ''}
       </section>
+      ${gps ? '' : `<div class="stack">${matoCard}${zoneCard}${gpsCard}</div>`}
     </div>
-    <div class="grid-2">
+    ${gps ? `<div class="grid-2">
       <section class="card">
         <div class="card-head"><h2>Plaatsen van de ronde</h2><button class="sm primary" id="cp-add">+ Plaats toevoegen</button></div>
-        <p class="muted small" style="margin-top:6px">De automaten en andere plaatsen waar de chauffeur langs moet. Komt hij binnen de zone, dan telt hij als aangekomen.</p>
+        <p class="muted small" style="margin-top:6px">Plaatsen waar de chauffeur langs moet, voor de gps-rit. Komt hij binnen de zone, dan telt hij als aangekomen.</p>
         ${data.checkpoints.length ? `<div class="rows">${data.checkpoints.map(cp => {
           const v = a.visited.get(cp.id) || [];
           return `<div class="row"><div class="row-main"><span class="row-title">${esc(cp.name)}</span>
@@ -3249,29 +3340,43 @@ async function viewRoutes(el, current) {
             <div class="row-actions"><button class="sm" data-cp="${cp.id}">Wijzigen</button></div></div>`;
         }).join('')}</div>` : '<p class="empty">Nog geen plaatsen. Voeg ze toe met een adres, door op de kaart te tikken, of bewaar een stop uit het verloop.</p>'}
       </section>
-      <section class="card">
-        <div class="card-head"><h2>Inklokzone</h2><button class="sm" id="site-edit">Aanpassen</button></div>
-        <p class="muted small" style="margin-top:6px">${data.site.lat != null
-          ? `De chauffeur kan alleen in- en uitklokken binnen <strong>${metres(data.site.radius_m)}</strong> van het restaurant. Hoe nauwkeurig zijn telefoon is, telt in zijn voordeel: binnen staat een telefoon vaak 30 tot 100 m naast.`
-          : 'Duid aan waar het restaurant is. Zonder die plaats kan de chauffeur niet inklokken.'}</p>
-        <p class="muted small">Hij ziet zelf dat de app zijn rit bijhoudt, alleen terwijl hij ingeklokt is.</p>
-      </section>
-    </div>`;
+      <div class="stack">${matoCard}${zoneCard}${gpsCard}</div>
+    </div>` : ''}`;
 
   const box = $('#rt-map', el);
-  if (window.L) drawRoute(makeMap(box), a, data);
-  else box.innerHTML = '<p class="empty">De kaart kon niet geladen worden. Het verloop hiernaast klopt wel.</p>';
+  if (box) {
+    if (window.L) drawRoute(makeMap(box), a, data);
+    else box.innerHTML = '<p class="empty">De kaart kon niet geladen worden. Het verloop hiernaast klopt wel.</p>';
+  }
   $('#rt-prev', el).addEventListener('click', () => go(data.staff_id, addDays(day, -1)));
   $('#rt-next', el).addEventListener('click', () => go(data.staff_id, addDays(day, 1)));
   $$('[data-driver]', el).forEach(b => b.addEventListener('click', () => go(b.dataset.driver, day)));
-  $('#cp-add', el).addEventListener('click', () => placeModal({ center: data.site }));
+  const cpAdd = $('#cp-add', el);
+  if (cpAdd) cpAdd.addEventListener('click', () => placeModal({ center: data.site }));
   $$('[data-cp]', el).forEach(b => b.addEventListener('click', () => placeModal({ place: data.checkpoints.find(c => c.id === b.dataset.cp), center: data.site })));
   $$('[data-stop]', el).forEach(b => b.addEventListener('click', () => {
     const [lat, lng] = b.dataset.stop.split(',').map(Number);
     placeModal({ place: { lat, lng, radius_m: 75 }, center: data.site });
   }));
   $('#site-edit', el).addEventListener('click', () => placeModal({ site: data.site }));
-  if (isToday && working) startPolling(60000);
+  const now_ = $('#mato-now', el);
+  if (now_) now_.addEventListener('click', () => busy(now_, async () => {
+    const r = await rpc('mato', { token: S.token }, { auth: false, path: '/functions/v1/mato' });
+    toast(r.report.new || r.report.updated ? `Opgehaald uit MATO Info: ${plural(r.report.new, 'nieuwe bijvulling', 'nieuwe bijvullingen')}${r.report.updated ? `, ${r.report.updated} bijgewerkt` : ''}.` : 'Opgehaald uit MATO Info. Niets nieuws.');
+    renderView();
+  }).catch(() => renderView()));
+  const gpsBox = $('#rt-gps', el);
+  gpsBox.addEventListener('change', async () => {
+    const on = gpsBox.checked;
+    if (on && !(await modal.confirm({ title: 'Gps-rit aanzetten?', body: 'De app vraagt dan de hele ronde de locatie van de chauffeur en moet daarvoor open blijven op zijn telefoon. Vertel hem dat op voorhand.', ok: 'Aanzetten' }))) { gpsBox.checked = false; return; }
+    busy(null, async () => {
+      await rpc('mgr_save_track_route', { p_on: on });
+      await refreshMe();
+      toast(on ? 'De gps-rit staat aan.' : 'De gps-rit staat uit. De ronde komt uit MATO Info.');
+      renderView();
+    }).catch(() => { gpsBox.checked = !on; });
+  });
+  if (isToday) startPolling(working ? 60000 : 300000);
 }
 
 // Add or change a place of the round, or the restaurant's zone (site): tap the
@@ -3910,7 +4015,12 @@ async function viewMember(el, current) {
         </div>
       </section>
     </div>
-    ${driver ? `<section class="card"><h2>Chauffeur</h2><p class="muted small" style="margin-top:6px">${esc(first)} heeft geen planning. ${esc(first)} klokt in en uit aan het restaurant en ziet de eigen uren per dag. Terwijl ${esc(first)} ingeklokt is, houdt de app de rit bij: zie <a href="#routes/${p.id}">Ritten</a>. Deze uren gaan niet naar Officient.</p></section>` : `<section class="card">
+    ${driver ? `<section class="card"><h2>Chauffeur</h2><p class="muted small" style="margin-top:6px">${esc(first)} heeft geen planning. ${esc(first)} klokt in en uit aan het restaurant en ziet de eigen uren per dag. Wat ${esc(first)} in MATO Info bijvult, staat bij <a href="#routes/${p.id}">Ritten</a>. Deze uren gaan niet naar Officient.</p>
+      <form id="mato-form" novalidate><div class="form-grid" style="margin-top:12px">
+        <div class="field"><label for="pm-mato">Naam in MATO Info</label><input id="pm-mato" maxlength="60" value="${esc(p.mato_name_own || '')}" placeholder="${esc(first)}">
+          <span class="help">De naam waarop ${esc(first)} in MATO Info bijvult. Leeg = ${esc(first)}.</span></div>
+        <div class="field"><label>&nbsp;</label><button type="submit" class="sm">Opslaan</button></div>
+      </div><p class="form-error" id="mato-err"></p></form></section>` : `<section class="card">
       <div class="card-head"><h2>Vaste uren</h2>${p.active ? '<button class="sm" id="add-fixed">+ Vaste uren toevoegen</button>' : ''}</div>
       <p class="muted small" style="margin-top:6px">Werkt ${esc(first)} elke week op dezelfde momenten? Dan kan ${esc(first)} tijdens die uren inklokken. Vaste uren staan niet in de kalender: die is voor studenten en deeltijdsen.</p>
       ${p.contract_minutes && contractText(p.contract_minutes) ? `<p class="small" style="margin-top:6px">Contracturen volgens Officient: <strong>${esc(contractText(p.contract_minutes))}</strong></p>` : ''}
@@ -3960,6 +4070,15 @@ async function viewMember(el, current) {
   $('#back', el).addEventListener('click', () => { location.hash = 'team'; });
   const seeRoutes = $('#see-routes', el);
   if (seeRoutes) seeRoutes.addEventListener('click', () => { location.hash = `routes/${p.id}`; });
+  const matoForm = $('#mato-form', el);
+  if (matoForm) matoForm.addEventListener('submit', ev => {
+    ev.preventDefault();
+    busy($('button[type=submit]', matoForm), async () => {
+      const r = await rpc('mgr_set_mato_name', { p_id: p.id, p_name: $('#pm-mato', matoForm).value });
+      toast(`Opgeslagen. Bijvullingen van “${r.mato_name}” in MATO Info komen bij ${first}.`);
+      renderView();
+    }).catch(e => { $('#mato-err', matoForm).textContent = e.message; });
+  });
   const addFixed = $('#add-fixed', el);
   if (addFixed) addFixed.addEventListener('click', () => templateModal(null, { staffId: p.id }));
   $$('[data-template]', el).forEach(b => b.addEventListener('click', () => templateModal(mine.find(x => x.id === b.dataset.template))));
