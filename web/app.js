@@ -160,6 +160,20 @@ const SERVER_NL = {
   'Pick a title from the list.': 'Kies een titel uit de lijst.',
   'Picking shifts is off for you for now. Ask your manager.': 'Shiften opnemen staat voorlopig uit voor jou. Vraag het aan je verantwoordelijke.',
   'Check the phone number.': 'Controleer het telefoonnummer.',
+  'This quiz is closed.': 'Deze quiz is afgelopen.',
+  'You already answered this question.': 'Je hebt deze vraag al beantwoord.',
+  'Pick an answer.': 'Kies een antwoord.',
+  "That question wasn't found.": 'Die vraag bestaat niet meer.',
+  "That quiz wasn't found.": 'Die quiz bestaat niet meer.',
+  'Pick a week.': 'Kies een week.',
+  'The XP per right answer must be between 1 and 100.': 'De XP per juist antwoord moet tussen 1 en 100 liggen.',
+  'Add at least one question.': 'Voeg minstens één vraag toe.',
+  'A quiz has at most 30 questions.': 'Een quiz heeft hoogstens 30 vragen.',
+  'People already answered this quiz, so it stays in its week.': 'Er is al op deze quiz geantwoord, dus hij blijft in zijn week.',
+  'That week is over.': 'Die week is al voorbij.',
+  'There is already a quiz for that week.': 'Er is al een quiz voor die week.',
+  "A question that was already answered can't be removed.": 'Een vraag waarop al geantwoord is, kan niet meer weg.',
+  "People already answered this quiz, so it can't be removed.": 'Er is al op deze quiz geantwoord, dus hij kan niet meer weg.',
 };
 // What staff can run into, for who uses the app in Chinese.
 const SERVER_ZH = {
@@ -203,6 +217,11 @@ const SERVER_ZH = {
   'Pick a title from the list.': '请从列表里选一个称号。',
   'Picking shifts is off for you for now. Ask your manager.': '你暂时不能认领班次。请问负责人。',
   "That person wasn't found.": '找不到这个人。',
+  'This quiz is closed.': '这个测验已经结束了。',
+  'You already answered this question.': '这道题你已经回答过了。',
+  'Pick an answer.': '请选一个答案。',
+  "That question wasn't found.": '这道题已经不存在了。',
+  "That quiz wasn't found.": '这个测验已经不存在了。',
 };
 const SERVER_ZH_PATTERNS = [
   [/^Shifts can't be dropped less than (\d+) hours before they start\. Ask your manager\.$/, '离开始不到 $1 小时的班次不能退回。请问负责人。'],
@@ -221,6 +240,13 @@ const SERVER_NL_PATTERNS = [
   [/^That title unlocks at level (\d+)\.$/, 'Die titel krijg je pas vanaf level $1.'],
   [/^Officient answered (\d+)( for .*)?\.$/, 'Officient gaf een fout ($1). Probeer het later opnieuw.'],
   [/^MATO Info answered (\d+)(: .*)?\.$/, 'MATO Info gaf een fout ($1). Probeer het later opnieuw.'],
+  [/^Question (\d+): write the question\.$/, 'Vraag $1: schrijf de vraag.'],
+  [/^Question (\d+): give 2 to 6 answers, none empty\.$/, 'Vraag $1: geef 2 tot 6 antwoorden, geen enkel leeg.'],
+  [/^Question (\d+): two answers are the same\.$/, 'Vraag $1: twee antwoorden zijn hetzelfde.'],
+  [/^Question (\d+): mark the right answer\.$/, 'Vraag $1: duid het juiste antwoord aan.'],
+  [/^Question (\d+) wasn't found\. Reload the page\.$/, 'Vraag $1 bestaat niet meer. Laad de pagina opnieuw.'],
+  [/^Question (\d+) was already answered: you can still change the text and the right answer, but not the number of answers\.$/,
+    'Op vraag $1 is al geantwoord: je kan de tekst en het juiste antwoord nog aanpassen, maar niet het aantal antwoorden.'],
   [/^You're (\d+) m from the restaurant\. Clock in and out at the restaurant\.$/, (_, m) => `Je bent ${metres(+m)} van het restaurant. In- en uitklokken kan alleen aan het restaurant.`],
 ];
 function tr(msg) {
@@ -550,6 +576,7 @@ const ICONS = {
   team: '<svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round"><circle cx="12" cy="8" r="4"/><path d="M4 21c0-4 4-6 8-6s8 2 8 6"/></svg>',
   profile: '<svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"><circle cx="12" cy="12" r="9"/><circle cx="9" cy="10" r=".6" fill="currentColor"/><circle cx="15" cy="10" r=".6" fill="currentColor"/><path d="M8.5 14.5c1.8 2 5.2 2 7 0"/></svg>',
   ranking: '<svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"><path d="M8 21h8M12 17v4M7 4h10v5a5 5 0 0 1-10 0z"/><path d="M7 6H4a3 3 0 0 0 3 4M17 6h3a3 3 0 0 1-3 4"/></svg>',
+  quiz: '<svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"><circle cx="12" cy="12" r="9"/><path d="M9.6 9.4a2.5 2.5 0 1 1 3.4 2.4c-.6.3-1 .8-1 1.5v.5"/><circle cx="12" cy="17" r=".7" fill="currentColor"/></svg>',
   home: '<svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"><path d="M3 11l9-7 9 7"/><path d="M5 10v10h14V10"/><path d="M10 20v-6h4v6"/></svg>',
   route: '<svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"><circle cx="6" cy="19" r="2"/><circle cx="18" cy="5" r="2"/><path d="M8 19h8.5a3.5 3.5 0 0 0 0-7h-9a3.5 3.5 0 0 1 0-7H16"/></svg>',
   more: '<svg viewBox="0 0 24 24" fill="currentColor"><circle cx="5" cy="12" r="2"/><circle cx="12" cy="12" r="2"/><circle cx="19" cy="12" r="2"/></svg>',
@@ -595,12 +622,12 @@ function tabsFor() {
   if (isViewer()) return [['family', L('Kalender', '排班')], ['famstaff', L('Personeel', '员工')]];
   if (isDriver()) return [['clock', 'Klok'], ['hours', 'Mijn uren'], ['profile', 'Profiel']];
   if (isManager()) return [['today', 'Vandaag'], ['schedule', 'Planning'], ['monthly', 'Overzicht'], ['requests', 'Aanvragen'],
-    ...(S.settings.has_drivers ? [['routes', 'Ritten']] : []), ['team', 'Team'], ['ranking', 'Ranglijst'], ['profile', 'Profiel']];
+    ...(S.settings.has_drivers ? [['routes', 'Ritten']] : []), ['team', 'Team'], ['quiz', 'Quiz'], ['ranking', 'Ranglijst'], ['profile', 'Profiel']];
   // Who doesn't clock in gets a start page instead of the clock.
   return [['clock', canClock() ? T('Klok', '打卡') : T('Start', '首页')], ...(seesShifts() ? [['shifts', T('Shiften', '班次')]] : []),
     ['hours', T('Mijn uren', '我的工时')], ['ranking', T('Ranglijst', '排行榜')], ['profile', T('Profiel', '我的资料')]];
 }
-const ICON_FOR = { home: 'home', clock: 'clock', shifts: 'shifts', hours: 'hours', profile: 'profile', ranking: 'ranking', today: 'today', schedule: 'shifts', monthly: 'monthly', requests: 'requests', team: 'team', routes: 'route' };
+const ICON_FOR = { home: 'home', clock: 'clock', shifts: 'shifts', hours: 'hours', profile: 'profile', ranking: 'ranking', today: 'today', schedule: 'shifts', monthly: 'monthly', requests: 'requests', team: 'team', routes: 'route', quiz: 'quiz' };
 
 /* --------------------------------------------------------------- modal */
 
@@ -1171,6 +1198,8 @@ const VIEWS = {
   clock: (el, current) => isDriver() ? viewDriver(el, current) : viewClock(el, current), shifts: viewShifts, hours: viewHours, profile: viewProfile, ranking: viewRanking,
   today: viewToday, schedule: viewSchedule, monthly: viewMonthly, requests: viewRequests, team: viewTeam, member: viewMember,
   family: viewFamily, famstaff: viewFamilyStaff, contracts: viewContracts, routes: viewRoutes,
+  quiz: (el, current) => isManager() ? (S.quizEdit ? viewQuizEdit(el, current) : S.quizId ? viewQuizResults(el, current) : viewQuizAdmin(el, current))
+    : S.quizId ? viewPastQuiz(el, current) : viewQuiz(el, current),
 };
 
 // #profile works for everyone (managers reach it through their picture);
@@ -1215,6 +1244,14 @@ function route() {
   const member = v.match(/^team\/([0-9a-f-]{36})$/);
   const ctMonth = v.match(/^contracts(?:\/(\d{4}-\d{2}))?$/);
   const rt = v.match(/^routes(?:\/([0-9a-f-]{36}))?(?:\/(\d{4}-\d{2}-\d{2}))?$/);
+  // #quiz: the quiz; #quiz/<id> an earlier one (staff) or its results (managers),
+  // #quiz/new and #quiz/<id>/edit the editor
+  const qz = v.match(/^quiz(?:\/(new|[0-9a-f-]{36}))?(\/edit)?$/);
+  const quiz = qz && (isManager() || (takesQuiz() && qz[1] !== 'new' && !qz[2]));
+  if (quiz) {
+    S.quizId = qz[1] || null; S.quizEdit = isManager() && (qz[1] === 'new' || !!qz[2]);
+    v = 'quiz'; tab = isManager() ? 'quiz' : tabs[0];
+  }
   if (ctMonth && isManager()) { v = 'contracts'; tab = 'schedule'; }
   if (rt && isManager()) {
     v = 'routes'; tab = 'routes';
@@ -1223,7 +1260,7 @@ function route() {
   }
   if (member && isManager()) { S.memberId = member[1]; v = 'member'; tab = 'team'; }
   else if ((v === 'family' || v === 'famstaff') && isManager()) tab = 'team';
-  else if ((v === 'contracts' || v === 'routes') && isManager()) { /* set above */ }
+  else if (((v === 'contracts' || v === 'routes') && isManager()) || quiz) { /* set above */ }
   else if (!tabs.includes(v)) { v = tabs[0]; tab = v; }
   if (S.view !== v) S.month = null;
   if (ctMonth && ctMonth[1] && v === 'contracts') S.month = new Date(ctMonth[1] + '-01T00:00');
@@ -1240,7 +1277,7 @@ async function renderView() {
   const el = $('#view');
   if (!el) return;
   const seq = ++S.renderSeq;
-  const key = S.view === 'member' ? `member/${S.memberId}` : S.view;
+  const key = S.view === 'member' ? `member/${S.memberId}` : S.view === 'quiz' ? `quiz/${S.quizId || ''}${S.quizEdit ? '/edit' : ''}` : S.view;
   if (!el.dataset.view || el.dataset.key !== key) {
     el.innerHTML = `<div class="empty">${T('Laden…', '加载中…')}</div>`;
     el.dataset.view = S.view;
@@ -1248,7 +1285,7 @@ async function renderView() {
   }
   try {
     await VIEWS[S.view](el, () => seq === S.renderSeq);
-    if (seq === S.renderSeq) { showLevelUp(); maybeShiftReminder(); maybeInstallGuide(); }
+    if (seq === S.renderSeq) { showLevelUp(); maybeShiftReminder(); maybeQuizReminder(); maybeInstallGuide(); }
   } catch (e) {
     if (e.code === 'auth') return;
     if (seq === S.renderSeq) el.innerHTML = `<div class="card"><h2>${T('Deze pagina kon niet geladen worden', '这个页面无法加载')}</h2><p class="muted">${esc(e.message)}</p><div class="form-actions"><button class="primary" id="retry">${T('Opnieuw proberen', '重试')}</button></div></div>`;
@@ -1434,7 +1471,8 @@ function bindHome(el) {
 async function viewStart(el, current) {
   await refreshMe();
   const t = now(), wk = startOfWeek(t);
-  const shifts = await rpc('list_shifts', { p_from: wk.toISOString(), p_to: addDays(wk, 14).toISOString() });
+  const [shifts, quiz] = await Promise.all([rpc('list_shifts', { p_from: wk.toISOString(), p_to: addDays(wk, 14).toISOString() }),
+    takesQuiz() ? rpc('my_quiz').catch(() => null) : null]);
   if (!current()) return;
   const open = shifts.filter(s => !s.staff_id && new Date(s.ends_at) > t);
   const planned = shifts.filter(s => s.mine && new Date(s.starts_at) < addDays(wk, 7)).reduce((a, s) => a + minutesBetween(s.starts_at, s.ends_at), 0);
@@ -1450,6 +1488,7 @@ async function viewStart(el, current) {
         <div class="form-actions"><button class="sm" data-go="ranking">${T('Ranglijst', '排行榜')}</button><button class="sm" data-go="profile">${T('Avatar aanpassen', '修改头像')}</button></div>
       </section>
       <div style="display:flex;flex-direction:column;gap:18px;min-width:0">
+        ${quizCard(quiz)}
         ${avatarCta()}
         <div class="stats">
           <div class="stat"><span class="v">${fmt.dur(planned)}</span><span class="k">${T('Ingepland deze week', '本周排班')}</span></div>
@@ -1466,9 +1505,10 @@ async function viewClock(el, current) {
   await refreshMe();
   const monthStart = startOfMonth(now()), wk = startOfWeek(now());
   const from = monthStart < wk ? monthStart : wk;
-  const [month, week] = await Promise.all([
+  const [month, week, quiz] = await Promise.all([
     rpc('my_hours', { p_from: from.toISOString(), p_to: addDays(now(), 1).toISOString() }),
     rpc('list_shifts', { p_from: wk.toISOString(), p_to: addDays(wk, 14).toISOString() }),
+    takesQuiz() ? rpc('my_quiz').catch(() => null) : null,
   ]);
   if (!current()) return;
   const done = month.entries.filter(x => x.clock_out);
@@ -1482,6 +1522,7 @@ async function viewClock(el, current) {
     <div class="grid-2">
       ${punchCard()}
       <div style="display:flex;flex-direction:column;gap:18px;min-width:0">
+        ${quizCard(quiz)}
         ${avatarCta()}
         <div class="stats stats-3">
           <div class="stat"><span class="v">${fmt.dur(weekMins)}</span><span class="k">${T('Gewerkt deze week', '本周工时')}</span></div>
@@ -1493,6 +1534,393 @@ async function viewClock(el, current) {
     </div>`;
   bindPunch(el, renderView);
   bindHome(el);
+}
+
+/* ---------------------------------------------------- quiz of the week */
+
+// A manager puts a multiple-choice quiz online per week (Quiz tab). Staff
+// answer one question at a time, each only once, from Monday to Sunday: the
+// server tells whether it was right only after the answer, and every right
+// answer earns the quiz's XP. The home page shows this week's quiz, and a
+// reminder comes once a day until it is done (Profiel → Herinneringen).
+const takesQuiz = () => !!S.me && !isManager() && !isDriver() && !isViewer();
+const QUIZ_REMIND_OFF = 'prikklok.quizremind.off';
+const LETTERS = 'ABCDEF';
+const quizWeek = w => { const a = new Date(w + 'T00:00'); return `${fmt.short(a)} – ${fmt.short(addDays(a, 6))}`; };
+const quizAnswered = qz => qz.questions.filter(q => q.choice != null).length;
+const quizRight = qz => qz.questions.filter(q => q.choice != null && q.choice === q.correct).length;
+const quizDeadline = qz => sameDay(now(), addDays(new Date(qz.week_start + 'T00:00'), 6))
+  ? T('Vandaag is de laatste dag.', '今天是最后一天。') : T('Je hebt tot zondag.', '周日截止。');
+
+// The card on the home page.
+function quizCard(r) {
+  if (!r || !r.takes || (!r.current && !r.past.length)) return '';
+  const qz = r.current;
+  if (!qz) return `<section class="card quiz-card">
+      <div class="card-head"><h2 class="icon-head">${ICONS.quiz}${T('Quiz van de week', '每周测验')}</h2></div>
+      <p class="muted">${T('Deze week is er nog geen quiz.', '本周还没有测验。')}</p>
+      <div class="form-actions"><button class="sm" data-go="quiz">${T('Vorige quizzen', '以前的测验')}</button></div></section>`;
+  const n = qz.questions.length, done = quizAnswered(qz), right = quizRight(qz);
+  return `<section class="card quiz-card${done === n ? '' : ' is-open'}">
+      <div class="card-head"><h2 class="icon-head">${ICONS.quiz}${T('Quiz van de week', '每周测验')}</h2><span class="pill ${done === n ? 'on' : 'accent'}">${done}/${n}</span></div>
+      ${qz.title ? `<p class="quiz-title">${esc(qz.title)}</p>` : ''}
+      <p>${done === n ? T(`Klaar: <strong>${right} van ${n}</strong> juist, <strong>+${right * qz.xp} XP</strong>.`, `完成了：答对 <strong>${right}/${n}</strong>，<strong>+${right * qz.xp} XP</strong>。`)
+        : done ? T(`Je beantwoordde er al ${done} van ${n}. ${quizDeadline(qz)}`, `你已经答了 ${done}/${n} 题。${quizDeadline(qz)}`)
+        : T(`${plural(n, 'vraag', 'vragen')}, <strong>+${qz.xp} XP</strong> per juist antwoord. ${quizDeadline(qz)}`, `${n} 道题，每答对一题 <strong>+${qz.xp} XP</strong>。${quizDeadline(qz)}`)}</p>
+      <div class="form-actions"><button class="${done === n ? 'sm' : 'primary'}" data-go="quiz">${done === n ? T('Bekijk je antwoorden', '查看你的答案') : done ? T('Verder', '继续') : T('Start de quiz', '开始测验')}</button></div>
+    </section>`;
+}
+
+// Once a day, as long as this week's quiz isn't done.
+async function maybeQuizReminder() {
+  if (!takesQuiz() || S.view === 'quiz' || store.get(QUIZ_REMIND_OFF) || $('#modal').open || Date.now() - (S.quizAt || 0) < 5 * 60000) return;
+  S.quizAt = Date.now();
+  let r;
+  try { r = await rpc('my_quiz'); } catch { return; }
+  const qz = r && r.current;
+  if (!qz || quizAnswered(qz) === qz.questions.length || !S.me || S.view === 'quiz' || $('#modal').open) return;
+  const key = `prikklok.quizseen.${S.me.id}`, mark = `${qz.id}|${toDateInput(now())}`;
+  if (store.get(key) === mark) return;
+  store.set(key, mark);
+  const n = qz.questions.length, done = quizAnswered(qz);
+  const d = modal.open(`
+    <div class="remind-head"><span class="remind-icon" aria-hidden="true">${ICONS.quiz}</span>
+      <div><h2 id="modal-title">${done ? T('Maak je quiz af', '把测验做完') : T('De quiz van deze week staat klaar', '本周测验来了')}</h2>
+        <p class="muted small">${quizWeek(qz.week_start)}${qz.title ? ` · ${esc(qz.title)}` : ''}</p></div></div>
+    <p>${done ? T(`Je beantwoordde er al ${done} van ${n}.`, `你已经答了 ${done}/${n} 题。`) : T(`${plural(n, 'vraag', 'vragen')} met meerkeuze.`, `${n} 道选择题。`)}
+      ${T(`Elk juist antwoord geeft je <strong>+${qz.xp} XP</strong>.`, `每答对一题 <strong>+${qz.xp} XP</strong>。`)}</p>
+    <p class="muted small remind-tip">${quizDeadline(qz)} ${T('Elke vraag kan je maar één keer beantwoorden.', '每道题只能回答一次。')}</p>
+    <div class="form-actions"><button type="button" data-close>${T('Later', '以后再说')}</button><button type="button" class="primary" id="qr-go">${done ? T('Verder', '继续') : T('Start de quiz', '开始测验')}</button></div>`, null, { sheet: true });
+  $('#qr-go', d).addEventListener('click', () => { modal.close(); location.hash = 'quiz'; });
+}
+
+async function viewQuiz(el, current) {
+  const r = await rpc('my_quiz');
+  if (!current()) return;
+  const qz = r.current;
+  el.innerHTML = `
+    <div class="view-head"><div><h1>${T('Quiz van de week', '每周测验')}</h1>
+      <p>${T('Elke week een paar vragen met meerkeuze. Elk juist antwoord geeft je XP.', '每周几道选择题。每答对一题就得 XP。')}</p></div></div>
+    <div class="stack">
+      <section class="card quiz-play" id="quiz-play">${qz ? '' : `<p class="empty"><strong>${T('Deze week is er nog geen quiz.', '本周还没有测验。')}</strong>${T('Kijk later nog eens.', '晚点再来看看。')}</p>`}</section>
+      ${r.past.length ? `<section class="card"><h2>${T('Vorige quizzen', '以前的测验')}</h2>
+        <div class="rows">${r.past.map(p => `<button type="button" class="row row-btn" data-past="${p.id}">
+          <span class="row-main"><span class="row-title">${p.title ? esc(p.title) : T('Quiz', '测验')}</span><span class="row-sub">${quizWeek(p.week_start)}</span></span>
+          <span class="pill${p.answered ? ' on' : ''}">${p.answered ? `${p.right}/${p.total} · +${p.xp} XP` : T('Gemist', '错过了')}</span></button>`).join('')}</div></section>` : ''}
+    </div>`;
+  $$('[data-past]', el).forEach(b => b.addEventListener('click', () => { location.hash = `quiz/${b.dataset.past}`; }));
+  if (qz) quizPlay($('#quiz-play', el), qz);
+}
+
+// One question at a time: the first not answered yet. After an answer the
+// right one shows (with the explanation) until "Volgende vraag".
+function quizPlay(box, qz) {
+  let start = !quizAnswered(qz), shown = null, finished = false;
+  const draw = () => {
+    const n = qz.questions.length, answered = quizAnswered(qz);
+    if (start) {
+      box.innerHTML = `
+        <div class="quiz-intro">
+          <span class="remind-icon" aria-hidden="true">${ICONS.quiz}</span>
+          <p class="section-label">${T('Week van', '本周')} ${quizWeek(qz.week_start)}</p>
+          <h2>${qz.title ? esc(qz.title) : T('De quiz van deze week', '本周测验')}</h2>
+          <p>${T(`${plural(n, 'vraag', 'vragen')} met meerkeuze. Elk juist antwoord geeft je <strong>+${qz.xp} XP</strong>, samen tot <strong>${n * qz.xp} XP</strong>.`,
+            `${n} 道选择题。每答对一题 <strong>+${qz.xp} XP</strong>，最多 <strong>${n * qz.xp} XP</strong>。`)}</p>
+          <p class="muted small">${T('Elke vraag kan je maar één keer beantwoorden.', '每道题只能回答一次。')} ${quizDeadline(qz)}</p>
+          <button type="button" class="primary big" id="qz-start">${T('Start de quiz', '开始测验')}</button>
+        </div>`;
+      $('#qz-start', box).addEventListener('click', () => { start = false; draw(); });
+      return;
+    }
+    const q = shown || qz.questions.find(x => x.choice == null);
+    if (!q) {
+      box.innerHTML = quizResult(qz);
+      if (!finished) { finished = true; quiet(refreshMe().then(() => showLevelUp())); }
+      return;
+    }
+    const i = qz.questions.indexOf(q), picked = q.choice != null, right = picked && q.choice === q.correct;
+    box.innerHTML = `
+      <div class="quiz-top"><span class="section-label">${T(`Vraag ${i + 1} van ${n}`, `第 ${i + 1} 题，共 ${n} 题`)}</span><span class="pill on">+${quizRight(qz) * qz.xp} XP</span></div>
+      <div class="quiz-steps" aria-hidden="true">${qz.questions.map((x, j) => `<span class="${x.choice == null ? (j === i ? 'is-now' : '') : x.choice === x.correct ? 'is-right' : 'is-wrong'}"></span>`).join('')}</div>
+      <h2 class="quiz-q" id="quiz-q">${esc(q.question)}</h2>
+      <div class="quiz-opts" role="group" aria-labelledby="quiz-q">
+        ${q.options.map((o, j) => {
+          const st = !picked ? '' : j === q.correct ? ' is-right' : j === q.choice ? ' is-wrong' : ' is-dim';
+          const mark = !picked ? '' : j === q.correct ? `<span class="quiz-mark">✓</span>` : j === q.choice ? `<span class="quiz-mark">✗</span>` : '';
+          return `<button type="button" class="quiz-opt${st}" data-opt="${j}"${picked ? ' disabled' : ''}><span class="quiz-letter">${LETTERS[j]}</span><span class="quiz-text">${esc(o)}</span>${mark}</button>`;
+        }).join('')}
+      </div>
+      ${picked ? `<div class="quiz-feedback ${right ? 'is-right' : 'is-wrong'}" role="status">
+          <strong>${right ? T(`Juist! +${qz.xp} XP`, `答对了！+${qz.xp} XP`) : T(`Helaas. Het juiste antwoord is ${LETTERS[q.correct]}.`, `答错了。正确答案是 ${LETTERS[q.correct]}。`)}</strong>
+          ${q.explanation ? `<p>${esc(q.explanation)}</p>` : ''}</div>
+        <div class="form-actions"><button type="button" class="primary" id="qz-next">${answered === n ? T('Bekijk je resultaat', '查看结果') : T('Volgende vraag', '下一题')}</button></div>`
+        : `<p class="muted small quiz-tip">${T('Tik op je antwoord. Daarna kan je het niet meer veranderen.', '点你的答案。选了就不能改。')}</p>`}`;
+    $$('[data-opt]', box).forEach(b => b.addEventListener('click', async () => {
+      if (q.choice != null || box.dataset.busy) return;
+      box.dataset.busy = '1';
+      $$('[data-opt]', box).forEach(x => { x.disabled = true; });
+      b.classList.add('is-picked');
+      try {
+        const res = await rpc('answer_quiz', { p_question: q.id, p_choice: Number(b.dataset.opt) });
+        Object.assign(q, { choice: Number(b.dataset.opt), correct: res.correct, explanation: res.explanation });
+        shown = q;
+        delete box.dataset.busy;
+        draw();
+        const next = $('#qz-next', box);
+        if (next) next.focus({ preventScroll: true });
+      } catch (e) {
+        delete box.dataset.busy;
+        if (e.code === 'auth') return;
+        toast(e.message, 'error');
+        renderView(); // answered elsewhere, or the week is over: show what the server has
+      }
+    }));
+    const next = $('#qz-next', box);
+    if (next) next.addEventListener('click', () => { shown = null; draw(); box.scrollIntoView({ block: 'start', behavior: 'smooth' }); });
+  };
+  draw();
+}
+
+// The score and every question with the right answer.
+function quizResult(qz, { past = false } = {}) {
+  const n = qz.questions.length, right = quizRight(qz), answered = quizAnswered(qz);
+  const msg = !answered ? T('Deze quiz heb je gemist.', '这个测验你错过了。')
+    : right === n ? T('Alles juist! Knap gedaan.', '全对！太棒了。') : right / n >= .6 ? T('Goed gedaan!', '做得好！') : T('Volgende keer beter!', '下次加油！');
+  return `
+    <div class="quiz-result">
+      ${past ? '' : `<p class="section-label">${T('Week van', '本周')} ${quizWeek(qz.week_start)}</p>`}
+      <div class="quiz-score"><span class="mono">${right}/${n}</span><span>${T('juist', '答对')}</span></div>
+      <p class="quiz-msg">${msg}</p>
+      ${answered ? `<span class="pill on quiz-earned">+${right * qz.xp} XP</span>` : ''}
+      ${past || answered < n ? '' : `<p class="muted small">${T('Volgende week is er een nieuwe quiz.', '下周会有新的测验。')}</p>`}
+    </div>
+    <h3 class="quiz-sub">${T('De vragen', '题目')}</h3>
+    <ol class="quiz-review">${qz.questions.map(q => {
+      const st = q.choice == null ? 'is-skip' : q.choice === q.correct ? 'is-right' : 'is-wrong';
+      return `<li class="${st}">
+        <p class="quiz-review-q">${esc(q.question)}</p>
+        ${q.choice != null && q.choice !== q.correct ? `<p class="quiz-ans"><span class="pill bad">${T('Jij', '你')}</span> ${LETTERS[q.choice]}. ${esc(q.options[q.choice])}</p>` : ''}
+        ${q.correct != null ? `<p class="quiz-ans"><span class="pill on">${q.choice === q.correct ? T('Jij, juist', '你答对了') : T('Juist', '正确')}</span> ${LETTERS[q.correct]}. ${esc(q.options[q.correct])}</p>` : ''}
+        ${q.choice == null ? `<p class="quiz-ans"><span class="pill">${T('Niet beantwoord', '未作答')}</span></p>` : ''}
+        ${q.explanation ? `<p class="muted small">${esc(q.explanation)}</p>` : ''}
+      </li>`;
+    }).join('')}</ol>`;
+}
+
+async function viewPastQuiz(el, current) {
+  const qz = await rpc('my_past_quiz', { p_id: S.quizId });
+  if (!current()) return;
+  el.innerHTML = `
+    <div class="view-head"><div><p class="section-label"><a href="#quiz">${T('Quiz', '测验')}</a> · ${T('Week van', '那周')} ${quizWeek(qz.week_start)}</p>
+      <h1>${qz.title ? esc(qz.title) : T('Quiz', '测验')}</h1></div></div>
+    <section class="card quiz-play">${quizResult(qz, { past: true })}</section>`;
+}
+
+/* ------------------------------------------------- managers: the quizzes */
+
+async function viewQuizAdmin(el, current) {
+  const r = await rpc('mgr_quizzes');
+  if (!current()) return;
+  const wk = r.week_start, cur = r.quizzes.find(z => z.week_start === wk);
+  const planned = r.quizzes.filter(z => z.week_start > wk).reverse(), past = r.quizzes.filter(z => z.week_start < wk);
+  const row = z => `<button type="button" class="row row-btn" data-quiz="${z.id}">
+      <span class="row-main"><span class="row-title">${z.title ? esc(z.title) : 'Quiz'} <span class="muted">· ${plural(z.questions, 'vraag', 'vragen')}</span></span>
+        <span class="row-sub">Week van ${quizWeek(z.week_start)} · +${z.xp} XP per juist antwoord</span></span>
+      <span class="pill${z.people ? ' on' : ''}">${z.week_start > wk ? 'Gepland' : `${plural(z.people, 'deelnemer', 'deelnemers')}${z.people ? ` · ${z.right_pct}% juist` : ''}`}</span></button>`;
+  const pct = cur && r.takers ? Math.round(cur.people / r.takers * 100) : 0;
+  el.innerHTML = `
+    <div class="view-head"><div><h1>Quiz</h1><p>Elke week een quiz met meerkeuzevragen voor het personeel. Elk juist antwoord geeft XP.</p></div>
+      <button class="primary" data-go="quiz/new">+ Nieuwe quiz</button></div>
+    <div class="stack">
+      <section class="card">
+        <div class="card-head"><h2>Deze week</h2><span class="muted small">${quizWeek(wk)}</span></div>
+        ${cur ? `<p class="quiz-title">${cur.title ? esc(cur.title) : 'Quiz'}</p>
+          <p class="muted">${plural(cur.questions, 'vraag', 'vragen')} · +${cur.xp} XP per juist antwoord</p>
+          <div class="xpbar quiz-meter" role="progressbar" aria-valuemin="0" aria-valuemax="100" aria-valuenow="${pct}" aria-label="Deden mee"><span style="width:${pct}%"></span></div>
+          <p class="small"><strong>${cur.people} van ${r.takers}</strong> deden mee${cur.people ? ` · ${cur.right_pct}% van de antwoorden juist` : ''}</p>
+          <div class="form-actions"><button data-go="quiz/${cur.id}/edit">Wijzigen</button><button class="primary" data-go="quiz/${cur.id}">Resultaten</button></div>`
+          : `<p class="empty"><strong>Nog geen quiz voor deze week.</strong>Zodra je hem opslaat, ziet het personeel hem op de startpagina.</p>
+          <div class="form-actions"><button class="primary" data-go="quiz/new">Maak de quiz van deze week</button></div>`}
+      </section>
+      ${planned.length ? `<section class="card"><h2>Gepland</h2><div class="rows">${planned.map(row).join('')}</div></section>` : ''}
+      ${past.length ? `<section class="card"><h2>Vorige weken</h2><div class="rows">${past.map(row).join('')}</div></section>` : ''}
+      <p class="muted small">Wie doet mee: iedereen van het personeel, behalve verantwoordelijken, chauffeurs en de familie. De quiz staat open van maandag tot en met zondag; elke vraag kan maar één keer beantwoord worden.</p>
+    </div>`;
+  $$('[data-go]', el).forEach(b => b.addEventListener('click', () => { location.hash = b.dataset.go; }));
+  $$('[data-quiz]', el).forEach(b => b.addEventListener('click', () => { location.hash = `quiz/${b.dataset.quiz}`; }));
+}
+
+async function viewQuizResults(el, current) {
+  const z = await rpc('mgr_quiz', { p_id: S.quizId });
+  if (!current()) return;
+  const n = z.questions.length, answered = z.questions.some(q => q.answers);
+  const open = z.week_start === z.current_week, future = z.week_start > z.current_week;
+  const avg = z.people.length ? z.people.reduce((a, p) => a + p.right, 0) / z.people.length : null;
+  el.innerHTML = `
+    <div class="view-head"><div><p class="section-label"><a href="#quiz">Quiz</a> · Week van ${quizWeek(z.week_start)} · ${open ? 'loopt nu' : future ? 'gepland' : 'afgelopen'}</p>
+      <h1>${z.title ? esc(z.title) : 'Quiz'}</h1><p>${plural(n, 'vraag', 'vragen')} · +${z.xp} XP per juist antwoord</p></div>
+      <div class="toolbar"><button data-go="quiz/${z.id}/edit">Wijzigen</button>${answered ? '' : '<button class="danger" id="qz-remove">Verwijderen</button>'}</div></div>
+    <div class="stack">
+      <div class="stats stats-3">
+        <div class="stat"><span class="v">${z.people.length}<small>/${z.people.length + z.missing.length}</small></span><span class="k">Deden mee</span></div>
+        <div class="stat good"><span class="v">${avg == null ? '—' : num(avg, 1)}<small>/${n}</small></span><span class="k">Gemiddeld juist</span></div>
+        <div class="stat"><span class="v">${z.people.reduce((a, p) => a + p.xp, 0)}</span><span class="k">XP verdiend</span></div>
+      </div>
+      <div class="grid-2">
+        <section class="card"><h2>Per persoon</h2>
+          ${z.people.length ? `<div class="rows">${z.people.map(p => `<div class="row"><div class="person">${personPic(p)}<div class="row-main"><span class="row-title">${esc(p.name)}</span>
+              <span class="row-sub">${p.answered < n ? `${p.answered} van ${n} beantwoord · ` : ''}${fmt.when(p.at)}</span></div></div>
+              <span class="pill${p.right === n ? ' on' : ''}">${p.right}/${n} · +${p.xp} XP</span></div>`).join('')}</div>`
+            : `<p class="empty">${future ? `De quiz start op maandag ${fmt.short(new Date(z.week_start + 'T00:00'))}.` : 'Nog niemand deed mee.'}</p>`}
+          ${z.missing.length && !future ? `<h3 class="quiz-sub">${open ? 'Nog niet gedaan' : 'Niet gedaan'}</h3>
+            <div class="pills">${z.missing.map(p => `<span class="pill">${esc(p.name)}</span>`).join('')}</div>` : ''}
+        </section>
+        <section class="card"><h2>Per vraag</h2>
+          <ol class="quiz-review quiz-stats">${z.questions.map(q => `<li>
+            <p class="quiz-review-q">${esc(q.question)}</p>
+            ${q.options.map((o, i) => {
+              const c = q.picked[i] || 0, w = q.answers ? Math.round(c / q.answers * 100) : 0;
+              return `<div class="qbar${i === q.correct ? ' is-right' : ''}"><span class="qbar-label"><b>${LETTERS[i]}</b> ${esc(o)}${i === q.correct ? ' <span class="pill on">juist</span>' : ''}</span>
+                <span class="qbar-n mono">${c}</span><span class="qbar-track"><span style="width:${w}%"></span></span></div>`;
+            }).join('')}
+            ${q.explanation ? `<p class="muted small">Uitleg: ${esc(q.explanation)}</p>` : ''}
+            <p class="muted small">${q.answers ? `${Math.round((q.picked[q.correct] || 0) / q.answers * 100)}% juist van ${plural(q.answers, 'antwoord', 'antwoorden')}` : 'Nog geen antwoorden.'}</p></li>`).join('')}</ol>
+        </section>
+      </div>
+    </div>`;
+  $$('[data-go]', el).forEach(b => b.addEventListener('click', () => { location.hash = b.dataset.go; }));
+  const rm = $('#qz-remove', el);
+  if (rm) rm.addEventListener('click', async () => {
+    if (!await modal.confirm({ title: 'Deze quiz verwijderen?', body: 'Nog niemand heeft hem beantwoord. Hij verdwijnt voor iedereen.', ok: 'Verwijderen', danger: true })) return;
+    try { await busy(rm, () => rpc('mgr_remove_quiz', { p_id: z.id })); } catch { return; }
+    toast('Quiz verwijderd.');
+    location.hash = 'quiz';
+  });
+}
+
+// The editor: the week, a title, the XP per right answer and the questions,
+// each with 2 to 6 answers and the right one marked.
+async function viewQuizEdit(el, current) {
+  const isNew = S.quizId === 'new';
+  const [list, z] = await Promise.all([rpc('mgr_quizzes'), isNew ? null : rpc('mgr_quiz', { p_id: S.quizId })]);
+  if (!current()) return;
+  const wk = list.week_start, monday = new Date(wk + 'T00:00');
+  const taken = new Set(list.quizzes.filter(q => !z || q.id !== z.id).map(q => q.week_start));
+  const locked = !!z && z.questions.some(q => q.answers);
+  const weeks = [];
+  if (z && z.week_start < wk) weeks.push(z.week_start); // an earlier quiz keeps its week
+  for (let i = 0; i < 9; i++) weeks.push(toDateInput(addDays(monday, 7 * i)));
+  const sel = z ? z.week_start : weeks.find(w => !taken.has(w));
+  const weekName = w => {
+    const i = Math.round((new Date(w + 'T00:00') - monday) / (7 * 864e5));
+    return `${i < 0 ? 'Afgelopen' : i === 0 ? 'Deze week' : i === 1 ? 'Volgende week' : 'Week van'} · ${quizWeek(w)}`;
+  };
+  let k = 0;
+  const optRow = (name, text, right, used) => `<div class="qe-opt">
+      <label class="qe-right"><input type="radio" name="${name}"${right ? ' checked' : ''}><span class="qe-letter"></span></label>
+      <input class="qe-otext" maxlength="120" value="${esc(text)}" placeholder="Antwoord">
+      ${used ? '' : '<button type="button" class="sm ghost icon" data-del-opt aria-label="Antwoord weghalen">✕</button>'}</div>`;
+  const block = (q = { question: '', options: ['', '', ''], correct: null, explanation: '' }) => {
+    const n = ++k, used = q.answers || 0;
+    return `<section class="card qe-q" data-qid="${q.id || ''}" data-k="${n}">
+      <div class="card-head"><h2 class="qe-num">Vraag</h2>
+        <div class="toolbar"><button type="button" class="sm ghost icon" data-up aria-label="Naar boven">↑</button><button type="button" class="sm ghost icon" data-down aria-label="Naar beneden">↓</button>
+          ${used ? '' : '<button type="button" class="sm ghost danger" data-del>Verwijderen</button>'}</div></div>
+      <div class="field"><label for="qe-t${n}">Vraag</label><textarea id="qe-t${n}" class="qe-text" rows="2" maxlength="300" placeholder="bv. Welke saus hoort bij de Peking eend?">${esc(q.question)}</textarea></div>
+      <fieldset class="qe-opts"><legend>Antwoorden <span class="muted">· tik op de letter van het juiste</span></legend>
+        ${q.options.map((o, i) => optRow(`qe-c${n}`, o, i === q.correct, used)).join('')}
+      </fieldset>
+      ${used ? `<p class="hint info">Al beantwoord door ${plural(used, 'persoon', 'mensen')}. Je kan de tekst en het juiste antwoord nog aanpassen (hun XP past zich aan), maar geen antwoorden toevoegen of weghalen.</p>`
+        : '<button type="button" class="sm" data-add-opt>+ Antwoord</button>'}
+      <div class="field"><label for="qe-x${n}">Uitleg na het antwoorden <span class="muted">(mag leeg)</span></label>
+        <input id="qe-x${n}" class="qe-expl" maxlength="300" value="${esc(q.explanation || '')}" placeholder="bv. waarom dit het juiste antwoord is"></div>
+    </section>`;
+  };
+  el.innerHTML = `
+    <div class="view-head"><div><p class="section-label"><a href="#quiz">Quiz</a></p><h1>${isNew ? 'Nieuwe quiz' : 'Quiz wijzigen'}</h1>
+      <p>Schrijf meerkeuzevragen en duid telkens het juiste antwoord aan. Het personeel ziet de quiz van maandag tot en met zondag van die week.</p></div></div>
+    <form id="qe-form" class="stack" novalidate>
+      <section class="card"><div class="form-grid">
+        <div class="field"><label for="qe-week">Week</label>
+          <select id="qe-week"${locked ? ' disabled' : ''}>${weeks.map(w => `<option value="${w}"${w === sel ? ' selected' : ''}${taken.has(w) ? ' disabled' : ''}>${weekName(w)}${taken.has(w) ? ' (heeft al een quiz)' : ''}</option>`).join('')}</select>
+          ${locked ? '<span class="help">Er is al op geantwoord, dus de week blijft.</span>' : ''}</div>
+        <div class="field"><label for="qe-title">Titel <span class="muted">(mag leeg)</span></label><input id="qe-title" maxlength="80" value="${esc(z ? z.title || '' : '')}" placeholder="bv. Menukaart en allergenen"></div>
+        <div class="field"><label for="qe-xp">XP per juist antwoord</label><input id="qe-xp" type="number" inputmode="numeric" min="1" max="100" value="${z ? z.xp : 10}"></div>
+      </div></section>
+      <div class="stack" id="qe-list">${(z ? z.questions : [undefined]).map(q => block(q)).join('')}</div>
+      <button type="button" class="quiz-add" id="qe-add">+ Vraag toevoegen</button>
+      <p class="form-error" id="qe-err"></p>
+      <div class="form-actions"><a class="btn" href="${isNew ? '#quiz' : `#quiz/${z.id}`}">Annuleren</a><button type="submit" class="primary">Opslaan</button></div>
+    </form>`;
+  const form = $('#qe-form', el), listEl = $('#qe-list', el), err = $('#qe-err', el);
+  const renumber = () => {
+    const qs = $$('.qe-q', listEl);
+    qs.forEach((s, i) => {
+      $('.qe-num', s).textContent = `Vraag ${i + 1}`;
+      $('[data-up]', s).disabled = i === 0;
+      $('[data-down]', s).disabled = i === qs.length - 1;
+      const opts = $$('.qe-opt', s);
+      opts.forEach((o, j) => {
+        $('.qe-letter', o).textContent = LETTERS[j];
+        $('input[type=radio]', o).setAttribute('aria-label', `${LETTERS[j]} is het juiste antwoord`);
+        $('.qe-otext', o).setAttribute('aria-label', `Vraag ${i + 1}, antwoord ${LETTERS[j]}`);
+        const del = $('[data-del-opt]', o);
+        if (del) del.disabled = opts.length <= 2;
+      });
+      const add = $('[data-add-opt]', s);
+      if (add) add.hidden = opts.length >= 6;
+      const delQ = $('[data-del]', s);
+      if (delQ) delQ.disabled = qs.length <= 1;
+    });
+    $('#qe-add', el).hidden = qs.length >= 30;
+  };
+  renumber();
+  listEl.addEventListener('click', ev => {
+    const b = ev.target.closest('button');
+    if (!b) return;
+    const s = b.closest('.qe-q');
+    if (b.matches('[data-up]') && s.previousElementSibling) s.previousElementSibling.before(s);
+    else if (b.matches('[data-down]') && s.nextElementSibling) s.nextElementSibling.after(s);
+    else if (b.matches('[data-del]')) s.remove();
+    else if (b.matches('[data-add-opt]')) {
+      $('.qe-opts', s).insertAdjacentHTML('beforeend', optRow(`qe-c${s.dataset.k}`, '', false, false));
+      $$('.qe-otext', s).pop().focus();
+    } else if (b.matches('[data-del-opt]')) b.closest('.qe-opt').remove();
+    else return;
+    err.textContent = '';
+    renumber();
+    if (b.matches('[data-up], [data-down]')) { s.scrollIntoView({ block: 'nearest' }); b.focus(); }
+  });
+  $('#qe-add', el).addEventListener('click', () => {
+    listEl.insertAdjacentHTML('beforeend', block());
+    renumber();
+    const s = $$('.qe-q', listEl).pop();
+    s.scrollIntoView({ block: 'start', behavior: 'smooth' });
+    $('.qe-text', s).focus({ preventScroll: true });
+  });
+  form.addEventListener('input', () => { err.textContent = ''; });
+  form.addEventListener('submit', ev => {
+    ev.preventDefault();
+    const qs = $$('.qe-q', listEl).map(s => ({
+      id: s.dataset.qid || null, question: $('.qe-text', s).value.trim(), options: $$('.qe-otext', s).map(x => x.value.trim()),
+      correct: $$('input[type=radio]', s).findIndex(x => x.checked), explanation: $('.qe-expl', s).value.trim(), el: s,
+    }));
+    const xp = Number($('#qe-xp', el).value);
+    const bad = (msg, field) => { err.textContent = msg; if (field) { field.focus(); field.scrollIntoView({ block: 'center' }); } };
+    if (!Number.isInteger(xp) || xp < 1 || xp > 100) return bad('De XP per juist antwoord moet tussen 1 en 100 liggen.', $('#qe-xp', el));
+    for (const [i, q] of qs.entries()) {
+      if (!q.question) return bad(`Vraag ${i + 1}: schrijf de vraag.`, $('.qe-text', q.el));
+      const empty = q.options.findIndex(o => !o);
+      if (empty >= 0) return bad(`Vraag ${i + 1}: antwoord ${LETTERS[empty]} is leeg. Vul het in of haal het weg.`, $$('.qe-otext', q.el)[empty]);
+      if (q.correct < 0) return bad(`Vraag ${i + 1}: tik op de letter van het juiste antwoord.`, $('input[type=radio]', q.el));
+    }
+    busy($('button[type=submit]', form), async () => {
+      const r = await rpc('mgr_save_quiz', { p_id: z ? z.id : null, p_week: $('#qe-week', el).value, p_title: $('#qe-title', el).value,
+        p_xp: xp, p_questions: qs.map(({ el: _, ...q }) => q) });
+      toast('Quiz opgeslagen.');
+      location.hash = `quiz/${r.id}`;
+    }).catch(e => { err.textContent = e.message; });
+  });
 }
 
 /* ------------------------------------------------------------ driver */
@@ -3414,11 +3842,13 @@ function bindLangCard(el) {
 function xpHow(xp) {
   const per = S.settings.daily_xp || 0;
   const bonus = T('Je verantwoordelijke kan je ook bonus-XP geven.', '负责人也可以给你奖励 XP。');
+  const quiz = takesQuiz() ? `<li>${T('<strong>XP</strong> voor elk juist antwoord in de <a href="#quiz">quiz van de week</a>', '<a href="#quiz">每周测验</a>每答对一题得 <strong>XP</strong>')}</li>` : '';
+  const quizSoFar = xp && xp.quiz ? ` ${T(`Tot nu toe ${xp.quiz} XP uit de quiz.`, `目前测验 XP 共 ${xp.quiz}。`)}` : '';
   return canClock()
-    ? `<ul><li>${T('<strong>10 XP</strong> per uur dat je werkt', '每工作一小时 <strong>10 XP</strong>')}</li><li>${T('<strong>+5 XP</strong> als je op tijd begint aan je shift', '准时开始班次 <strong>+5 XP</strong>')}</li><li>${T('<strong>+5 XP</strong> als je blijft tot je shift gedaan is', '待到班次结束 <strong>+5 XP</strong>')}</li></ul>
-      <p class="muted small">${T('XP komt uit je urenkaart. Een aanpassing telt mee zodra je verantwoordelijke ze goedkeurt.', 'XP 来自你的工时表。修改经负责人审核通过后才计入。')} ${bonus}</p>`
-    : `<ul><li>${T(`<strong>+${per} XP</strong> elke dag, gewoon omdat je bij het team bent`, `每天 <strong>+${per} XP</strong>，因为你是团队的一员`)}</li></ul>
-      <p class="muted small">${bonus}${xp && xp.daily ? ` ${T(`Tot nu toe ${xp.daily} XP van de dagen.`, `目前每日 XP 共 ${xp.daily}。`)}` : ''}</p>`;
+    ? `<ul><li>${T('<strong>10 XP</strong> per uur dat je werkt', '每工作一小时 <strong>10 XP</strong>')}</li><li>${T('<strong>+5 XP</strong> als je op tijd begint aan je shift', '准时开始班次 <strong>+5 XP</strong>')}</li><li>${T('<strong>+5 XP</strong> als je blijft tot je shift gedaan is', '待到班次结束 <strong>+5 XP</strong>')}</li>${quiz}</ul>
+      <p class="muted small">${T('XP komt uit je urenkaart. Een aanpassing telt mee zodra je verantwoordelijke ze goedkeurt.', 'XP 来自你的工时表。修改经负责人审核通过后才计入。')} ${bonus}${quizSoFar}</p>`
+    : `<ul><li>${T(`<strong>+${per} XP</strong> elke dag, gewoon omdat je bij het team bent`, `每天 <strong>+${per} XP</strong>，因为你是团队的一员`)}</li>${quiz}</ul>
+      <p class="muted small">${bonus}${xp && xp.daily ? ` ${T(`Tot nu toe ${xp.daily} XP van de dagen.`, `目前每日 XP 共 ${xp.daily}。`)}` : ''}${quizSoFar}</p>`;
 }
 
 async function viewProfile(el, current) {
@@ -3483,9 +3913,12 @@ async function viewProfile(el, current) {
             <div class="field"><label for="pin-new2">${T('Herhaal de nieuwe', '再输一次新密码')}</label><input id="pin-new2" class="pin-input" type="password" inputmode="numeric" pattern="[0-9]*" maxlength="8" autocomplete="new-password"></div>
           </div><p class="form-error" id="pin-err"></p><div class="form-actions"><button type="submit" class="primary">${T('Pincode wijzigen', '修改密码')}</button></div></form>
         </section>
-        ${S.me.picks ? `<section class="card"><h2>${T('Herinneringen', '提醒')}</h2>
-          <label class="check" style="margin-top:12px"><input type="checkbox" id="pf-remind" ${store.get(REMIND_OFF) ? '' : 'checked'}> ${T('Herinner me aan open shiften', '提醒我还有空班次')}</label>
-          <p class="muted small" style="margin-top:6px">${T('Als je de app opent: meteen als iemand een shift teruggeeft, en één keer per dag als er nog shiften open staan. Alleen op dit toestel.', '打开 app 时：有人退回班次时马上提醒；还有空班次时每天提醒一次。只在这台设备上。')}</p>
+        ${S.me.picks || takesQuiz() ? `<section class="card"><h2>${T('Herinneringen', '提醒')}</h2>
+          ${S.me.picks ? `<label class="check" style="margin-top:12px"><input type="checkbox" id="pf-remind" ${store.get(REMIND_OFF) ? '' : 'checked'}> ${T('Herinner me aan open shiften', '提醒我还有空班次')}</label>
+          <p class="muted small" style="margin-top:6px">${T('Als je de app opent: meteen als iemand een shift teruggeeft, en één keer per dag als er nog shiften open staan.', '打开 app 时：有人退回班次时马上提醒；还有空班次时每天提醒一次。')}</p>` : ''}
+          ${takesQuiz() ? `<label class="check" style="margin-top:12px"><input type="checkbox" id="pf-qremind" ${store.get(QUIZ_REMIND_OFF) ? '' : 'checked'}> ${T('Herinner me aan de quiz van de week', '提醒我做每周测验')}</label>
+          <p class="muted small" style="margin-top:6px">${T('Eén keer per dag als je de app opent, tot je de quiz gedaan hebt.', '打开 app 时每天提醒一次，直到你做完测验。')}</p>` : ''}
+          <p class="muted small" style="margin-top:10px">${T('Alleen op dit toestel.', '只在这台设备上。')}</p>
         </section>` : ''}
         <section class="card"><h2>${T('Weergave', '显示')}</h2>
           <p class="muted small" style="margin-top:6px">${T('Alleen op dit toestel.', '只在这台设备上。')}</p>
@@ -3506,6 +3939,11 @@ async function viewProfile(el, current) {
   if (rem) rem.addEventListener('change', () => {
     store.set(REMIND_OFF, rem.checked ? null : '1');
     toast(rem.checked ? T('Je krijgt weer herinneringen voor open shiften.', '会再提醒你空班次。') : T('Geen herinneringen meer op dit toestel.', '这台设备不再提醒。'));
+  });
+  const qrem = $('#pf-qremind', el);
+  if (qrem) qrem.addEventListener('change', () => {
+    store.set(QUIZ_REMIND_OFF, qrem.checked ? null : '1');
+    toast(qrem.checked ? T('Je krijgt weer een herinnering voor de quiz.', '会再提醒你做测验。') : T('Geen quizherinneringen meer op dit toestel.', '这台设备不再提醒测验。'));
   });
   $$('[data-theme-pick]', el).forEach(b => b.addEventListener('click', () => setTheme(b.dataset.themePick)));
   applyTheme();
@@ -4606,6 +5044,7 @@ async function viewMember(el, current) {
           ${xpBar(xp)}
           <dl class="kv">
             ${xp.bonus ? `<dt>Bonus-XP</dt><dd>${num(xp.bonus, 0)}</dd>` : ''}
+            ${xp.quiz ? `<dt>XP uit de quiz</dt><dd>${num(xp.quiz, 0)}</dd>` : ''}
             <dt>Uren gewerkt</dt><dd>${fmt.hours(xp.minutes)} uur</dd>
             <dt>Keer gewerkt</dt><dd>${xp.entries}</dd>
             <dt>Op tijd begonnen</dt><dd>${xp.entries ? Math.round(xp.on_time / xp.entries * 100) + '%' : '—'}</dd>

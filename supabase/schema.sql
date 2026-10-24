@@ -193,6 +193,49 @@ create index time_edits_decided_by_idx on public.time_edits (decided_by);
 create unique index time_edits_one_pending on public.time_edits (entry_id)
   where status = 'pending' and entry_id is not null;
 
+-- The quiz of the week: a manager writes multiple-choice questions for a week
+-- (Monday to Sunday). Staff answer each question once during that week and
+-- earn the quiz's XP for every right answer. Quizzes and questions are
+-- archived, never deleted; answers stay.
+create table public.quizzes (
+  id              uuid primary key default gen_random_uuid(),
+  week_start      date not null check (extract(isodow from week_start) = 1), -- the Monday
+  title           text check (length(title) <= 80),
+  xp_per_question int not null default 10 check (xp_per_question between 1 and 100), -- per right answer
+  created_by      uuid references public.staff (id) on delete set null,
+  created_at      timestamptz not null default now(),
+  archived_at     timestamptz
+);
+create unique index quizzes_week_key on public.quizzes (week_start) where archived_at is null;
+create index quizzes_created_by_idx on public.quizzes (created_by);
+
+create table public.quiz_questions (
+  id          uuid primary key default gen_random_uuid(),
+  quiz_id     uuid not null references public.quizzes (id) on delete cascade,
+  position    int not null,
+  question    text not null check (length(question) between 1 and 300),
+  options     text[] not null check (cardinality(options) between 2 and 6),
+  correct     int not null, -- the right option, counted from 0
+  explanation text check (length(explanation) <= 300), -- shown once answered
+  archived_at timestamptz,
+  check (correct >= 0 and correct < cardinality(options))
+);
+create index quiz_questions_quiz_idx on public.quiz_questions (quiz_id, position);
+
+create table public.quiz_answers (
+  question_id uuid not null references public.quiz_questions (id) on delete cascade,
+  staff_id    uuid not null references public.staff (id) on delete cascade,
+  choice      int not null check (choice >= 0), -- counted from 0, like correct
+  answered_at timestamptz not null default now(),
+  primary key (question_id, staff_id)
+);
+create index quiz_answers_staff_idx on public.quiz_answers (staff_id, answered_at);
+
+alter table public.quizzes        enable row level security;
+alter table public.quiz_questions enable row level security;
+alter table public.quiz_answers   enable row level security;
+revoke all on public.quizzes, public.quiz_questions, public.quiz_answers from anon, authenticated;
+
 alter table public.settings     enable row level security;
 alter table public.shift_templates enable row level security;
 alter table public.staff        enable row level security;
@@ -1728,8 +1771,22 @@ language sql stable set search_path = public as $$
      where s.id = p_staff and s.active and not s.view_only and not app_private.can_clock(s)), 0)::int
 $$;
 
+-- XP from the quiz of the week: the quiz's XP for every right answer (since
+-- p_since). Counted from the answers, so fixing a question's right answer
+-- fixes everyone's XP too.
+create function app_private.quiz_xp(p_staff uuid, p_since timestamptz) returns int
+language sql stable set search_path = public as $$
+  select coalesce(sum(z.xp_per_question), 0)::int
+    from public.quiz_answers a
+    join public.quiz_questions q on q.id = a.question_id and q.archived_at is null
+    join public.quizzes z on z.id = q.quiz_id and z.archived_at is null
+   where a.staff_id = p_staff and a.choice = q.correct
+     and (p_since is null or a.answered_at >= p_since)
+$$;
+
 -- XP: 10 per hour worked, +5 for starting a shift on time, +5 for staying until
--- it ends; for who does not clock in, the daily XP; plus the manager's bonus.
+-- it ends; for who does not clock in, the daily XP; right answers in the quiz;
+-- plus the manager's bonus.
 create function app_private.xp_json(p_staff uuid) returns json
 language sql stable set search_path = public as $$
   with g as (select make_interval(mins => grace_minutes) as grace from public.settings where id = 1),
@@ -1747,11 +1804,11 @@ language sql stable set search_path = public as $$
            coalesce(round(sum(mins)), 0)::int as minutes, count(*)::int as entries,
            (count(*) filter (where on_time))::int as on_time, (count(*) filter (where stayed))::int as stayed
       from e)
-  select json_build_object('xp', x.xp + b.bonus + d.daily, 'level', app_private.level_for(x.xp + b.bonus + d.daily),
+  select json_build_object('xp', x.xp + b.bonus + d.daily + d.quiz, 'level', app_private.level_for(x.xp + b.bonus + d.daily + d.quiz),
                            'minutes', minutes, 'entries', entries, 'on_time', on_time, 'stayed', stayed, 'bonus', b.bonus,
-                           'daily', d.daily)
+                           'daily', d.daily, 'quiz', d.quiz)
     from x cross join (select coalesce((select xp_bonus from public.staff where id = p_staff), 0) as bonus) b
-    cross join (select app_private.daily_xp(p_staff, null) as daily) d
+    cross join (select app_private.daily_xp(p_staff, null) as daily, app_private.quiz_xp(p_staff, null) as quiz) d
 $$;
 
 -- Checks an avatar before it is saved. Items above the person's level are refused,
@@ -2032,7 +2089,7 @@ language sql stable set search_path = public as $$
   select (coalesce(floor(sum(extract(epoch from (e.clock_out - e.clock_in))) / 360), 0)
           + 5 * count(*) filter (where e.clock_in <= sh.starts_at + g.grace)
           + 5 * count(*) filter (where e.clock_out >= sh.ends_at - g.grace)
-          + app_private.daily_xp(p_staff, p_from))::int
+          + app_private.daily_xp(p_staff, p_from) + app_private.quiz_xp(p_staff, p_from))::int
     from public.time_entries e
     left join public.shifts sh on sh.id = e.shift_id
     cross join g
@@ -3486,6 +3543,273 @@ begin
     raise exception using message = 'That person wasn''t found.', errcode = 'P0001';
   end if;
   return json_build_object('ok', true, 'mato_name', app_private.mato_name(s));
+end $$;
+
+revoke all on all functions in schema app_private from public, anon, authenticated;
+
+-- ------------------------------------------------------- quiz of the week
+
+-- This week's Monday, in the restaurant's time zone.
+create function app_private.quiz_week() returns date
+language sql stable set search_path = public as $$
+  select date_trunc('week', now() at time zone coalesce((select timezone from public.settings where id = 1), 'UTC'))::date
+$$;
+
+-- Who takes the quiz: staff, not managers (they write it), drivers or family.
+create function app_private.takes_quiz(p public.staff) returns boolean
+language sql immutable set search_path = public as $$
+  select p.active and not p.view_only and not p.driver and p.role <> 'manager'
+$$;
+
+-- A quiz as one person sees it. The right answer and the explanation come
+-- only with their own answer, or for all questions once the week is over.
+create function app_private.quiz_for(p_quiz uuid, p_staff uuid, p_reveal boolean) returns json
+language sql stable set search_path = public as $$
+  select json_build_object('id', z.id, 'week_start', z.week_start, 'title', z.title, 'xp', z.xp_per_question,
+    'questions', coalesce((select json_agg(json_build_object(
+        'id', q.id, 'question', q.question, 'options', q.options, 'choice', a.choice,
+        'correct', case when a.choice is not null or p_reveal then q.correct end,
+        'explanation', case when a.choice is not null or p_reveal then q.explanation end) order by q.position)
+      from public.quiz_questions q
+      left join public.quiz_answers a on a.question_id = q.id and a.staff_id = p_staff
+     where q.quiz_id = z.id and q.archived_at is null), '[]'::json))
+    from public.quizzes z where z.id = p_quiz
+$$;
+
+-- How many questions a quiz has, how many one person answered, and how many right.
+create function app_private.quiz_score(p_quiz uuid, p_staff uuid) returns table (total int, answered int, right_n int)
+language sql stable set search_path = public as $$
+  select count(*)::int, count(a.choice)::int, (count(*) filter (where a.choice = q.correct))::int
+    from public.quiz_questions q
+    left join public.quiz_answers a on a.question_id = q.id and a.staff_id = p_staff
+   where q.quiz_id = p_quiz and q.archived_at is null
+$$;
+
+revoke all on all functions in schema app_private from public, anon, authenticated;
+
+-- This week's quiz, and the earlier ones since the person started.
+create function public.my_quiz(p_token text) returns json
+language plpgsql stable security definer set search_path = public, extensions as $$
+declare v public.staff; v_week date := app_private.quiz_week(); v_id uuid;
+begin
+  v := app_private.current_staff(p_token);
+  if not app_private.takes_quiz(v) then
+    return json_build_object('takes', false);
+  end if;
+  select id into v_id from public.quizzes where week_start = v_week and archived_at is null;
+  return json_build_object('takes', true, 'week_start', v_week,
+    'current', case when v_id is not null then app_private.quiz_for(v_id, v.id, false) end,
+    'past', coalesce((select json_agg(json_build_object('id', z.id, 'week_start', z.week_start, 'title', z.title,
+        'total', n.total, 'answered', n.answered, 'right', n.right_n, 'xp', n.right_n * z.xp_per_question) order by z.week_start desc)
+      from (select * from public.quizzes
+             where archived_at is null and week_start < v_week and week_start + 7 > v.created_at::date
+             order by week_start desc limit 26) z
+      cross join lateral app_private.quiz_score(z.id, v.id) n), '[]'::json));
+end $$;
+
+-- An earlier quiz, with all the right answers.
+create function public.my_past_quiz(p_token text, p_id uuid) returns json
+language plpgsql stable security definer set search_path = public, extensions as $$
+declare v public.staff;
+begin
+  v := app_private.current_staff(p_token);
+  if not exists (select 1 from public.quizzes where id = p_id and archived_at is null and week_start < app_private.quiz_week()) then
+    raise exception using message = 'That quiz wasn''t found.', errcode = 'P0001';
+  end if;
+  return app_private.quiz_for(p_id, v.id, true);
+end $$;
+
+-- One answer, once. Says whether it was right, with the right answer.
+create function public.answer_quiz(p_token text, p_question uuid, p_choice int) returns json
+language plpgsql security definer set search_path = public, extensions as $$
+declare v public.staff; q public.quiz_questions; z public.quizzes;
+begin
+  v := app_private.current_staff(p_token);
+  if not app_private.takes_quiz(v) then
+    raise exception using message = 'Not allowed.', errcode = 'P0001';
+  end if;
+  select * into q from public.quiz_questions where id = p_question and archived_at is null;
+  if found then
+    select * into z from public.quizzes where id = q.quiz_id and archived_at is null;
+  end if;
+  if z.id is null then
+    raise exception using message = 'That question wasn''t found.', errcode = 'P0001';
+  end if;
+  if z.week_start <> app_private.quiz_week() then
+    raise exception using message = 'This quiz is closed.', errcode = 'P0001';
+  end if;
+  if p_choice is null or p_choice < 0 or p_choice >= cardinality(q.options) then
+    raise exception using message = 'Pick an answer.', errcode = 'P0001';
+  end if;
+  insert into public.quiz_answers (question_id, staff_id, choice) values (q.id, v.id, p_choice)
+    on conflict do nothing;
+  if not found then
+    raise exception using message = 'You already answered this question.', errcode = 'P0001';
+  end if;
+  return json_build_object('right', p_choice = q.correct, 'correct', q.correct, 'explanation', q.explanation,
+                           'xp', case when p_choice = q.correct then z.xp_per_question else 0 end);
+end $$;
+
+-- All quizzes, newest week first, with how many took part.
+create function public.mgr_quizzes(p_token text) returns json
+language plpgsql stable security definer set search_path = public, extensions as $$
+declare v public.staff;
+begin
+  v := app_private.current_manager(p_token);
+  return json_build_object('week_start', app_private.quiz_week(),
+    'takers', (select count(*) from public.staff s where app_private.takes_quiz(s)),
+    'quizzes', coalesce((select json_agg(json_build_object('id', z.id, 'week_start', z.week_start, 'title', z.title,
+        'xp', z.xp_per_question, 'questions', n.questions, 'people', n.people, 'right_pct', n.right_pct) order by z.week_start desc)
+      from public.quizzes z
+      cross join lateral (
+        select (select count(*) from public.quiz_questions where quiz_id = z.id and archived_at is null)::int as questions,
+               count(distinct a.staff_id)::int as people,
+               round(100.0 * count(*) filter (where a.choice = q.correct) / nullif(count(*), 0))::int as right_pct
+          from public.quiz_questions q join public.quiz_answers a on a.question_id = q.id
+         where q.quiz_id = z.id and q.archived_at is null) n
+     where z.archived_at is null), '[]'::json));
+end $$;
+
+-- One quiz with the right answers, and the results: per question how many
+-- picked each answer, per person their score, and who hasn't taken it yet.
+create function public.mgr_quiz(p_token text, p_id uuid) returns json
+language plpgsql stable security definer set search_path = public, extensions as $$
+declare v public.staff; z public.quizzes;
+begin
+  v := app_private.current_manager(p_token);
+  select * into z from public.quizzes where id = p_id and archived_at is null;
+  if not found then
+    raise exception using message = 'That quiz wasn''t found.', errcode = 'P0001';
+  end if;
+  return json_build_object('id', z.id, 'week_start', z.week_start, 'title', z.title, 'xp', z.xp_per_question,
+    'current_week', app_private.quiz_week(),
+    'questions', coalesce((select json_agg(json_build_object(
+        'id', q.id, 'question', q.question, 'options', q.options, 'correct', q.correct, 'explanation', q.explanation,
+        'answers', (select count(*) from public.quiz_answers where question_id = q.id),
+        'picked', (select array_agg((select count(*) from public.quiz_answers a where a.question_id = q.id and a.choice = i - 1) order by i)
+                     from generate_subscripts(q.options, 1) i)) order by q.position)
+      from public.quiz_questions q where q.quiz_id = z.id and q.archived_at is null), '[]'::json),
+    'people', coalesce((select json_agg(json_build_object('id', s.id, 'name', s.name, 'avatar', s.avatar,
+        'answered', n.answered, 'right', n.right_n, 'xp', n.right_n * z.xp_per_question,
+        'at', (select max(a.answered_at) from public.quiz_answers a join public.quiz_questions q on q.id = a.question_id
+                where q.quiz_id = z.id and a.staff_id = s.id)) order by n.right_n desc, lower(s.name))
+      from public.staff s cross join lateral app_private.quiz_score(z.id, s.id) n
+     where n.answered > 0), '[]'::json),
+    'missing', coalesce((select json_agg(json_build_object('id', s.id, 'name', s.name, 'avatar', s.avatar) order by lower(s.name))
+      from public.staff s
+     where app_private.takes_quiz(s)
+       and not exists (select 1 from public.quiz_answers a join public.quiz_questions q on q.id = a.question_id
+                        where q.quiz_id = z.id and a.staff_id = s.id)), '[]'::json));
+end $$;
+
+-- Makes or changes a quiz. p_questions: [{id?, question, options[], correct,
+-- explanation?}] in order. Once a question has answers its text and right
+-- answer can still change (everyone's XP follows), but not its number of
+-- answers, and it can't be removed. Questions left out are archived.
+create function public.mgr_save_quiz(p_token text, p_id uuid, p_week date, p_title text, p_xp int, p_questions jsonb) returns json
+language plpgsql security definer set search_path = public, extensions as $$
+declare v public.staff; z public.quizzes; old public.quiz_questions; qj jsonb; i int := 0; v_ids uuid[] := '{}';
+  v_text text; v_opts text[]; v_correct int; v_expl text; v_qid uuid;
+begin
+  v := app_private.current_manager(p_token);
+  if p_week is null or extract(isodow from p_week) <> 1 then
+    raise exception using message = 'Pick a week.', errcode = 'P0001';
+  end if;
+  if p_xp is null or p_xp not between 1 and 100 then
+    raise exception using message = 'The XP per right answer must be between 1 and 100.', errcode = 'P0001';
+  end if;
+  if p_questions is null or jsonb_typeof(p_questions) <> 'array' or jsonb_array_length(p_questions) = 0 then
+    raise exception using message = 'Add at least one question.', errcode = 'P0001';
+  end if;
+  if jsonb_array_length(p_questions) > 30 then
+    raise exception using message = 'A quiz has at most 30 questions.', errcode = 'P0001';
+  end if;
+  if p_id is not null then
+    select * into z from public.quizzes where id = p_id and archived_at is null for update;
+    if not found then
+      raise exception using message = 'That quiz wasn''t found.', errcode = 'P0001';
+    end if;
+  end if;
+  if z.id is null or z.week_start <> p_week then
+    if z.id is not null and exists (select 1 from public.quiz_answers a join public.quiz_questions q on q.id = a.question_id where q.quiz_id = z.id) then
+      raise exception using message = 'People already answered this quiz, so it stays in its week.', errcode = 'P0001';
+    end if;
+    if p_week < app_private.quiz_week() then
+      raise exception using message = 'That week is over.', errcode = 'P0001';
+    end if;
+    if exists (select 1 from public.quizzes where week_start = p_week and archived_at is null and id is distinct from z.id) then
+      raise exception using message = 'There is already a quiz for that week.', errcode = 'P0001';
+    end if;
+  end if;
+  if z.id is null then
+    insert into public.quizzes (week_start, title, xp_per_question, created_by)
+    values (p_week, nullif(app_private.clean_text(p_title, 80), ''), p_xp, v.id) returning * into z;
+  else
+    update public.quizzes set week_start = p_week, title = nullif(app_private.clean_text(p_title, 80), ''), xp_per_question = p_xp
+     where id = z.id returning * into z;
+  end if;
+  for qj in select value from jsonb_array_elements(p_questions) loop
+    i := i + 1;
+    v_text := app_private.clean_text(qj ->> 'question', 300);
+    if v_text = '' then
+      raise exception using message = format('Question %s: write the question.', i), errcode = 'P0001';
+    end if;
+    v_opts := case when jsonb_typeof(qj -> 'options') = 'array'
+      then array(select app_private.clean_text(o, 120) from jsonb_array_elements_text(qj -> 'options') with ordinality t(o, n) order by n) end;
+    if v_opts is null or cardinality(v_opts) not between 2 and 6 or '' = any(v_opts) then
+      raise exception using message = format('Question %s: give 2 to 6 answers, none empty.', i), errcode = 'P0001';
+    end if;
+    if (select count(distinct lower(o)) from unnest(v_opts) o) < cardinality(v_opts) then
+      raise exception using message = format('Question %s: two answers are the same.', i), errcode = 'P0001';
+    end if;
+    v_correct := case when jsonb_typeof(qj -> 'correct') = 'number' then (qj ->> 'correct')::numeric::int end;
+    if v_correct is null or v_correct < 0 or v_correct >= cardinality(v_opts) then
+      raise exception using message = format('Question %s: mark the right answer.', i), errcode = 'P0001';
+    end if;
+    v_expl := nullif(app_private.clean_text(qj ->> 'explanation', 300), '');
+    v_qid := null;
+    if coalesce(qj ->> 'id', '') <> '' then
+      select * into old from public.quiz_questions
+       where id::text = qj ->> 'id' and quiz_id = z.id and archived_at is null for update;
+      if not found then
+        raise exception using message = format('Question %s wasn''t found. Reload the page.', i), errcode = 'P0001';
+      end if;
+      if cardinality(old.options) <> cardinality(v_opts) and exists (select 1 from public.quiz_answers where question_id = old.id) then
+        raise exception using errcode = 'P0001',
+          message = format('Question %s was already answered: you can still change the text and the right answer, but not the number of answers.', i);
+      end if;
+      update public.quiz_questions set position = i, question = v_text, options = v_opts, correct = v_correct, explanation = v_expl
+       where id = old.id returning id into v_qid;
+    else
+      insert into public.quiz_questions (quiz_id, position, question, options, correct, explanation)
+      values (z.id, i, v_text, v_opts, v_correct, v_expl) returning id into v_qid;
+    end if;
+    v_ids := v_ids || v_qid;
+  end loop;
+  if exists (select 1 from public.quiz_questions q
+              where q.quiz_id = z.id and q.archived_at is null and not (q.id = any (v_ids))
+                and exists (select 1 from public.quiz_answers a where a.question_id = q.id)) then
+    raise exception using message = 'A question that was already answered can''t be removed.', errcode = 'P0001';
+  end if;
+  update public.quiz_questions set archived_at = now()
+   where quiz_id = z.id and archived_at is null and not (id = any (v_ids));
+  return json_build_object('ok', true, 'id', z.id);
+end $$;
+
+-- Archives a quiz nobody answered yet.
+create function public.mgr_remove_quiz(p_token text, p_id uuid) returns json
+language plpgsql security definer set search_path = public, extensions as $$
+declare v public.staff;
+begin
+  v := app_private.current_manager(p_token);
+  if exists (select 1 from public.quiz_answers a join public.quiz_questions q on q.id = a.question_id where q.quiz_id = p_id) then
+    raise exception using message = 'People already answered this quiz, so it can''t be removed.', errcode = 'P0001';
+  end if;
+  update public.quizzes set archived_at = now() where id = p_id and archived_at is null;
+  if not found then
+    raise exception using message = 'That quiz wasn''t found.', errcode = 'P0001';
+  end if;
+  return json_build_object('ok', true);
 end $$;
 
 revoke all on all functions in schema app_private from public, anon, authenticated;
