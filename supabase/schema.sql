@@ -79,14 +79,16 @@ create table public.staff (
   -- restaurant, and while clocked in the app keeps the route (route_points)
   driver          boolean not null default false,
   mato_name       text check (length(mato_name) <= 60), -- the name a driver fills under in MATO Info; empty = the first name
-  lang            text check (lang in ('nl', 'zh')), -- the app's language for this person; empty = what the phone chose
+  lang            text check (lang in ('nl', 'zh')), -- no longer used: only Dutch or Chinese; see language
   -- a funny title colleagues see on the person's card: a key from app_private.fun_title_level
   -- (picked by the person) or the manager's own words; empty = one the app picks
   fun_title       text check (length(fun_title) <= 40),
   -- the manager hides the schedule from this person for now: no open shifts, only their own
   shifts_hidden   boolean not null default false,
   -- a family account shown in the ranking too, with its avatar and level
-  in_ranking      boolean not null default false
+  in_ranking      boolean not null default false,
+  -- the app's language for this person: Dutch, Chinese or Hungarian; empty = what the phone chose
+  language        text check (language in ('nl', 'zh', 'hu'))
 );
 create unique index staff_name_key on public.staff (lower(name));
 
@@ -487,7 +489,7 @@ begin
   return json_build_object(
     'me', json_build_object('id', v.id, 'name', v.name, 'role', app_private.role_of(v), 'avatar', v.avatar,
                             'xp', app_private.xp_json(v.id), 'can_clock', not v.view_only and app_private.can_clock(v),
-                            'lang', v.lang,
+                            'lang', v.language,
                             -- who picks open shifts, and is reminded of them (see shift_alerts)
                             'picks', not v.view_only and not v.driver and v.role <> 'manager' and v.contract_type is distinct from 'vast'
                                      and not v.shifts_hidden,
@@ -1851,7 +1853,7 @@ begin
     'profile', app_private.profile_json(v),
     'work', json_build_object('role', app_private.role_of(v), 'hourly_rate', v.hourly_rate, 'contract_type', v.contract_type,
                               'payroll_id', v.payroll_id, 'start_date', v.start_date, 'created_at', v.created_at,
-                              'can_clock', app_private.can_clock(v), 'lang', v.lang),
+                              'can_clock', app_private.can_clock(v), 'lang', v.language),
     'avatar', v.avatar, 'title', v.fun_title,
     'xp', app_private.xp_json(v.id),
     'contracts', app_private.contracts_json(v.id));
@@ -1924,7 +1926,7 @@ begin
       'officient_pending', s.officient_pending,
       'officient_connected', (select o.refresh_token is not null from app_private.officient o where o.id = 1),
       'mato_name', app_private.mato_name(s), 'mato_name_own', s.mato_name,
-      'lang', s.lang, 'can_clock', not s.view_only and app_private.can_clock(s), 'fun_title', s.fun_title,
+      'lang', s.language, 'can_clock', not s.view_only and app_private.can_clock(s), 'fun_title', s.fun_title,
       'shifts_hidden', s.shifts_hidden, 'in_ranking', s.in_ranking),
     'profile', app_private.profile_json(s),
     'xp', app_private.xp_json(s.id),
@@ -2058,10 +2060,10 @@ language plpgsql security definer set search_path = public, extensions as $$
 declare v public.staff;
 begin
   v := app_private.current_account(p_token);
-  if p_lang is not null and p_lang not in ('nl', 'zh') then
+  if p_lang is not null and p_lang not in ('nl', 'zh', 'hu') then
     raise exception using message = 'Pick a language.', errcode = 'P0001';
   end if;
-  update public.staff set lang = p_lang where id = v.id;
+  update public.staff set language = p_lang where id = v.id;
   return json_build_object('ok', true);
 end $$;
 
@@ -2070,10 +2072,10 @@ language plpgsql security definer set search_path = public, extensions as $$
 declare v public.staff;
 begin
   v := app_private.current_manager(p_token);
-  if p_lang is not null and p_lang not in ('nl', 'zh') then
+  if p_lang is not null and p_lang not in ('nl', 'zh', 'hu') then
     raise exception using message = 'Pick a language.', errcode = 'P0001';
   end if;
-  update public.staff set lang = p_lang where id = p_id;
+  update public.staff set language = p_lang where id = p_id;
   if not found then
     raise exception using message = 'That person wasn''t found.', errcode = 'P0001';
   end if;

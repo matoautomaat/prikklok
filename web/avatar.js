@@ -79,12 +79,38 @@ const Avatar = (() => {
     earrings: { none: '无', studs: '耳钉', hoops: '耳环', stack: '多个耳饰' },
     piercing: { none: '无', nose: '鼻环', septum: '中隔环', clownnose: '小丑鼻子' },
   };
+  // And in Hungarian.
+  const HU = {
+    body: { female: 'Nő', male: 'Férfi' },
+    hair: { long: 'Hosszú', bangs: 'Hosszú, frufruval', wavy: 'Hullámos', longcurly: 'Hosszú göndör', lob: 'Félhosszú', shag: 'Lépcsős',
+      bob: 'Bubi', pixie: 'Pixie', halfup: 'Félig feltűzött', bun: 'Konty', spacebuns: 'Két konty', ponytail: 'Lófarok', highpony: 'Magas lófarok',
+      pigtails: 'Copfok', braids: 'Fonatok', sidebraid: 'Oldalfonat', locs: 'Raszta', cornrows: 'Cornrows', curly: 'Göndör', afro: 'Afro',
+      short: 'Rövid', sidepart: 'Oldalválaszték', slickback: 'Hátrafésült', quiff: 'Bóbita', spiky: 'Tüskés', curtains: 'Középválaszték',
+      curlytop: 'Felül göndör', mullet: 'Vokuhila', mohawk: 'Taréj', fade: 'Fade', manbun: 'Férfikonty', buzz: 'Nagyon rövid', none: 'Kopasz' },
+    eyes: { round: 'Kerek', almond: 'Mandula', side: 'Oldalra néz', happy: 'Mosolygós' },
+    brows: { soft: 'Lágy', arched: 'Ívelt', straight: 'Egyenes' },
+    mouth: { smile: 'Mosoly', grin: 'Nevetés', neutral: 'Semleges', pout: 'Duzzogás', smirk: 'Vigyor' },
+    beard: { none: 'Nincs', stubble: 'Borosta', mustache: 'Bajusz', beard: 'Szakáll' },
+    top: { tee: 'Póló', vneck: 'V-nyakú', tank: 'Trikó', longsleeve: 'Hosszú ujjú', shirt: 'Ing', sweater: 'Pulóver', hoodie: 'Kapucnis pulcsi',
+      chef: 'Szakácskabát', garden: "Chen's Garden-póló", clown: 'Bohócruha', tang: 'Tang-öltöny', qipao: 'Qipao' },
+    outer: { none: 'Nincs', jacket: 'Zakó', cardigan: 'Kardigán', puffer: 'Mellény', apron: 'Kötény', leather: 'Bőrdzseki' },
+    bottom: { baggy: 'Bő farmer', straight: 'Egyenes farmer', joggers: 'Melegítőnadrág', skirt: 'Szoknya', shorts: 'Rövidnadrág' },
+    shoes: { sneakers: 'Sportcipő', boots: 'Bokacsizma', bunny: 'Nyuszis papucs', monster: 'Szörnyes papucs', dragon: 'Sárkányos papucs', gold: 'Arany sportcipő' },
+    hat: { none: 'Nincs', beanie: 'Sapka', headband: 'Hajpánt', hijab: 'Fejkendő', cap: 'Baseballsapka', bandana: 'Bandana', chef: 'Szakácssapka',
+      crown: 'Korona', bucket: 'Halászkalap', clown: 'Bohóckalap', guapi: 'Mandarinsapka', hairpin: 'Virágos hajtű' },
+    glasses: { none: 'Nincs', round: 'Kerek', square: 'Szögletes', sun: 'Napszemüveg', heart: 'Szívecskés szemüveg' },
+    neck: { none: 'Nincs', scarf: 'Sál', bowtie: 'Csokornyakkendő', headphones: 'Fejhallgató', chain: 'Aranylánc' },
+    aura: { none: 'Nincs', gold: 'Arany ragyogás' },
+    earrings: { none: 'Nincs', studs: 'Fülbevaló', hoops: 'Karika', stack: 'Több fülbevaló' },
+    piercing: { none: 'Nincs', nose: 'Orr', septum: 'Szeptum', clownnose: 'Bohócorr' },
+  };
   // An item's name: label('top', 'clown', 'zh') -> '小丑服'.
   const label = (key, value, lang = 'nl') => {
     const nl = ((STYLES[key] || []).find(s => s[0] === value) || [])[1];
-    return lang === 'zh' ? (ZH[key] || {})[value] || nl : nl;
+    const own = { zh: ZH, hu: HU }[lang];
+    return own ? (own[key] || {})[value] || nl : nl;
   };
-  const FANCY_HAIR = { nl: 'Fantasiekleuren voor je haar', zh: '彩色头发' };
+  const FANCY_HAIR = { nl: 'Fantasiekleuren voor je haar', zh: '彩色头发', hu: 'Színes haj' };
   const COLORS = {
     skin: SKIN, hairColor: HAIR_COLORS, eyeColor: EYE_COLORS, topColor: CLOTH, outerColor: CLOTH,
     bottomColor: BOTTOM_COLORS, shoeColor: SHOE_COLORS, hatColor: CLOTH, neckColor: CLOTH,
