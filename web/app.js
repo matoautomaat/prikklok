@@ -3979,8 +3979,34 @@ async function viewProfile(el, current) {
 
 /* ------------------------------------------------------------- ranking */
 
+// The quiz of the week, as a button above the ranking: how far you are, or
+// (for managers) how many took part.
+function rankQuizButton(q) {
+  if (!q) return '';
+  let go = 'quiz', sub, pill = '', todo = false;
+  if (isManager()) {
+    const cur = q.quizzes.find(z => z.week_start === q.week_start);
+    if (cur) go = `quiz/${cur.id}`;
+    sub = cur ? `${cur.people} van ${q.takers} deden mee` : 'Nog geen quiz voor deze week. Maak er een.';
+  } else {
+    const qz = q.current;
+    if (!qz) sub = T('Deze week is er nog geen quiz.', '本周还没有测验。');
+    else {
+      const n = qz.questions.length, done = quizAnswered(qz), right = quizRight(qz);
+      todo = done < n;
+      sub = done === n ? T(`${right} van ${n} juist · +${right * qz.xp} XP`, `答对 ${right}/${n} · +${right * qz.xp} XP`)
+        : done ? T(`${done} van ${n} beantwoord`, `已答 ${done}/${n} 题`) : T(`${plural(n, 'vraag', 'vragen')} · verdien tot ${n * qz.xp} XP`, `${n} 道题 · 最多 ${n * qz.xp} XP`);
+      pill = done === n ? `<span class="pill on">✓</span>` : `<span class="pill accent">${done ? T('Verder', '继续') : T('Start', '开始')}</span>`;
+    }
+  }
+  return `<button type="button" class="rank-quiz${todo ? ' is-todo' : ''}" data-go="${go}">
+      <span class="remind-icon" aria-hidden="true">${ICONS.quiz}</span>
+      <span class="rank-quiz-text"><strong>${T('Quiz van deze week', '本周测验')}</strong><span>${sub}</span></span>${pill}</button>`;
+}
+
 async function viewRanking(el, current) {
-  const list = await rpc('leaderboard');
+  const [list, quiz] = await Promise.all([rpc('leaderboard'),
+    isManager() ? rpc('mgr_quizzes').catch(() => null) : takesQuiz() ? rpc('my_quiz').catch(() => null) : null]);
   if (!current()) return;
   const mode = S.rankMode || 'all', key = mode === 'month' ? 'month_xp' : 'xp';
   const ranked = [...list].sort((a, b) => b[key] - a[key] || b.xp - a.xp || a.name.localeCompare(b.name, 'nl'));
@@ -4000,13 +4026,14 @@ async function viewRanking(el, current) {
     </div>` : '<div class="podium-spot is-empty"></div>';
   el.innerHTML = `
     <div class="view-head">
-      <div><h1>${T('Ranglijst', '排行榜')}</h1><p>${T(`Wie van het team heeft het hoogste level? XP verdien je met werken: 10 per uur, +5 als je op tijd begint en +5 als je blijft tot het einde. Wie niet inklokt, krijgt ${S.settings.daily_xp || 0} XP per dag. Tik op iemand om de kaart te zien.`,
-        `团队里谁的等级最高？工作就能得 XP：每小时 10，准时开始 +5，待到结束 +5。不用打卡的人每天得 ${S.settings.daily_xp || 0} XP。点一个人可以看名片。`)}</p></div>
+      <div><h1>${T('Ranglijst', '排行榜')}</h1><p>${T(`Wie van het team heeft het hoogste level? XP verdien je met werken: 10 per uur, +5 als je op tijd begint en +5 als je blijft tot het einde. Wie niet inklokt, krijgt ${S.settings.daily_xp || 0} XP per dag. Elk juist antwoord in de quiz van de week geeft ook XP. Tik op iemand om de kaart te zien.`,
+        `团队里谁的等级最高？工作就能得 XP：每小时 10，准时开始 +5，待到结束 +5。不用打卡的人每天得 ${S.settings.daily_xp || 0} XP。每周测验每答对一题也能得 XP。点一个人可以看名片。`)}</p></div>
       <div class="chips" role="group" aria-label="${T('Periode', '时间')}">
         <button type="button" class="chip${mode === 'all' ? ' is-on' : ''}" data-rank-mode="all" aria-pressed="${mode === 'all'}">${T('Altijd', '全部')}</button>
         <button type="button" class="chip${mode === 'month' ? ' is-on' : ''}" data-rank-mode="month" aria-pressed="${mode === 'month'}">${T('Deze maand', '本月')}</button>
       </div>
     </div>
+    ${rankQuizButton(quiz)}
     ${me ? `<p class="hint info">${T(`Jij staat <strong>${me.rank}e</strong> van ${ranked.length}${mode === 'month' ? ` in ${month}` : ''}, met ${me[key]} XP.`, `你${mode === 'month' ? `在${month}` : ''}排第 <strong>${me.rank}</strong>（共 ${ranked.length} 人），有 ${me[key]} XP。`)}${above && above[key] > me[key] ? T(` Nog ${above[key] - me[key] + 1} XP om ${esc(above.name)} in te halen.`, `再得 ${above[key] - me[key] + 1} XP 就能超过 ${esc(above.name)}。`) : ''}</p>` : ''}
     ${anyXp ? `<section class="card podium" aria-label="${T('Top drie', '前三名')}">${spot(ranked[1], 2)}${spot(ranked[0], 1)}${spot(ranked[2], 3)}</section>`
       : `<p class="empty">${mode === 'month' ? T(`Nog niemand heeft XP in ${month}. Wie als eerste werkt, staat bovenaan.`, `${month}还没有人有 XP。先上班的人排第一。`) : T('Nog niemand heeft XP. Wie als eerste werkt, staat bovenaan.', '还没有人有 XP。先上班的人排第一。')}</p>`}
@@ -4021,6 +4048,7 @@ async function viewRanking(el, current) {
         </div>`).join('')}</div>
     </section>`;
   $$('[data-rank-mode]', el).forEach(b => b.addEventListener('click', () => { S.rankMode = b.dataset.rankMode; renderView(); }));
+  $$('[data-go]', el).forEach(b => b.addEventListener('click', () => { location.hash = b.dataset.go; }));
   bindMates(el);
 }
 
