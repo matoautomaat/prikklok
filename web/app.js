@@ -4008,6 +4008,9 @@ async function viewRanking(el, current) {
   const [list, quiz] = await Promise.all([rpc('leaderboard'),
     isManager() ? rpc('mgr_quizzes').catch(() => null) : takesQuiz() ? rpc('my_quiz').catch(() => null) : null]);
   if (!current()) return;
+  // what this week's quiz is worth, for the explanation on top
+  const cur = !quiz ? null : isManager() ? quiz.quizzes.find(z => z.week_start === quiz.week_start) : quiz.current;
+  const quizMax = cur ? (isManager() ? cur.questions : cur.questions.length) * cur.xp : null;
   const mode = S.rankMode || 'all', key = mode === 'month' ? 'month_xp' : 'xp';
   const ranked = [...list].sort((a, b) => b[key] - a[key] || b.xp - a.xp || a.name.localeCompare(b.name, 'nl'));
   const you = T('jij', '你');
@@ -4026,8 +4029,8 @@ async function viewRanking(el, current) {
     </div>` : '<div class="podium-spot is-empty"></div>';
   el.innerHTML = `
     <div class="view-head">
-      <div><h1>${T('Ranglijst', '排行榜')}</h1><p>${T(`Wie van het team heeft het hoogste level? XP verdien je met werken: 10 per uur, +5 als je op tijd begint en +5 als je blijft tot het einde. Wie niet inklokt, krijgt ${S.settings.daily_xp || 0} XP per dag. Elk juist antwoord in de quiz van de week geeft ook XP. Tik op iemand om de kaart te zien.`,
-        `团队里谁的等级最高？工作就能得 XP：每小时 10，准时开始 +5，待到结束 +5。不用打卡的人每天得 ${S.settings.daily_xp || 0} XP。每周测验每答对一题也能得 XP。点一个人可以看名片。`)}</p></div>
+      <div><h1>${T('Ranglijst', '排行榜')}</h1><p>${T(`Wie van het team heeft het hoogste level? XP verdien je met werken: 10 per uur, +5 als je op tijd begint en +5 als je blijft tot het einde. Elke week kan je ook een quiz doen voor ${quizMax ? `${quizMax} XP` : 'extra XP'}. Tik op iemand om de kaart te zien.`,
+        `团队里谁的等级最高？工作就能得 XP：每小时 10，准时开始 +5，待到结束 +5。每周还可以做一次测验，${quizMax ? `最多得 ${quizMax} XP` : '多得 XP'}。点一个人可以看名片。`)}</p></div>
       <div class="chips" role="group" aria-label="${T('Periode', '时间')}">
         <button type="button" class="chip${mode === 'all' ? ' is-on' : ''}" data-rank-mode="all" aria-pressed="${mode === 'all'}">${T('Altijd', '全部')}</button>
         <button type="button" class="chip${mode === 'month' ? ' is-on' : ''}" data-rank-mode="month" aria-pressed="${mode === 'month'}">${T('Deze maand', '本月')}</button>
