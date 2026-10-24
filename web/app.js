@@ -392,16 +392,22 @@ function personPic(p, cls = '') {
 }
 const picFor = (id, name, cls = '') => personPic((S.staff || []).find(p => p.id === id) || { name }, cls);
 
-// Level L needs 12.5 * (L - 1) * (L + 2) XP (5225 for level 20), the same formula as the database.
+// Level L needs 12.5 * (L - 1) * (L + 2) XP (5225 for level 20, 8100 for 25), the same formula as the database.
+// Work and bonus go up to 20; 21 to 25 are for the founders (bonus XP), 25 is Grondlegger.
 const LEVEL_TITLES = ['Nieuwkomer', 'Starter', 'Teamspeler', 'Vaste waarde', 'Doorzetter', 'Ster', 'Topper', 'Kampioen', 'Held', 'Legende',
-  'Meester', 'Grootmeester', 'Kanjer', 'Tijger', 'Kraanvogel', 'Feniks', 'Draak', 'Keizer', 'Jade', 'Gouden draak'];
+  'Meester', 'Grootmeester', 'Kanjer', 'Tijger', 'Kraanvogel', 'Feniks', 'Draak', 'Keizer', 'Jade', 'Gouden draak',
+  'Jadedraak', 'Hemelse draak', 'Drakenkoning', 'Onsterfelijke', 'Grondlegger'];
 const xpForLevel = l => 12.5 * (l - 1) * (l + 2);
 const LEVEL_TITLES_ZH = ['新人', '新手', '团队成员', '中坚力量', '坚持者', '明星', '高手', '冠军', '英雄', '传奇',
-  '大师', '宗师', '能手', '猛虎', '仙鹤', '凤凰', '神龙', '皇帝', '翡翠', '金龙'];
+  '大师', '宗师', '能手', '猛虎', '仙鹤', '凤凰', '神龙', '皇帝', '翡翠', '金龙',
+  '玉龙', '天龙', '龙王', '仙人', '创始人'];
 const levelTitle = l => (zhUI() ? LEVEL_TITLES_ZH : LEVEL_TITLES)[Math.min(l, LEVEL_TITLES.length) - 1];
 const levelPill = xp => `<span class="pill lvl">${T('Level', '等级')} ${xp ? xp.level : 1}</span>`;
+const TOP_LEVEL = LEVEL_TITLES.length; // 25: the founders' level
 function xpBar(xp) {
   const l = xp.level, a = xpForLevel(l), b = xpForLevel(l + 1);
+  if (l >= TOP_LEVEL) return `<div class="xpbar" role="progressbar" aria-valuemin="0" aria-valuemax="100" aria-valuenow="100" aria-label="${T('Hoogste level', '最高等级')}"><span style="width:100%"></span></div>
+    <p class="xp-text"><span class="mono">${xp.xp} XP</span><span class="muted">${T('Hoogste level', '最高等级')}</span></p>`;
   const pct = Math.max(0, Math.min(100, Math.round((xp.xp - a) / (b - a) * 100)));
   return `<div class="xpbar" role="progressbar" aria-valuemin="0" aria-valuemax="100" aria-valuenow="${pct}" aria-label="${T(`Op weg naar level ${l + 1}`, `距离 ${l + 1} 级`)}"><span style="width:${pct}%"></span></div>
     <p class="xp-text"><span class="mono">${xp.xp} XP</span><span class="muted">${T(`nog ${b - xp.xp} XP tot level ${l + 1}`, `还差 ${b - xp.xp} XP 升到 ${l + 1} 级`)}</span></p>`;
@@ -667,7 +673,7 @@ function sinceText(iso) {
 async function mateCard(id) {
   let p;
   try { p = await rpc('colleague', { p_id: id }); } catch (e) { if (e.code !== 'auth') toast(e.message, 'error'); return; }
-  const role = { manager: T('Verantwoordelijke', '负责人'), driver: T('Chauffeur', '司机') }[p.role];
+  const role = { manager: T('Verantwoordelijke', '负责人'), driver: T('Chauffeur', '司机'), viewer: T('Familie', '家人') }[p.role];
   const d = modal.open(`
     <div class="mate">
       <div class="mate-pic">${p.avatar ? Avatar.render(p.avatar, { title: p.name }) : `<span class="hero-empty">${Avatar.render(Avatar.DEFAULT)}</span>`}</div>
@@ -3247,7 +3253,7 @@ const SOFT_HYPHENS = ['Paarden|staart', 'Konijnen|sloffen', 'Monster|sloffen', '
 const hyph = label => SOFT_HYPHENS.reduce((t, w) => t.replace(w.replace('|', ''), w.replace('|', '\u00AD')), esc(label));
 const colorName = (k, v) => k === 'skin' ? T(`huidskleur ${v.slice(1)}`, `肤色 ${v.slice(1)}`) : (zhUI() ? COLOR_NAMES_ZH : COLOR_NAMES)[v] || v;
 const avLabel = (k, v) => Avatar.label(k, v, zhUI() ? 'zh' : 'nl');
-const avShown = (k, c) => !((k === 'topColor' && ['chef', 'garden', 'clown'].includes(c.top)) || (k === 'outerColor' && c.outer === 'none') ||
+const avShown = (k, c) => !((k === 'topColor' && ['chef', 'garden', 'clown', 'tang', 'qipao'].includes(c.top)) || (k === 'outerColor' && c.outer === 'none') ||
   (k === 'neckColor' && !['scarf', 'bowtie'].includes(c.neck)) ||
   (k === 'shoeColor' && !['sneakers', 'boots'].includes(c.shoes)) || (k === 'hatColor' && !['beanie', 'cap', 'bandana'].includes(c.hat)));
 
@@ -3551,7 +3557,7 @@ async function viewRanking(el, current) {
       <div class="rows rank-rows">${ranked.map(p => `
         <div class="row rank-row${p.me ? ' mine' : ''}" data-mate="${p.id}" role="button" tabindex="0">
           <div class="person"><span class="rank-num">${p.rank}</span>${personPic(p, 'lg')}
-            <div class="row-main"><span class="row-title">${esc(p.name)}${p.me ? ` <span class="pill accent">${you}</span>` : ''}</span>
+            <div class="row-main"><span class="row-title">${esc(p.name)}${p.me ? ` <span class="pill accent">${you}</span>` : ''}${p.family ? ` <span class="pill">${T('Familie', '家人')}</span>` : ''}</span>
               <span class="row-sub">${levelPill(p)} <span class="rank-fun">“${esc(funTitle(p))}”</span></span></div></div>
           <span class="rank-xp mono">${p[key]} XP</span>
         </div>`).join('')}</div>
@@ -4444,6 +4450,13 @@ function familyMember(el, r) {
             <div class="field wide"><label for="pm-name">Naam</label><input id="pm-name" maxlength="60" value="${esc(p.name)}" required><span class="help">Hiermee meldt die persoon zich aan.</span></div>
             <div class="field"><label for="pm-pin">Nieuwe pincode</label><input id="pm-pin" class="pin-input" inputmode="numeric" pattern="[0-9]*" maxlength="8" placeholder="Leeg laten om te behouden"></div>
             <div class="field"><label for="pm-role">Rol</label><select id="pm-role">${roleOptions(p.role)}</select></div>
+            <div class="field wide"><label class="check"><input type="checkbox" id="pm-rank" ${p.in_ranking ? 'checked' : ''}> Toon in de ranglijst</label>
+              <span class="help">Met avatar, level en titel, en collega's kunnen de kaart openen. Het account zelf blijft alleen het maandoverzicht zien.</span></div>
+            <div class="field"><label for="pm-bonus">Bonus-XP</label><input id="pm-bonus" type="number" min="0" max="100000" step="1" inputmode="numeric" value="${p.xp_bonus || 0}">
+              <span class="help">Level 20 = ${num(xpForLevel(20), 0)} XP, level 25 = ${num(xpForLevel(25), 0)} XP.</span></div>
+            <div class="field"><label for="pm-title">Grappige titel</label><input id="pm-title" list="pm-titles" maxlength="40" autocomplete="off"
+              value="${esc(p.fun_title ? (TITLE_BY[p.fun_title] ? TITLE_BY[p.fun_title][1] : p.fun_title) : '')}" placeholder="${esc(funTitle({ id: p.id }))} (gekozen door de app)">
+              <datalist id="pm-titles">${TITLES.map(t => `<option value="${esc(t[1])}">`).join('')}</datalist></div>
             <div class="field wide"><label class="check"><input type="checkbox" id="pm-active" ${p.active ? 'checked' : ''}> Actief</label></div>
           </div>
           <p class="form-error" id="pm-err"></p>
@@ -4493,11 +4506,19 @@ function familyMember(el, r) {
     const err = $('#pm-err', el); err.textContent = '';
     const pin = $('#pm-pin', pm).value.trim();
     if (pin && !/^\d{4,8}$/.test(pin)) { err.textContent = 'De pincode moet 4 tot 8 cijfers hebben.'; return; }
+    const bonus = Number($('#pm-bonus', pm).value || 0);
+    if (!Number.isInteger(bonus) || bonus < 0 || bonus > 100000) { err.textContent = 'Bonus-XP moet een getal tussen 0 en 100.000 zijn.'; return; }
     await busy($('button[type=submit]', pm), async () => {
       await rpc('mgr_save_staff', {
         p_id: p.id, p_name: $('#pm-name', pm).value, p_pin: pin || null, p_role: $('#pm-role', pm).value,
         p_hourly_rate: null, p_active: $('#pm-active', pm).checked,
       });
+      const rank = $('#pm-rank', pm).checked;
+      if (rank !== !!p.in_ranking) await rpc('mgr_set_in_ranking', { p_id: p.id, p_on: rank });
+      if (bonus !== (p.xp_bonus || 0)) await rpc('mgr_set_xp_bonus', { p_id: p.id, p_bonus: bonus });
+      const typed = $('#pm-title', pm).value.trim(), key = (TITLES.find(t => t[1].toLowerCase() === typed.toLowerCase()) || [])[0];
+      const title = key || typed || null;
+      if (title !== (p.fun_title || null)) await rpc('mgr_set_title', { p_id: p.id, p_title: title });
       toast(pin ? `Opgeslagen. Nieuwe pincode: ${pin}` : 'Opgeslagen.');
       await loadStaff(true);
       renderView();

@@ -81,7 +81,9 @@ create table public.staff (
   -- (picked by the person) or the manager's own words; empty = one the app picks
   fun_title       text check (length(fun_title) <= 40),
   -- the manager hides the schedule from this person for now: no open shifts, only their own
-  shifts_hidden   boolean not null default false
+  shifts_hidden   boolean not null default false,
+  -- a family account shown in the ranking too, with its avatar and level
+  in_ranking      boolean not null default false
 );
 create unique index staff_name_key on public.staff (lower(name));
 
@@ -1733,9 +1735,9 @@ $$;
 create function app_private.clean_avatar(p_avatar jsonb, p_level int, p_current jsonb) returns jsonb
 language plpgsql immutable set search_path = public as $$
 declare k text; val jsonb; v_need int;
-  v_locks constant jsonb := '{"hat": {"cap": 2, "bandana": 5, "chef": 8, "crown": 10, "bucket": 14},
+  v_locks constant jsonb := '{"hat": {"cap": 2, "bandana": 5, "chef": 8, "crown": 10, "bucket": 14, "guapi": 25, "hairpin": 25},
     "shoes": {"bunny": 3, "monster": 7, "dragon": 18, "gold": 19}, "outer": {"puffer": 4, "apron": 13, "leather": 17},
-    "glasses": {"sun": 6, "heart": 16}, "top": {"chef": 8, "garden": 15}, "hairColor": {"pink": 9, "blue": 9, "lilac": 9},
+    "glasses": {"sun": 6, "heart": 16}, "top": {"chef": 8, "garden": 15, "tang": 25, "qipao": 25}, "hairColor": {"pink": 9, "blue": 9, "lilac": 9},
     "neck": {"headphones": 11, "chain": 12}, "aura": {"gold": 20}}';
 begin
   if p_avatar is null or jsonb_typeof(p_avatar) = 'null' then
@@ -1842,7 +1844,7 @@ begin
       'officient_connected', (select o.refresh_token is not null from app_private.officient o where o.id = 1),
       'mato_name', app_private.mato_name(s), 'mato_name_own', s.mato_name,
       'lang', s.lang, 'can_clock', not s.view_only and app_private.can_clock(s), 'fun_title', s.fun_title,
-      'shifts_hidden', s.shifts_hidden),
+      'shifts_hidden', s.shifts_hidden, 'in_ranking', s.in_ranking),
     'profile', app_private.profile_json(s),
     'xp', app_private.xp_json(s.id),
     'contracts', app_private.contracts_json(s.id),
@@ -1956,6 +1958,19 @@ begin
   return json_build_object('ok', true);
 end $$;
 
+-- Show a family account in the ranking (or not).
+create function public.mgr_set_in_ranking(p_token text, p_id uuid, p_on boolean) returns json
+language plpgsql security definer set search_path = public, extensions as $$
+declare v public.staff;
+begin
+  v := app_private.current_manager(p_token);
+  update public.staff set in_ranking = coalesce(p_on, false) where id = p_id;
+  if not found then
+    raise exception using message = 'That person wasn''t found.', errcode = 'P0001';
+  end if;
+  return json_build_object('ok', true);
+end $$;
+
 -- The app's language for yourself, or (a manager) for someone.
 create function public.save_my_language(p_token text, p_lang text) returns json
 language plpgsql security definer set search_path = public, extensions as $$
@@ -2012,13 +2027,13 @@ begin
   select coalesce(timezone, 'UTC') into v_tz from public.settings where id = 1;
   v_from := date_trunc('month', now() at time zone v_tz) at time zone v_tz;
   return coalesce((select json_agg(json_build_object(
-      'id', st.id, 'name', st.name, 'avatar', st.avatar, 'me', st.id = v.id, 'title', st.fun_title,
+      'id', st.id, 'name', st.name, 'avatar', st.avatar, 'me', st.id = v.id, 'title', st.fun_title, 'family', st.view_only,
       'xp', (j.x ->> 'xp')::int, 'level', (j.x ->> 'level')::int,
       'month_xp', app_private.xp_since(st.id, v_from))
       order by lower(st.name))
     from public.staff st
     cross join lateral (select app_private.xp_json(st.id) as x) j
-   where st.active and not st.view_only and not st.driver), '[]'::json);
+   where st.active and not st.driver and (not st.view_only or st.in_ranking)), '[]'::json);
 end $$;
 
 -- The funny titles staff pick from, and the level each needs. Keep in sync
@@ -2040,7 +2055,7 @@ language plpgsql stable security definer set search_path = public, extensions as
 declare v public.staff; s public.staff; x json;
 begin
   v := app_private.current_staff(p_token);
-  select * into s from public.staff where id = p_id and active and not view_only;
+  select * into s from public.staff where id = p_id and active and (not view_only or in_ranking);
   if not found then
     raise exception using message = 'That person wasn''t found.', errcode = 'P0001';
   end if;

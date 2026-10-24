@@ -41,13 +41,14 @@ const Avatar = (() => {
     mouth: [['smile', 'Glimlach'], ['grin', 'Lach'], ['neutral', 'Neutraal'], ['pout', 'Pruillip'], ['smirk', 'Grijns']],
     beard: [['none', 'Geen'], ['stubble', 'Stoppels'], ['mustache', 'Snor'], ['beard', 'Baard']],
     top: [['tee', 'T-shirt'], ['vneck', 'V-hals'], ['tank', 'Topje'], ['longsleeve', 'Lange mouw'], ['shirt', 'Hemd'], ['sweater', 'Trui'],
-      ['hoodie', 'Hoodie'], ['chef', 'Koksvest'], ['garden', "Chen's Garden-shirt"], ['clown', 'Clownspak']],
+      ['hoodie', 'Hoodie'], ['chef', 'Koksvest'], ['garden', "Chen's Garden-shirt"], ['clown', 'Clownspak'],
+      ['tang', 'Tangpak'], ['qipao', 'Qipao']],
     outer: [['none', 'Geen'], ['jacket', 'Jasje'], ['cardigan', 'Vest'], ['puffer', 'Bodywarmer'], ['apron', 'Schort'], ['leather', 'Leren jas']],
     bottom: [['baggy', 'Wijde jeans'], ['straight', 'Rechte jeans'], ['joggers', 'Joggingbroek'], ['skirt', 'Rok'], ['shorts', 'Short']],
     shoes: [['sneakers', 'Sneakers'], ['boots', 'Laarsjes'], ['bunny', 'Konijnensloffen'], ['monster', 'Monstersloffen'],
       ['dragon', 'Drakensloffen'], ['gold', 'Gouden sneakers']],
     hat: [['none', 'Geen'], ['beanie', 'Muts'], ['headband', 'Haarband'], ['hijab', 'Hoofddoek'], ['cap', 'Pet'], ['bandana', 'Bandana'], ['chef', 'Koksmuts'],
-      ['crown', 'Kroon'], ['bucket', 'Vissershoedje'], ['clown', 'Clownshoedje']],
+      ['crown', 'Kroon'], ['bucket', 'Vissershoedje'], ['clown', 'Clownshoedje'], ['guapi', 'Mandarijnenpetje'], ['hairpin', 'Haarspeld met bloem']],
     glasses: [['none', 'Geen'], ['round', 'Rond'], ['square', 'Vierkant'], ['sun', 'Zonnebril'], ['heart', 'Hartjesbril']],
     neck: [['none', 'Geen'], ['scarf', 'Sjaal'], ['bowtie', 'Strikje'], ['headphones', 'Koptelefoon'], ['chain', 'Gouden ketting']],
     aura: [['none', 'Geen'], ['gold', 'Gouden gloed']],
@@ -67,11 +68,11 @@ const Avatar = (() => {
     mouth: { smile: '微笑', grin: '大笑', neutral: '平静', pout: '嘟嘴', smirk: '坏笑' },
     beard: { none: '无', stubble: '胡茬', mustache: '小胡子', beard: '络腮胡' },
     top: { tee: 'T恤', vneck: 'V领', tank: '背心', longsleeve: '长袖', shirt: '衬衫', sweater: '毛衣', hoodie: '连帽衫', chef: '厨师服',
-      garden: "Chen's Garden 衫", clown: '小丑服' },
+      garden: "Chen's Garden 衫", clown: '小丑服', tang: '唐装', qipao: '旗袍' },
     outer: { none: '无', jacket: '夹克', cardigan: '开衫', puffer: '羽绒背心', apron: '围裙', leather: '皮夹克' },
     bottom: { baggy: '阔腿牛仔裤', straight: '直筒牛仔裤', joggers: '运动裤', skirt: '裙子', shorts: '短裤' },
     shoes: { sneakers: '运动鞋', boots: '短靴', bunny: '兔子拖鞋', monster: '怪兽拖鞋', dragon: '龙拖鞋', gold: '金色运动鞋' },
-    hat: { none: '无', beanie: '毛线帽', headband: '发带', hijab: '头巾', cap: '棒球帽', bandana: '方巾', chef: '厨师帽', crown: '皇冠', bucket: '渔夫帽', clown: '小丑帽' },
+    hat: { none: '无', beanie: '毛线帽', headband: '发带', hijab: '头巾', cap: '棒球帽', bandana: '方巾', chef: '厨师帽', crown: '皇冠', bucket: '渔夫帽', clown: '小丑帽', guapi: '瓜皮帽', hairpin: '花簪' },
     glasses: { none: '无', round: '圆框', square: '方框', sun: '墨镜', heart: '爱心眼镜' },
     neck: { none: '无', scarf: '围巾', bowtie: '领结', headphones: '耳机', chain: '金项链' },
     aura: { none: '无', gold: '金光' },
@@ -90,8 +91,8 @@ const Avatar = (() => {
   };
   // Items that unlock at a level. Same list as the database.
   const UNLOCKS = {
-    hat: { cap: 2, bandana: 5, chef: 8, crown: 10, bucket: 14 }, shoes: { bunny: 3, monster: 7, dragon: 18, gold: 19 },
-    outer: { puffer: 4, apron: 13, leather: 17 }, glasses: { sun: 6, heart: 16 }, top: { chef: 8, garden: 15 },
+    hat: { cap: 2, bandana: 5, chef: 8, crown: 10, bucket: 14, guapi: 25, hairpin: 25 }, shoes: { bunny: 3, monster: 7, dragon: 18, gold: 19 },
+    outer: { puffer: 4, apron: 13, leather: 17 }, glasses: { sun: 6, heart: 16 }, top: { chef: 8, garden: 15, tang: 25, qipao: 25 },
     hairColor: { pink: 9, blue: 9, lilac: 9 }, neck: { headphones: 11, chain: 12 }, aura: { gold: 20 },
   };
   const DEFAULT = {
@@ -140,7 +141,7 @@ const Avatar = (() => {
     if (Math.random() < 0.6) c.piercing = 'none';
     if (Math.random() < 0.7) c.neck = 'none';
     c.aura = 'none';
-    if (c.top === 'chef' || c.top === 'clown') c.top = 'tee';
+    if (['chef', 'clown', 'tang', 'qipao'].includes(c.top)) c.top = 'tee';
     if (c.hat === 'clown') c.hat = 'none';
     if (c.piercing === 'clownnose') c.piercing = 'none';
     c.freckles = Math.random() < 0.3; c.blush = Math.random() < 0.6;
@@ -297,7 +298,7 @@ const Avatar = (() => {
     const capPart = 'M 54 104 C 50 56 74 31 100 32 C 126 31 150 56 146 104 C 144 86 136 70 118 60 C 110 56 104 54 100 49 C 96 54 90 56 82 60 C 64 70 56 86 54 104 Z';
     const capSlick = 'M 56 98 C 52 58 76 35 100 35 C 124 35 148 58 144 98 C 140 78 128 63 100 59 C 72 63 60 78 56 98 Z';
     const capLines = strand('M 99 50 C 88 56 72 66 62 88') + strand(mirror('M 99 50 C 88 56 72 66 62 88'));
-    const covered = ['beanie', 'bucket', 'chef'].includes(c.hat); // these hats hide a bun
+    const covered = ['beanie', 'bucket', 'chef', 'guapi'].includes(c.hat); // these hats hide a bun
     if (c.hat === 'hijab') return { back: '', front: '' }; // the headscarf covers all hair
     const side = 'M 56 94 L 62 94 L 61 110 L 57 110 Z'; // short sideburn
     const sideburns = shape(side, hc) + shape(mirror(side), hc);
@@ -592,6 +593,45 @@ const Avatar = (() => {
       fold + hem;
   }
 
+  // The founders' outfits in Chen's Garden colours: maroon, gold and the knot
+  // from the logo. A Tang jacket (mandarin collar, frog buttons) and a qipao.
+  const CG_RED = '#7A1620', CG_GOLD = '#E2B23C', CG_CREAM = '#F3ECDE';
+  const COLLAR = 'M 86.5 157 Q 100 162 113.5 157 L 114 168 Q 100 173.5 86 168 Z';
+  // a frog button: a knotted loop across the opening
+  const frog = (x, y, w = 7) => line(`M ${x - w} ${y} L ${x + w} ${y}`, CG_GOLD, 2.2) + circ(x - w, y, 2, CG_GOLD) + circ(x + w, y, 2, CG_GOLD) + circ(x, y, 2.6, CG_GOLD, 'stroke="#9C7413" stroke-width=".8"');
+  function tangSuit(fold) {
+    const body = 'M 60 180 Q 62 168 84 164 Q 100 170 116 164 Q 138 168 140 180 L 143 284 Q 100 290 57 284 Z';
+    return both(SLEEVE_LONG).map(d => shape(d, CG_RED)).join('') +
+      line('M 41 266 L 67 267', CG_GOLD, 2, 0.95) + line(mirror('M 41 266 L 67 267'), CG_GOLD, 2, 0.95) +
+      shape(body, CG_RED) +
+      // a faint damask of round medallions
+      [[76, 214], [124, 236], [78, 258], [122, 204]].map(([x, y]) => circ(x, y, 7, 'none', `stroke="${CG_GOLD}" stroke-width="1" opacity=".28"`) + circ(x, y, 3, 'none', `stroke="${CG_GOLD}" stroke-width=".8" opacity=".28"`)).join('') +
+      line('M 100 168 L 100 286', CG_GOLD, 1.6, 0.9) + line('M 58 280 Q 100 286 142 280', CG_GOLD, 2, 0.9) +
+      [184, 204, 224, 244, 264].map(y => frog(100, y)).join('') +
+      knot(122, 196, 1.15, CG_GOLD) +
+      shape(COLLAR, CG_RED) + line('M 86.5 157 Q 100 162 113.5 157', CG_GOLD, 1.6) + line('M 86 168 Q 100 173.5 114 168', CG_GOLD, 1.4, 0.8) +
+      fold;
+  }
+  function qipao(c, fold) {
+    const skin = SKIN[c.skin];
+    const dress = 'M 60 180 Q 62 168 84 164 Q 100 170 116 164 Q 138 168 140 180 L 139 248 Q 136 262 141 282 Q 146 312 142 338 Q 100 345 58 338 Q 54 312 59 282 Q 64 262 61 248 Z';
+    return shape(dress, CG_RED) +
+      // the slit on one side shows the leg
+      path('M 133 338.6 L 137.5 306 L 141.5 338 Z', skin) + line('M 133 339 L 137.5 306 L 142 338', CG_GOLD, 1.2, 0.9) +
+      // gold peony dots and the knot
+      [[118, 228, 4], [128, 252, 3], [84, 268, 3.5], [74, 296, 4], [112, 304, 3], [92, 322, 3.5], [124, 322, 2.5]].map(([x, y, r]) =>
+        circ(x, y, r, 'none', `stroke="${CG_GOLD}" stroke-width="1.1" opacity=".55"`) + circ(x, y, r * 0.35, CG_GOLD, 'opacity=".55"')).join('') +
+      knot(122, 200, 1.0, CG_GOLD) +
+      line('M 59 336 Q 100 343 142 336', CG_GOLD, 2, 0.95) +
+      // the opening from the collar to the side, with frog buttons
+      line('M 100 168 Q 86 172 77 181 Q 70 189 67 200', CG_GOLD, 1.8, 0.95) + frog(90, 172, 5) + frog(74, 186, 5) +
+      // cap sleeves
+      both('M 61 171 C 53 175 49 186 48 198 L 66 202 C 67 192 67 182 64 175 Z').map(d => shape(d, CG_RED)).join('') +
+      line('M 48 197 L 66 201', CG_GOLD, 1.6) + line(mirror('M 48 197 L 66 201'), CG_GOLD, 1.6) +
+      shape(COLLAR, CG_RED) + line('M 86.5 157 Q 100 162 113.5 157', CG_GOLD, 1.6) + line('M 86 168 Q 100 173.5 114 168', CG_GOLD, 1.4, 0.8) +
+      fold;
+  }
+
   function top(c) {
     const col = c.top === 'chef' ? CLOTH.white : c.top === 'garden' ? '#7A1620' : CLOTH[c.topColor], cd = dark(col, 0.12), cl = light(col, 0.12);
     const fold = path('M 118 172 Q 136 176 139 190 L 143 272 Q 130 275 122 275 Q 126 220 118 172 Z', '#000', 'opacity=".05"');
@@ -636,6 +676,10 @@ const Avatar = (() => {
           [190, 212, 234, 256].map(y => circ(90, y, 2.2, '#D0D0D0', OL) + circ(118, y, 2.2, '#D0D0D0', OL)).join('') + fold + hem;
       case 'clown':
         return clownSuit(fold, line('M 58 266 Q 100 272 142 266', '#7A2A10', 1.2, 0.35));
+      case 'tang':
+        return tangSuit(fold);
+      case 'qipao':
+        return qipao(c, fold);
       default:
         return sleeves('short') + shape(BODY_CREW, col) + line('M 84 165.5 Q 100 174 116 165.5', cd, 2, 0.7) + fold + hem;
     }
@@ -864,6 +908,21 @@ const Avatar = (() => {
         return shape('M 62 66 C 62 36 80 24 100 24 C 120 24 138 36 138 66 Z', col) + path('M 62 58 Q 100 52 138 58 L 138 66 L 62 66 Z', cd) +
           shape('M 42 74 Q 100 56 158 74 L 153 86 Q 100 70 47 86 Z', col) + line('M 48 79 Q 100 63 152 79', cd, 1, 0.6) +
           line('M 80 30 Q 76 44 76 58', cd, 1, 0.4) + line('M 120 30 Q 124 44 124 58', cd, 1, 0.4);
+      case 'guapi':
+        // a mandarin's skullcap in six panels, with a red knot on top
+        return shape('M 60 66 C 60 36 78 23 100 23 C 122 23 140 36 140 66 Q 100 56 60 66 Z', '#211A1C') +
+          ['M 100 24 Q 86 40 80 61', 'M 100 24 Q 92 42 92 58', 'M 100 24 Q 108 42 108 58', 'M 100 24 Q 114 40 120 61'].map(d => line(d, '#4A3C40', 1.1, 0.8)).join('') +
+          shape('M 59 64 Q 100 54 141 64 L 141 71 Q 100 61 59 71 Z', CG_RED) + line('M 60 67.5 Q 100 57.5 140 67.5', CG_GOLD, 1.2, 0.9) +
+          circ(100, 21, 5.5, '#C8102E', OL) + circ(98.4, 19.4, 1.5, '#FFFFFF', 'opacity=".5"');
+      case 'hairpin': {
+        // a gold hairpin with a red peony and a knotted tassel
+        const petals = [0, 72, 144, 216, 288].map(a => {
+          const r = a * Math.PI / 180;
+          return circ((128 + Math.cos(r) * 6.5).toFixed(2), (46 + Math.sin(r) * 6.5).toFixed(2), 5.2, '#C8102E', 'stroke="#8E0B20" stroke-width=".8"');
+        }).join('');
+        return line('M 112 38 L 150 58', CG_GOLD, 2.6) + circ(112, 38, 2.6, CG_GOLD) + petals + circ(128, 46, 3.6, CG_GOLD) +
+          line('M 146 56 L 146 66', CG_GOLD, 1.2) + knot(146, 71, 0.55, CG_GOLD);
+      }
       case 'clown': {
         // a striped party cone with a pompom, a bit askew
         const at = t => [[78 + 26 * t, 60 - 38 * t], [124 - 20 * t, 58 - 36 * t]];
@@ -922,7 +981,7 @@ const Avatar = (() => {
     return [
       aura(c), h.back,
       wide(b.arms + b.neck + b.torso),
-      b.legs, slippers ? '' : shoes(c), bottom(c), slippers ? shoes(c) : '',
+      b.legs, slippers ? '' : shoes(c), c.top === 'qipao' ? '' : bottom(c), slippers ? shoes(c) : '',
       wide(top(c) + outer(c) + neck(c) + b.hands),
       b.ears, b.face, facialHair(c), cheeks(c), eyes(c), brows(c), nose(c), mouth(c),
       h.front, earrings(c), piercing(c), glasses(c), hat(c),
