@@ -34,7 +34,10 @@ create table public.settings (
   clock_types       text[] not null default '{student}' check (clock_types <@ array['student', 'flexi', 'extra', 'vast']),
   -- who does not clock in earns daily_xp a day, from daily_xp_from on
   daily_xp          int not null default 50 check (daily_xp between 0 and 500),
-  daily_xp_from     date not null default current_date
+  daily_xp_from     date not null default current_date,
+  -- who staff contact to cancel a shift too close to its start (the day itself)
+  contact_name      text check (length(contact_name) <= 60),
+  contact_phone     text check (length(contact_phone) <= 30)
 );
 insert into public.settings (id) values (1);
 
@@ -651,6 +654,27 @@ begin
   end if;
   insert into public.shift_releases (shift_id, staff_id, reason) values (s.id, v.id, v_reason);
   update public.shifts set staff_id = null where id = p_shift_id;
+  return json_build_object('ok', true);
+end $$;
+
+-- Who to contact to cancel a shift that can't be given back in the app any
+-- more (it starts today, or within the drop cutoff).
+create function public.shift_contact(p_token text) returns json
+language plpgsql stable security definer set search_path = public, extensions as $$
+begin
+  perform app_private.current_staff(p_token);
+  return (select json_build_object('name', contact_name, 'phone', contact_phone) from public.settings where id = 1);
+end $$;
+
+create function public.mgr_save_contact(p_token text, p_name text, p_phone text) returns json
+language plpgsql security definer set search_path = public, extensions as $$
+declare v public.staff; v_phone text := nullif(app_private.clean_text(p_phone, 30), '');
+begin
+  v := app_private.current_manager(p_token);
+  if v_phone is not null and v_phone !~ '^\+?[0-9][0-9 ./()-]{5,28}$' then
+    raise exception using message = 'Check the phone number.', errcode = 'P0001';
+  end if;
+  update public.settings set contact_name = nullif(app_private.clean_text(p_name, 60), ''), contact_phone = v_phone where id = 1;
   return json_build_object('ok', true);
 end $$;
 

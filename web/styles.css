@@ -799,6 +799,13 @@ dialog.sheet { width: min(480px, 100vw); }
 .title-pick.is-on { background: var(--accent); border-color: var(--accent); color: var(--accent-ink); }
 .title-pick .av-lock { position: static; transform: none; }
 
+/* too late to give a shift back: who to call */
+.contact-card { margin-top: 12px; padding: 14px; border: 1px solid var(--line); border-radius: var(--r); background: var(--sunk); }
+.contact-card p { margin: 0 0 8px; color: var(--ink-2); }
+.contact-phone { display: flex; align-items: center; gap: 8px; font-size: 1.25rem; font-weight: 600; color: var(--ink) !important; }
+.contact-card .toolbar { display: flex; gap: 8px; flex-wrap: wrap; margin-top: 4px; }
+a.btn.primary { background: var(--accent); border-color: var(--accent); color: var(--accent-ink); }
+
 /* the reminder of open shifts */
 .remind-head { display: flex; gap: 12px; align-items: center; margin-bottom: 6px; }
 .remind-head h2 { margin-bottom: 2px; }

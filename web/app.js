@@ -159,6 +159,7 @@ const SERVER_NL = {
   'The XP a day must be between 0 and 500.': 'De XP per dag moet tussen 0 en 500 liggen.',
   'Pick a title from the list.': 'Kies een titel uit de lijst.',
   'Picking shifts is off for you for now. Ask your manager.': 'Shiften opnemen staat voorlopig uit voor jou. Vraag het aan je verantwoordelijke.',
+  'Check the phone number.': 'Controleer het telefoonnummer.',
 };
 // What staff can run into, for who uses the app in Chinese.
 const SERVER_ZH = {
@@ -1983,11 +1984,31 @@ async function claimShift(s) {
   }).catch(() => {});
 }
 
+// Belgian numbers: "0486159209" reads "0486 15 92 09" and calls +32486159209.
+const phoneDigits = p => String(p || '').replace(/[^\d+]/g, '').replace(/^00/, '+').replace(/^0(\d{8,9})$/, '+32$1');
+const fmtPhone = p => { const d = String(p || '').replace(/\D/g, ''); return /^04\d{8}$/.test(d) ? d.replace(/^(\d{4})(\d{2})(\d{2})(\d{2})$/, '$1 $2 $3 $4') : p; };
+const PHONE_ICON = '<svg viewBox="0 0 24 24" width="18" height="18" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round" aria-hidden="true"><path d="M5 4h4l2 5-2.5 1.5a11 11 0 0 0 5 5L15 13l5 2v4a2 2 0 0 1-2 2A16 16 0 0 1 3 6a2 2 0 0 1 2-2"/></svg>';
+
 const DROP_REASONS = [['Ziek', '生病'], ['School of examen', '上学或考试'], ['Familie', '家里有事'], ['Andere afspraak', '其他安排']];
 
-function ownShift(s) {
+async function ownShift(s) {
   const cut = S.settings.drop_cutoff_hours;
   const canDrop = new Date(s.starts_at) - now() > cut * 3600000;
+  // too late to give it back here: who to call (Team → Instellingen)
+  const contact = canDrop ? null : await rpc('shift_contact').catch(() => ({}));
+  const who = contact && contact.name ? esc(contact.name) : T('je verantwoordelijke', '负责人');
+  const tooLate = !contact ? '' : `
+      <p class="hint info">${sameDay(s.starts_at, now()) ? T('Deze shift is vandaag.', '这个班次就在今天。') : T(`Deze shift begint binnen ${cut} uur.`, `这个班次 ${cut} 小时内就开始了。`)}
+        ${T('Annuleren kan dan niet meer in de app.', '已经不能在 app 里取消了。')}</p>
+      ${contact.phone ? `<div class="contact-card">
+        <p>${T(`Wil je hem annuleren? Neem contact op met <strong>${who}</strong> voor je aanvraag:`, `想取消？请联系 <strong>${who}</strong> 申请：`)}</p>
+        <p class="contact-phone">${PHONE_ICON}<span class="mono">${esc(fmtPhone(contact.phone))}</span></p>
+        <div class="toolbar">
+          <a class="btn primary" href="tel:${esc(phoneDigits(contact.phone))}">${PHONE_ICON}<span>${T(`Bel ${who}`, `打给${who}`)}</span></a>
+          <a class="btn" href="https://wa.me/${esc(phoneDigits(contact.phone).replace('+', ''))}" target="_blank" rel="noopener">WhatsApp</a>
+        </div>
+      </div>` : `<p>${T(`Vraag het aan ${who}.`, `请问${who}。`)}</p>`}
+      <div class="form-actions"><button type="button" data-close>${T('Sluiten', '关闭')}</button></div>`;
   modal.open(`
     <h2 id="modal-title">${T('Jouw shift', '你的班次')}</h2>
     <p>${shiftWhen(s)}</p>
@@ -2002,8 +2023,7 @@ function ownShift(s) {
           <button type="submit" class="danger solid" id="drop-it">${T('Shift teruggeven', '退回班次')}</button>
         </div>
       </form>`
-      : `<p class="hint info">${T(`Hij begint binnen ${cut} uur, dus je kan hem hier niet meer teruggeven. Vraag het aan je verantwoordelijke.`, `这个班次 ${cut} 小时内就开始了，这里已经不能退回。请问负责人。`)}</p>
-      <div class="form-actions"><button type="button" data-close>${T('Sluiten', '关闭')}</button></div>`}`, d => {
+      : tooLate}`, d => {
     const f = $('#drop-form', d);
     if (!f) return;
     const box = $('#drop-reason', d), err = $('#drop-err', d), b = $('#drop-it', d);
@@ -4295,7 +4315,7 @@ const payOptions = sel => `<option value="">Niet ingevuld</option>${Object.entri
   .map(([k, [l]]) => `<option value="${k}" ${k === sel ? 'selected' : ''}>${l}</option>`).join('')}`;
 
 async function viewTeam(el, current) {
-  const [staff, off] = await Promise.all([loadStaff(true), rpc('mgr_officient_status')]);
+  const [staff, off, contact] = await Promise.all([loadStaff(true), rpc('mgr_officient_status'), rpc('shift_contact')]);
   if (!current()) return;
   const link = location.origin + location.pathname;
   const st = S.settings;
@@ -4356,6 +4376,9 @@ async function viewTeam(el, current) {
             <div class="days" role="group" aria-labelledby="st-who-label">${Object.entries(CONTRACT_SHORT).map(([k, l]) => `<label><input type="checkbox" data-clock-type="${k}" ${(st.clock_types || []).includes(k) ? 'checked' : ''}><span>${l}</span></label>`).join('')}</div>
             <span class="help">Wie aangevinkt is, ziet de klok. De anderen niet: zij krijgen elke dag XP. Verantwoordelijken, chauffeurs en wie nog geen statuut heeft, klokken altijd in.</span></div>
           <div class="field"><label for="st-dxp">XP per dag voor wie niet inklokt</label><input id="st-dxp" type="number" inputmode="numeric" min="0" max="500" step="5" value="${st.daily_xp ?? 50}"></div>
+          <div class="field"><label for="st-cname">Annuleren op de dag zelf: contactpersoon</label><input id="st-cname" maxlength="60" value="${esc(contact.name || '')}" placeholder="bv. Xin Chen"></div>
+          <div class="field"><label for="st-cphone">Telefoon van de contactpersoon</label><input id="st-cphone" type="tel" maxlength="30" value="${esc(contact.phone || '')}" placeholder="bv. 0486 15 92 09">
+            <span class="help">Wie een shift wil annuleren die vandaag (of binnen de termijn) begint, ziet deze naam met een knop om te bellen of te WhatsAppen.</span></div>
           <div class="field"><label for="st-early">Inklokken kan vanaf</label><select id="st-early">${[0, 5, 10, 15, 30, 60].map(m => `<option value="${m}" ${m === st.clock_in_early_minutes ? 'selected' : ''}>${m ? `${m} minuten voor de shift` : 'het begin van de shift'}</option>`).join('')}${[0, 5, 10, 15, 30, 60].includes(st.clock_in_early_minutes) ? '' : `<option value="${st.clock_in_early_minutes}" selected>${st.clock_in_early_minutes} minuten voor de shift</option>`}</select></div>
           <div class="field wide"><label>Tijdzone</label>
             <div class="copybox"><code>${esc(st.timezone || 'Niet ingesteld')}</code>${deviceTz && deviceTz !== st.timezone ? `<button type="button" class="sm" id="st-tz">${esc(deviceTz)} gebruiken</button>` : ''}</div>
@@ -4422,6 +4445,7 @@ async function viewTeam(el, current) {
       await rpc('mgr_save_clock_rules', { p_require_shift: $('#st-req', sf).checked, p_early_minutes: Number($('#st-early', sf).value) });
       await rpc('mgr_save_clock_who', { p_types: $$('[data-clock-type]', sf).filter(b => b.checked).map(b => b.dataset.clockType),
         p_daily_xp: Number($('#st-dxp', sf).value) });
+      await rpc('mgr_save_contact', { p_name: $('#st-cname', sf).value, p_phone: $('#st-cphone', sf).value });
       await refreshMe();
       toast('Instellingen opgeslagen.');
       renderShell();
