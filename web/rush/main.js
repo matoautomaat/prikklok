@@ -140,7 +140,55 @@ const FORTUNES = [
   ['Wie op tijd springt, valt nooit in de soep.', '跳得及时，就不会掉进汤里。', 'Aki időben ugrik, sosem esik a levesbe.'],
   ['Er wacht een gouden draak op jou.', '一条金龙在等你。', 'Egy aranysárkány vár rád.'],
   ['Vandaag komt er een gast met een grote fooi.', '今天会来一位给大笔小费的客人。', 'Ma jön egy vendég nagy borravalóval.'],
+  ['De wok is heter dan je denkt. Jij ook.', '炒锅比你想的还热。你也是。', 'A wok forróbb, mint gondolnád. Te is.'],
+  ['Wie de laatste loempia pakt, doet de afwas.', '拿走最后一个春卷的人去洗碗。', 'Aki elveszi az utolsó tavaszi tekercset, az mosogat.'],
+  ['Vandaag breek je geen enkel bord. Waarschijnlijk.', '今天你一个盘子都不会打碎。大概吧。', 'Ma egyetlen tányért sem törsz el. Valószínűleg.'],
+  ['Je benen zijn sneller dan de chef. Zijn pollepel niet.', '你的腿比大厨快，他的汤勺可不一定。', 'A lábad gyorsabb a séfnél. A merőkanala nem.'],
+  ['Een goede ober rent nooit. Behalve nu.', '好服务员从不跑。除了现在。', 'Egy jó pincér sosem fut. Kivéve most.'],
+  ['Pas op voor natte vloeren en droge grappen.', '小心湿地板和冷笑话。', 'Vigyázz a vizes padlóra és a száraz poénokra.'],
+  ['Achter elke goede chef staat een snelle ober.', '每个好厨师背后都有一个跑得快的服务员。', 'Minden jó séf mögött ott áll egy gyors pincér.'],
+  ['Dumplings die je onderweg opeet, tellen niet.', '路上偷吃的饺子不算数。', 'Az útközben megevett gombóc nem számít.'],
+  ['Draag je dienblad zoals een kroon.', '像戴皇冠一样端好托盘。', 'Úgy hordd a tálcát, mint egy koronát.'],
+  ['Lachen is gratis. De loempia\'s niet.', '笑是免费的，春卷可不是。', 'A nevetés ingyen van. A tavaszi tekercs nem.'],
+  ['Jij hebt de mooiste glimlach van de zaal. Gebruik hem.', '你有全场最灿烂的笑容，用上它。', 'Neked van a legszebb mosolyod a teremben. Használd.'],
+  ['Teamwork: jij rent, de chef roept.', '团队合作：你跑，大厨喊。', 'Csapatmunka: te futsz, a séf kiabál.'],
+  ['De sojasaus is op. Niet jouw schuld. Toch maar rennen.', '酱油用完了。不怪你。不过还是快跑吧。', 'Elfogyott a szójaszósz. Nem a te hibád. Azért fuss.'],
+  ['Tafel 12 wil weten waar hun nasi blijft. Ren!', '12号桌问炒饭什么时候上。快跑！', 'A 12-es asztal kérdezi, hol a sült rizs. Fuss!'],
+  ['Wie te laat komt, krijgt de korst van de rijstpot.', '迟到的人只能吃锅巴。', 'Aki késik, az kapja a rizses fazék alját.'],
+  ['Elke munt is een fooi. Elke fooi is een glimlach.', '每枚金币都是小费，每份小费都是一个微笑。', 'Minden érme egy borravaló. Minden borravaló egy mosoly.'],
+  ['Wees zoals bamboe: buig, maar breek niet. En spring.', '像竹子一样：能弯不能折。还要会跳。', 'Légy olyan, mint a bambusz: hajolj, de ne törj. És ugorj.'],
+  ['De chef is niet boos. Hij heeft gewoon honger.', '大厨没生气，他只是饿了。', 'A séf nem mérges. Csak éhes.'],
+  ['Een dumpling per dag houdt de chef op afstand.', '一天一个饺子，大厨远离你。', 'Napi egy gombóc távol tartja a séfet.'],
+  ['Vandaag is een goede dag voor dubbele fooi.', '今天适合拿双倍小费。', 'Ma jó nap van a dupla borravalóhoz.'],
+  ['Het geluk zit in de kleine dingen. En in grote porties.', '幸福藏在小事里。也藏在大份里。', 'A boldogság az apró dolgokban rejlik. És a nagy adagokban.'],
+  ['Je loopt zo snel dat je schaduw een pauze neemt.', '你跑得太快，影子都要歇一会儿。', 'Olyan gyorsan futsz, hogy az árnyékod szünetet tart.'],
 ];
+// Remarks about the team, from the server (rush_state → cheer): birthdays,
+// who leads, who is new, and playful lines with a colleague's first name.
+const CHEER = {
+  myBirthday: ['🎂 Gelukkige verjaardag! De chef rent vandaag extra traag.', '🎂 生日快乐！大厨今天跑得特别慢。', '🎂 Boldog születésnapot! A séf ma különösen lassan fut.'],
+  birthdayToday: ['🎂 {n} is vandaag jarig! Vergeet niet te feliciteren.', '🎂 今天是{n}的生日！别忘了祝贺。', '🎂 Ma van {n} születésnapja! Ne felejts el gratulálni.'],
+  birthdayTomorrow: ['🎂 Morgen is {n} jarig. Wie zorgt voor de taart?', '🎂 明天是{n}的生日。谁去订蛋糕？', '🎂 Holnap van {n} születésnapja. Ki hozza a tortát?'],
+  birthdaySoon: ['🎂 {n} is over {d} dagen jarig. Al een cadeautje?', '🎂 再过{d}天就是{n}的生日了。礼物准备好了吗？', '🎂 {d} nap múlva {n} születésnapja. Megvan már az ajándék?'],
+  newcomer: ['🎉 Welkom in het team, {n}!', '🎉 欢迎{n}加入团队！', '🎉 Üdv a csapatban, {n}!'],
+  leader: ['🏆 {n} staat bovenaan de ranglijst. Voorlopig.', '🏆 {n}目前排行榜第一。暂时的。', '🏆 {n} vezeti a ranglistát. Egyelőre.'],
+  record: ['🏃 {n} heeft het record in deze game: {s}. Haal je het?', '🏃 {n}保持着这个游戏的纪录：{s}。你能超过吗？', '🏃 {n} tartja a játék rekordját: {s}. Megdöntöd?'],
+  myRecord: ['🏃 Jij hebt het record van het team. Iedereen zit achter je aan, zelfs de chef.', '🏃 全队纪录在你手里。大家都在追你，连大厨也是。', '🏃 Tiéd a csapat rekordja. Mindenki üldöz, még a séf is.'],
+  team: [
+    ['{n} heeft de laatste dumpling opgegeten. Er is een getuige.', '{n}吃掉了最后一个饺子。有目击者。', '{n} ette meg az utolsó gombócot. Van tanú.'],
+    ['{n} zegt dat jij vandaag de snelste bent.', '{n}说你今天是最快的。', '{n} szerint ma te vagy a leggyorsabb.'],
+    ['{n} doet de groeten. En vraagt of jij de afwas wil doen.', '{n}向你问好，还问你愿不愿意洗碗。', '{n} üdvözöl. És kérdezi, elmosogatnál-e.'],
+    ['{n} rekent op jou vandaag!', '{n}今天就靠你了！', '{n} ma rád számít!'],
+    ['Het geheim van {n}: nooit rennen met soep.', '{n}的秘诀：端汤的时候千万别跑。', '{n} titka: levessel sosem futunk.'],
+    ['{n} stuurt je een high five. ✋', '{n}给你来了个击掌。✋', '{n} küld neked egy pacsit. ✋'],
+    ['{n} heeft de chef afgeleid met een loempia. Ga!', '{n}用一个春卷引开了大厨。快跑！', '{n} elterelte a séf figyelmét egy tavaszi tekerccsel. Fuss!'],
+    ['{n} wedt dat je de 1000 meter haalt.', '{n}打赌你能跑过1000米。', '{n} fogad, hogy meglesz az 1000 méter.'],
+    ['{n} heeft de chef verteld dat jij het niet was.', '{n}跟大厨说了不是你干的。', '{n} megmondta a séfnek, hogy nem te voltál.'],
+    ['{n} houdt een plekje vrij voor jou aan de personeelstafel.', '{n}在员工餐桌给你留了个位子。', '{n} foglal neked helyet a személyzeti asztalnál.'],
+    ['Weetje: {n} kan sneller rijst bestellen dan jij kan rennen.', '冷知识：{n}点米饭比你跑步还快。', 'Érdekesség: {n} gyorsabban rendel rizst, mint ahogy te futsz.'],
+    ['{n} vindt dat je dienblad vandaag extra glanst.', '{n}觉得你今天的托盘特别亮。', '{n} szerint ma különösen fényes a tálcád.'],
+  ],
+};
 
 // ---------------------------------------------------------------- the shop
 const SHOP = {
@@ -237,7 +285,7 @@ export async function start({ root, me = {}, colors = null, lang = 'nl', api = n
     set(v) { try { localStorage.setItem(key, JSON.stringify(v)); } catch { /* private mode */ } },
   };
   let save = clean(store.get());
-  let board = [], pending = null, online = true;
+  let board = [], pending = null, online = true, cheer = null;
 
   // ------------------------------------------------------------- the page
   root.innerHTML = `
@@ -292,6 +340,7 @@ export async function start({ root, me = {}, colors = null, lang = 'nl', api = n
       const r = await api.state();
       online = true;
       board = r.board || [];
+      cheer = r.cheer || null;
       if (r.save && (Number(r.save.at) || 0) > (save.at || 0)) { save = clean(r.save); store.set(save); applyLook(); audio.set('sfx', save.sfx); audio.set('music', save.music); view.setShake(save.shake); }
       else if ((save.at || 0) > (Number(r.save && r.save.at) || 0)) push();
       if (screen === 'menu') renderMenu();
@@ -303,6 +352,38 @@ export async function start({ root, me = {}, colors = null, lang = 'nl', api = n
     const p = (run ? api.finish(run, save) : api.save(save)).then(r => { online = true; if (r && r.board) board = r.board; return r; }).catch(() => { online = false; });
     pending = p;
     return p;
+  }
+
+  // ------------------------------------------------- remarks and fortunes
+  const pickOne = list => list[Math.floor(Math.random() * list.length)];
+  const fill = (text, vars) => text.replace('{n}', esc(vars.n ?? '')).replace('{d}', vars.d ?? '').replace('{s}', vars.s ?? '');
+  // the team's news: birthdays first, then a record, the leader, newcomers
+  function teamNews() {
+    const out = [];
+    if (!cheer) return out;
+    for (const b of cheer.birthdays || []) {
+      if (b.me) { if (b.days === 0) out.push(L3(CHEER.myBirthday)); continue; }
+      out.push(fill(L3(b.days === 0 ? CHEER.birthdayToday : b.days === 1 ? CHEER.birthdayTomorrow : CHEER.birthdaySoon), { n: b.name, d: b.days }));
+    }
+    const top = board[0];
+    if (top && top.best > 0) out.push(top.me ? L3(CHEER.myRecord) : fill(L3(CHEER.record), { n: top.name.split(' ')[0], s: fmtN(top.best) }));
+    if (cheer.leader && cheer.leader !== (me.name || '').split(' ')[0]) out.push(fill(L3(CHEER.leader), { n: cheer.leader }));
+    for (const n of cheer.newcomers || []) out.push(fill(L3(CHEER.newcomer), { n }));
+    return out;
+  }
+  // one remark: now and then team news, a line with a colleague, or a fortune
+  let lastRemark = '';
+  function remark() {
+    const news = teamNews(), team = (cheer && cheer.team) || [];
+    let text, tries = 0;
+    do {
+      const r = Math.random();
+      if (news.length && r < 0.3) text = pickOne(news);
+      else if (team.length && r < 0.6) text = fill(L3(pickOne(CHEER.team)), { n: pickOne(team) });
+      else text = esc(L3(pickOne(FORTUNES)));
+    } while (text === lastRemark && ++tries < 5);
+    lastRemark = text;
+    return text;
   }
 
   // ----------------------------------------------------------- the menu
@@ -317,6 +398,7 @@ export async function start({ root, me = {}, colors = null, lang = 'nl', api = n
         <div class="menu-coins">${coinIcon}<b>${fmtN(save.coins)}</b></div>
       </div>
       <div class="rush-logo big"><span>Chen's Garden</span><b>RUSH</b><i>${t('tagline')}</i></div>
+      ${teamNews().length ? `<div class="menu-news">${teamNews()[0]}</div>` : ''}
       <div class="menu-bottom">
         <div class="menu-stats">
           <div><span>${t('best')}</span><b>${fmtN(save.best)}</b></div>
@@ -468,8 +550,10 @@ export async function start({ root, me = {}, colors = null, lang = 'nl', api = n
     d.className = `rt ${kind}`; d.innerHTML = text;
     box.appendChild(d);
     while (box.children.length > 3) box.firstChild.remove();
-    setTimeout(() => d.classList.add('out'), 1900);
-    setTimeout(() => d.remove(), 2400);
+    // long remarks stay longer, so they can be read
+    const ms = kind === 'fortune' ? Math.min(5200, 1900 + d.textContent.length * 35) : 1900;
+    setTimeout(() => d.classList.add('out'), ms);
+    setTimeout(() => d.remove(), ms + 500);
   }
   function flash(color = '#FFFFFF') {
     const f = $('.rush-flash');
@@ -482,6 +566,7 @@ export async function start({ root, me = {}, colors = null, lang = 'nl', api = n
   function newRun() {
     const tutorial = !save.tutorial;
     run = createRun({ tutorial, levels: save.up, mult: save.mult, trays: save.trays });
+    remarkT = 14 + Math.random() * 10;
     run.bonus = 0; lessonsDone = new Set(); tutorialNoted = false; missionsHit = new Set(save.done); slow = 1;
     zoneShown = run.zone.k;
     view.attach(run);
@@ -584,7 +669,7 @@ export async function start({ root, me = {}, colors = null, lang = 'nl', api = n
       audio.play(e.type, e);
       if (e.type === 'special') {
         const sp = SPECIALS[e.p]; run.bonus += sp.coins; run.coins += sp.coins;
-        if (e.p === 'cookie') toast(`🥠 “${esc(L3(FORTUNES[Math.floor(Math.random() * FORTUNES.length)]))}” <b>+${sp.coins}</b>`, 'fortune');
+        if (e.p === 'cookie') toast(`🥠 “${remark()}” <b>+${sp.coins}</b>`, 'fortune');
         else toast(`${L3(sp.name)} <b>+${sp.coins}</b> ${coinIcon}`);
       } else if (e.type === 'power') toast(`<span class="pw-dot" style="--c:${POWER_COLORS[e.p]}"></span>${L3(POWER_NAMES[e.p])}`, 'power');
       else if (e.type === 'trayBreak') { toast(t('trayBroke'), 'warn'); flash('rgba(255,255,255,.55)'); }
@@ -678,6 +763,7 @@ export async function start({ root, me = {}, colors = null, lang = 'nl', api = n
     const shown = missionList(null);
     $('.rush-over').innerHTML = `<div class="over-card">
       <h2>${t('caught')}</h2>
+      <p class="over-remark">💬 ${remark()}</p>
       <div class="over-score${record ? ' is-record' : ''}"><span>${t('score')}</span><b>${fmtN(score)}</b>${record ? `<em>★ ${t('record')}</em>` : `<small>${t('best')}: ${fmtN(save.best)}</small>`}</div>
       <div class="over-stats"><div><span>${t('distance')}</span><b>${fmtN(dist)} m</b></div><div><span>${t('earned')}</span><b>${coinIcon}${fmtN(coins)}</b></div><div><span>${t('coins')}</span><b>${coinIcon}${fmtN(save.coins)}</b></div></div>
       ${setMsg}
@@ -765,7 +851,7 @@ export async function start({ root, me = {}, colors = null, lang = 'nl', api = n
   });
 
   // ------------------------------------------------------------ the loop
-  let raf = 0, alive = true, overT = 0;
+  let raf = 0, alive = true, overT = 0, remarkT = 20;
   function frame(now) {
     if (!alive) return;
     raf = requestAnimationFrame(frame);
@@ -783,6 +869,10 @@ export async function start({ root, me = {}, colors = null, lang = 'nl', api = n
       handleEvents();
       updateHud();
       audio.tick(dt);
+      if (run.state === 'run' && !run.inTutorial()) {
+        remarkT -= dt;
+        if (remarkT <= 0) { remarkT = 40 + Math.random() * 30; toast(`💬 ${remark()}`, 'fortune'); }
+      }
       view.frame(dt * slow);
       if (run.state === 'over') { overT += dt; if (overT > 0.4) { overT = 0; gameOver(); } }
       return;

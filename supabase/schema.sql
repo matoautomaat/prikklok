@@ -3869,16 +3869,47 @@ language sql stable set search_path = public as $$
            where r.best > 0 and st.active and not st.view_only) b
 $$;
 
+-- This year's birthday of someone born on p (29 February: the 28th).
+create function app_private.rush_bday(p date, p_year int) returns date
+language sql immutable set search_path = public as $$
+  select (m + (least(extract(day from p)::int, extract(day from m + interval '1 month - 1 day')::int) - 1))::date
+    from (select make_date(p_year, extract(month from p)::int, 1) as m) x
+$$;
+
+-- For the game's cheerful remarks: who has a birthday in the next two weeks
+-- (first name and in how many days; not the date, not the age), who leads
+-- the ranking, who is new, and the first names of the team.
+create function app_private.rush_cheer(p_me uuid) returns json
+language sql stable set search_path = public as $$
+  with t as (select (now() at time zone coalesce((select timezone from public.settings where id = 1), 'UTC'))::date as today),
+  people as (select st.* from public.staff st where st.active and (not st.view_only or st.in_ranking)),
+  bdays as (
+    select split_part(p.name, ' ', 1) as name, p.id = p_me as me,
+           (case when app_private.rush_bday(p.birth_date, extract(year from t.today)::int) >= t.today
+                 then app_private.rush_bday(p.birth_date, extract(year from t.today)::int)
+                 else app_private.rush_bday(p.birth_date, extract(year from t.today)::int + 1) end) - t.today as days
+      from people p, t where p.birth_date is not null)
+  select json_build_object(
+    'birthdays', coalesce((select json_agg(json_build_object('name', name, 'days', days, 'me', me) order by days) from bdays where days <= 14), '[]'::json),
+    'leader', (select split_part(p.name, ' ', 1) from people p where not p.driver
+                order by (app_private.xp_json(p.id) ->> 'xp')::int desc, p.name limit 1),
+    'newcomers', coalesce((select json_agg(split_part(p.name, ' ', 1)) from people p, t
+                  where not p.view_only and p.id <> p_me and p.start_date between t.today - 21 and t.today), '[]'::json),
+    'team', coalesce((select json_agg(n) from (select split_part(p.name, ' ', 1) as n from people p
+                  where not p.view_only and p.id <> p_me order by random() limit 40) x), '[]'::json))
+$$;
+
 revoke all on all functions in schema app_private from public, anon, authenticated;
 
--- Your saved game and the leaderboard.
+-- Your saved game, the leaderboard and what the cheerful remarks may mention.
 create function public.rush_state(p_token text) returns json
 language plpgsql stable security definer set search_path = public, extensions as $$
 declare v public.staff; r public.rush_players;
 begin
   v := app_private.current_staff(p_token);
   select * into r from public.rush_players where staff_id = v.id;
-  return json_build_object('save', r.save, 'best', coalesce(r.best, 0), 'runs', coalesce(r.runs, 0), 'board', app_private.rush_board(v.id));
+  return json_build_object('save', r.save, 'best', coalesce(r.best, 0), 'runs', coalesce(r.runs, 0), 'board', app_private.rush_board(v.id),
+    'cheer', app_private.rush_cheer(v.id));
 end $$;
 
 -- Stores the game's progress (after a purchase or a change in the settings).

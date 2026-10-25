@@ -69,6 +69,9 @@
   border: 1px solid rgba(226, 178, 60, .45); font-family: var(--r-f-display); font-size: 17px; }
 .rush-menu .rush-logo { margin-top: 1vh; }
 .rush-menu .rush-logo b { font-size: clamp(54px, 15vw, 88px); }
+.menu-news { align-self: center; margin-top: 10px; max-width: 92%; text-align: center; font-weight: 600; font-size: 14px; padding: 7px 14px; border-radius: 14px;
+  background: rgba(226, 178, 60, .92); color: var(--r-ink); box-shadow: 0 4px 14px rgba(0, 0, 0, .3); }
+.over-remark { margin: -4px 0 0; text-align: center; font-size: 15px; font-style: italic; color: #F6E2C8; }
 .menu-bottom { display: flex; flex-direction: column; gap: 12px; width: 100%; max-width: 460px; margin: auto auto 0; }
 .menu-stats { display: grid; grid-template-columns: repeat(3, 1fr); gap: 8px; }
 .menu-stats div, .over-stats div { background: rgba(42, 18, 20, .78); border: 1px solid rgba(226, 178, 60, .35); border-radius: 14px; padding: 8px 10px; text-align: center; }

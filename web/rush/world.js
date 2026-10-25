@@ -21,7 +21,7 @@ const VARIANTS = {
   indonesia: { lo: ['baskets'], ov: ['garland'], ta: ['stall'], pl: 'wooddeck' },
 };
 const POWERS = [['magnet', 30], ['double', 26], ['spring', 26], ['dragon', 14]];
-const SPECIALS = [['dumpling', 50], ['cookie', 30], ['box', 20]];
+const SPECIALS = [['dumpling', 40], ['cookie', 42], ['box', 18]];
 const pick = (r, list) => {
   let n = r() * list.reduce((a, x) => a + x[1], 0);
   for (const [k, w] of list) if ((n -= w) < 0) return k;
