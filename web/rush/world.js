@@ -1,7 +1,7 @@
 // Chen's Garden Rush: the route ahead, built from patterns as the waiter runs,
 // through five parts of the restaurant that follow each other without a break.
 import { PATTERNS, TUTORIAL } from './patterns.js';
-import { C, SIZE, ZONES, COUNTRIES, ASIA_AT, speedAt, JUMP_T, jumpY, laneX, rng } from './rules.js';
+import { C, SIZE, ZONES, COUNTRIES, ASIA_AT, COUNTRY_LEN, speedAt, JUMP_T, jumpY, laneX, rng } from './rules.js';
 
 // What each kind of obstacle looks like in each part of the restaurant.
 const VARIANTS = {
@@ -47,9 +47,9 @@ export function createWorld(seed, { tutorial = false, script = null, startAt = 2
   const w = { obs: [], coins: [], items: [], zones: [], reserved: [], tutorialEnd: tutorial ? Infinity : 0 };
 
   // ---- zones: the restaurant first (dining, then a different room each
-  // time, 230 to 320 m each); from ASIA_AT the countries of Asia one after
-  // the other, 480 to 640 m each, each once in a shuffled order before any
-  // comes back
+  // time, 230 to 320 m each, the last one ending exactly at ASIA_AT); then
+  // the countries of Asia one after the other, COUNTRY_LEN metres each, each
+  // once in a shuffled order before any comes back
   let tour = [];
   const addZone = () => {
     const last = w.zones[w.zones.length - 1];
@@ -61,11 +61,14 @@ export function createWorld(seed, { tutorial = false, script = null, startAt = 2
         for (let i = tour.length - 1; i > 0; i--) { const j = Math.floor(r() * (i + 1)); [tour[i], tour[j]] = [tour[j], tour[i]]; }
         if (tour[0] === last.k) tour.push(tour.shift());
       }
-      k = tour.shift(); len = 480 + Math.floor(r() * 160);
+      k = tour.shift(); len = COUNTRY_LEN;
     } else if (last) {
       do { k = ZONES[Math.floor(r() * ZONES.length)]; } while (k === last.k);
       len = 230 + Math.floor(r() * 90);
     }
+    // the restaurant ends at ASIA_AT: the last room is cut short, or
+    // stretched when only a sliver would be left
+    if (d0 < ASIA_AT && (d0 + len > ASIA_AT || ASIA_AT - (d0 + len) < 150)) len = ASIA_AT - d0;
     // whole floor tiles of 8 m, so a doorway sits where the floor changes
     w.zones.push({ k, d0, d1: d0 + 8 * Math.round(len / 8), i: w.zones.length });
   };
