@@ -4258,6 +4258,7 @@ async function viewToday(el, current) {
       <button class="stat ${ov.pending_requests ? 'alert' : ''}" data-go="requests"><span class="v">${ov.pending_requests}</span><span class="k">Aanpassingen goed te keuren</span></button>
       <button class="stat" data-go="schedule"><span class="v">${ov.open_shifts_week}</span><span class="k">Open shiften, komende 7 dagen</span></button>
     </div>
+    ${rushButton()}
     <div class="grid-2">
       <div style="display:flex;flex-direction:column;gap:18px;min-width:0">
         <section class="card">
