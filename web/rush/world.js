@@ -1,7 +1,7 @@
 // Chen's Garden Rush: the route ahead, built from patterns as the waiter runs,
 // through five parts of the restaurant that follow each other without a break.
 import { PATTERNS, TUTORIAL } from './patterns.js';
-import { C, SIZE, ZONES, COUNTRIES, ASIA_AT, ASIA_EVERY, speedAt, JUMP_T, jumpY, laneX, rng } from './rules.js';
+import { C, SIZE, ZONES, COUNTRIES, ASIA_AT, speedAt, JUMP_T, jumpY, laneX, rng } from './rules.js';
 
 // What each kind of obstacle looks like in each part of the restaurant.
 const VARIANTS = {
@@ -46,17 +46,16 @@ export function createWorld(seed, { tutorial = false, script = null, startAt = 2
   let id = 1, genD = startAt, streak = 0, tut = tutorial ? 0 : -1, lastPower = -999;
   const w = { obs: [], coins: [], items: [], zones: [], reserved: [], tutorialEnd: tutorial ? Infinity : 0 };
 
-  // ---- zones: the restaurant (dining first, then a different room each
-  // time, 230 to 320 m each); from ASIA_AT one country of Asia (480 to 640 m),
-  // then the restaurant again, and every ASIA_EVERY metres the next country.
-  // Each country once, in a shuffled order, before any comes back.
-  let tour = [], nextTrip = ASIA_AT;
+  // ---- zones: the restaurant first (dining, then a different room each
+  // time, 230 to 320 m each); from ASIA_AT the countries of Asia one after
+  // the other, 480 to 640 m each, each once in a shuffled order before any
+  // comes back
+  let tour = [];
   const addZone = () => {
     const last = w.zones[w.zones.length - 1];
     const d0 = last ? last.d1 : -80;
     let k = 'dining', len = 300;
-    if (d0 >= nextTrip) {
-      nextTrip += ASIA_EVERY;
+    if (d0 >= ASIA_AT) {
       if (!tour.length) {
         tour = [...COUNTRIES];
         for (let i = tour.length - 1; i > 0; i--) { const j = Math.floor(r() * (i + 1)); [tour[i], tour[j]] = [tour[j], tour[i]]; }
@@ -64,7 +63,7 @@ export function createWorld(seed, { tutorial = false, script = null, startAt = 2
       }
       k = tour.shift(); len = 480 + Math.floor(r() * 160);
     } else if (last) {
-      do { k = ZONES[Math.floor(r() * ZONES.length)]; } while (k === last.k || (k === 'garden' && COUNTRIES.includes(last.k)));
+      do { k = ZONES[Math.floor(r() * ZONES.length)]; } while (k === last.k);
       len = 230 + Math.floor(r() * 90);
     }
     // whole floor tiles of 8 m, so a doorway sits where the floor changes

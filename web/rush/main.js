@@ -566,7 +566,7 @@ export async function start({ root, me = {}, colors = null, lang = 'nl', api = n
   function newRun() {
     const tutorial = !save.tutorial;
     run = createRun({ tutorial, levels: save.up, mult: save.mult, trays: save.trays });
-    remarkT = 25 + Math.random() * 15;
+    remarkT = 50 + Math.random() * 20;
     run.bonus = 0; lessonsDone = new Set(); tutorialNoted = false; missionsHit = new Set(save.done); slow = 1;
     zoneShown = run.zone.k;
     view.attach(run);
@@ -670,11 +670,9 @@ export async function start({ root, me = {}, colors = null, lang = 'nl', api = n
       if (e.type === 'special') {
         const sp = SPECIALS[e.p]; run.bonus += sp.coins; run.coins += sp.coins;
         if (e.p === 'cookie') toast(`🥠 “${remark()}” <b>+${sp.coins}</b>`, 'fortune');
-        else toast(`${L3(sp.name)} <b>+${sp.coins}</b> ${coinIcon}`);
-      } else if (e.type === 'power') toast(`<span class="pw-dot" style="--c:${POWER_COLORS[e.p]}"></span>${L3(POWER_NAMES[e.p])}`, 'power');
-      else if (e.type === 'trayBreak') { toast(t('trayBroke'), 'warn'); flash('rgba(255,255,255,.55)'); }
+        // dumplings and boxes: just the coins going up (the sound and sparkle say enough)
+      } else if (e.type === 'trayBreak') { toast(t('trayBroke'), 'warn'); flash('rgba(255,255,255,.55)'); }
       else if (e.type === 'trayNo' && run.trays <= 0 && !run.p.fly) toast(t('trayNone'));
-      else if (e.type === 'stumble' && !e.soft) toast(t('close2'), 'warn');
       else if (e.type === 'cartWarn') hudWarn('cart');
       else if (e.type === 'crossWarn') hudWarn('cross');
       else if (e.type === 'zone') {
@@ -683,7 +681,7 @@ export async function start({ root, me = {}, colors = null, lang = 'nl', api = n
           // out of the restaurant: the journey through Asia begins
           if (LANDMARKS[e.z.k] && !LANDMARKS[zoneShown]) toast(L3(['Het restaurant uit… op reis door Azië!', '跑出餐厅……开始亚洲之旅！', 'Ki az étteremből… irány Ázsia!']), 'mission');
           zoneShown = e.z.k;
-          toast(LANDMARKS[e.z.k] ? `${L3(ZONE_NAMES[e.z.k])} · ${L3(LANDMARKS[e.z.k])}` : L3(ZONE_NAMES[e.z.k]), 'zone');
+          if (LANDMARKS[e.z.k]) toast(`${L3(ZONE_NAMES[e.z.k])} · ${L3(LANDMARKS[e.z.k])}`, 'zone');
         }
       } else if (e.type === 'crash' || e.type === 'caught') { audio.music(null); setTimeout(() => audio.play('caught'), 450); }
     }
@@ -872,7 +870,7 @@ export async function start({ root, me = {}, colors = null, lang = 'nl', api = n
       if (run.state === 'run' && !run.inTutorial()) {
         remarkT -= dt;
         // never on top of another remark: wait until it is gone
-        if (remarkT <= 0 && !el.querySelector('.rt.fortune')) { remarkT = 60 + Math.random() * 40; toast(`💬 ${remark()}`, 'fortune'); }
+        if (remarkT <= 0 && !el.querySelector('.rt.fortune')) { remarkT = 90 + Math.random() * 60; toast(`💬 ${remark()}`, 'fortune'); }
       }
       view.frame(dt * slow);
       if (run.state === 'over') { overT += dt; if (overT > 0.4) { overT = 0; gameOver(); } }
