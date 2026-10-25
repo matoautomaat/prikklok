@@ -154,6 +154,7 @@ export function createAudio() {
   const AMB = {
     dining: { f: 380, q: 0.7, v: 0.05 }, kitchen: { f: 3200, q: 0.6, v: 0.035 }, storage: { f: 140, q: 1.2, v: 0.06 },
     garden: { f: 900, q: 0.4, v: 0.02 }, takeaway: { f: 600, q: 0.8, v: 0.04 },
+    outdoor: { f: 1200, q: 0.35, v: 0.018 }, // the countries of Asia: wind and birds
   };
   function ambience(zone) {
     if (!ctx) return;
@@ -164,17 +165,25 @@ export function createAudio() {
       amb = { s, fl, g };
     }
     ambZone = zone;
-    const a = AMB[zone] || AMB.dining, t = ctx.currentTime;
+    const a = AMB[zone] || (zone ? AMB.outdoor : AMB.dining), t = ctx.currentTime;
     amb.fl.frequency.setTargetAtTime(a.f, t, 0.4); amb.fl.Q.setTargetAtTime(a.q, t, 0.4);
     amb.g.gain.setTargetAtTime(zone ? a.v : 0, t, 0.5);
   }
   function ambTick(dt) {
-    if (!ctx || ambZone !== 'garden' || !on.sfx) return;
+    const outside = ambZone && !(ambZone in AMB);
+    if (!ctx || (ambZone !== 'garden' && !outside) || !on.sfx) return;
     crickets -= dt;
     if (crickets <= 0) {
-      crickets = 0.6 + Math.random() * 1.4;
       const t = ctx.currentTime;
-      for (let i = 0; i < 3; i++) osc('sine', 4300 + Math.random() * 300, t + i * 0.07, 0.04, 0.025, ambBus, { a: 0.003 });
+      if (outside) {
+        // a bird: two or three quick whistles
+        crickets = 1.2 + Math.random() * 2.5;
+        const f = 2200 + Math.random() * 1400;
+        for (let i = 0; i < 2 + (Math.random() < 0.5); i++) osc('sine', f * (1 + i * 0.12), t + i * 0.11, 0.08, 0.03, ambBus, { f2: f * 1.25, slide: 0.07, a: 0.004 });
+      } else {
+        crickets = 0.6 + Math.random() * 1.4;
+        for (let i = 0; i < 3; i++) osc('sine', 4300 + Math.random() * 300, t + i * 0.07, 0.04, 0.025, ambBus, { a: 0.003 });
+      }
     }
   }
 

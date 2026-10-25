@@ -168,7 +168,7 @@ export function rampModel(variant) {
   return model(`ramp:${variant}`, b => {
     // low end toward the waiter (+z), high end against the platform
     const D = SIZE.ramp.D, H = SIZE.pl.H, a = Math.atan2(H, D), len = Math.hypot(H, D);
-    const c = variant === 'counter' ? PAL.darkWood : variant === 'steel' ? PAL.steel : '#A9B2B9';
+    const c = { counter: PAL.darkWood, steel: PAL.steel, wooddeck: PAL.wood, stonewall: '#9C978E' }[variant] || '#A9B2B9';
     b.box(1.8, 0.08, len, 0, H / 2, 0, c, { rx: a });
     for (const x of [-0.86, 0.86]) b.box(0.08, 0.03, len, x, H / 2 + 0.05, 0, PAL.hazard, { rx: a });
     for (let z = -D / 2 + 0.3; z < D / 2; z += 0.55) b.box(1.6, 0.03, 0.08, 0, H * (0.5 - z / D) + 0.05, z, PAL.hazard, { rx: a });
@@ -406,18 +406,24 @@ export function doorway(zone, label) {
   return g;
 }
 
-// The evening sky over the garden terrace.
+// The sky over the garden terrace (an evening) and over Asia (each country
+// its own): a dome with three colours, top, middle and horizon.
 export function skyDome() {
   const geo = new THREE.SphereGeometry(400, 24, 12, 0, Math.PI * 2, 0, Math.PI / 2);
-  const col = [], top = new THREE.Color('#2E3B6E'), mid = new THREE.Color('#9B6B9E'), low = new THREE.Color('#F2A66B');
-  const pos = geo.attributes.position;
-  for (let i = 0; i < pos.count; i++) {
-    const h = pos.getY(i) / 400, c = h > 0.35 ? mid.clone().lerp(top, (h - 0.35) / 0.65) : low.clone().lerp(mid, h / 0.35);
-    col.push(c.r, c.g, c.b);
-  }
-  geo.setAttribute('color', new THREE.Float32BufferAttribute(col, 3));
+  geo.setAttribute('color', new THREE.Float32BufferAttribute(new Float32Array(geo.attributes.position.count * 3), 3));
   const m = new THREE.Mesh(geo, new THREE.MeshBasicMaterial({ vertexColors: true, side: THREE.BackSide, fog: false, depthWrite: false }));
   m.renderOrder = -1;
+  m.userData.setColors = (topC = '#2E3B6E', midC = '#9B6B9E', lowC = '#F2A66B') => {
+    const top = new THREE.Color(topC), mid = new THREE.Color(midC), low = new THREE.Color(lowC), c = new THREE.Color();
+    const pos = geo.attributes.position, col = geo.attributes.color;
+    for (let i = 0; i < pos.count; i++) {
+      const h = pos.getY(i) / 400;
+      if (h > 0.35) c.copy(mid).lerp(top, (h - 0.35) / 0.65); else c.copy(low).lerp(mid, h / 0.35);
+      col.setXYZ(i, c.r, c.g, c.b);
+    }
+    col.needsUpdate = true;
+  };
+  m.userData.setColors();
   return m;
 }
 export { MAT, materials };

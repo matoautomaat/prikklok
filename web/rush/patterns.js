@@ -19,7 +19,7 @@
 //   ['pu', t, lane]          a power-up (the generator picks which, or none)
 //   ['sp', t, lane]          a dumpling, fortune cookie or takeaway box (or none)
 //
-// min: from which difficulty (0 at the start, 1 from about 3 km); calm: a
+// min: from which difficulty (0 at the start, 1 from about 1.8 km); calm: a
 // breather between demanding stretches.
 
 const TOP = 1.95; // coin height on a counter
@@ -64,6 +64,14 @@ export const PATTERNS = [
   { id: 'dense-mix', min: 0.7, w: 2, T: 4.2, items: [['ta', 0.9, 0], ['lo', 0.9, 1], ['ta', 1.7, 1], ['ov', 1.7, 2], ['lo', 2.5, 0], ['ta', 2.5, 2], ['ov', 3.3, 1], ['ta', 3.3, 0], ['arc', 0.9, 1], ['c', 1.4, 2, 3, 0.45]] },
   { id: 'counter-gap', min: 0.6, w: 2, T: 3.8, items: [['pl', 1.0, 1, 1.0, true], ['pl', 2.35, 1, 1.0, false], ['ta', 1.3, 0], ['ta', 2.5, 0], ['ta', 1.3, 2], ['ta', 2.5, 2], ['c', 1.2, 1, 5, TOP], ['arc', 2.17, 1]] },
   { id: 'cross-cart', min: 0.75, w: 1, T: 3.6, items: [['cr', 1.4, -1], ['ca', 3.0, 1], ['arc', 1.4, 0], ['c', 2.0, 2, 5]] },
+
+  // ---- expert: quick decisions one after the other, for long runs
+  { id: 'zigzag', min: 0.8, w: 2, T: 3.0, items: [['ta', 0.9, 0], ['ta', 0.9, 1], ['ta', 1.6, 1], ['ta', 1.6, 2], ['ta', 2.3, 0], ['ta', 2.3, 1], ['c', 0.5, 2, 3], ['cs', 1.1, 2, 0, 5]] },
+  { id: 'jump-then-slide', min: 0.85, w: 2, T: 3.0, items: [['lo', 1.0, 0], ['lo', 1.0, 1], ['lo', 1.0, 2], ['ov', 1.9, 0], ['ov', 1.9, 1], ['ta', 1.9, 2], ['arc', 1.0, 1]] },
+  { id: 'cart-alley', min: 0.85, w: 2, T: 3.4, items: [['ca', 2.0, 0], ['ca', 2.0, 2], ['lo', 1.6, 1], ['ov', 2.6, 1], ['arc', 1.6, 1], ['c', 2.4, 1, 3, 0.45]] },
+  { id: 'double-cross', min: 0.9, w: 1, T: 3.4, items: [['cr', 1.2, 1], ['cr', 2.3, -1], ['arc', 1.2, 1], ['arc', 2.3, 1]] },
+  { id: 'pillar-maze', min: 0.9, w: 2, T: 3.6, items: [['ta', 0.9, 0], ['ov', 0.9, 1], ['ta', 0.9, 2], ['lo', 1.7, 1], ['ta', 1.7, 0], ['ov', 1.7, 2], ['ta', 2.5, 1], ['lo', 2.5, 0], ['lo', 2.5, 2], ['arc', 1.7, 1]] },
+  { id: 'stair-run', min: 0.95, w: 1, T: 3.6, items: [['lo', 0.9, 0], ['ov', 1.4, 1], ['lo', 1.9, 2], ['ta', 1.4, 0], ['ta', 1.9, 1], ['ov', 2.5, 2], ['ta', 2.5, 1], ['arc', 0.9, 0], ['arc', 1.9, 2]] },
 ];
 
 // The first run teaches the controls; it slows down until the right swipe.

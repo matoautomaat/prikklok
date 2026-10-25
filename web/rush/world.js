@@ -1,7 +1,7 @@
 // Chen's Garden Rush: the route ahead, built from patterns as the waiter runs,
 // through five parts of the restaurant that follow each other without a break.
 import { PATTERNS, TUTORIAL } from './patterns.js';
-import { C, SIZE, ZONES, speedAt, JUMP_T, jumpY, laneX, rng } from './rules.js';
+import { C, SIZE, ZONES, COUNTRIES, ASIA_AT, speedAt, JUMP_T, jumpY, laneX, rng } from './rules.js';
 
 // What each kind of obstacle looks like in each part of the restaurant.
 const VARIANTS = {
@@ -10,6 +10,15 @@ const VARIANTS = {
   storage: { lo: ['sack', 'crate'], ov: ['rack'], ta: ['shelf'], pl: 'cartplat' },
   garden: { lo: ['boxes', 'sack'], ov: ['rack'], ta: ['trolleys'], pl: 'cartplat' },
   takeaway: { lo: ['boxes'], ov: ['shutter'], ta: ['vending'], pl: 'counter' },
+  // outside, from ASIA_AT on: the same shapes, dressed for each country
+  japan: { lo: ['barrels'], ov: ['noren'], ta: ['stonelantern'], pl: 'wooddeck' },
+  china: { lo: ['baskets', 'barrels'], ov: ['banner'], ta: ['stall'], pl: 'stonewall' },
+  korea: { lo: ['jars'], ov: ['banner'], ta: ['onggi'], pl: 'wooddeck' },
+  thailand: { lo: ['baskets'], ov: ['garland'], ta: ['tuktuk'], pl: 'wooddeck' },
+  vietnam: { lo: ['baskets', 'sack'], ov: ['banner'], ta: ['stall'], pl: 'wooddeck' },
+  india: { lo: ['jars'], ov: ['garland'], ta: ['tuktuk'], pl: 'stonewall' },
+  nepal: { lo: ['sack', 'baskets'], ov: ['flags'], ta: ['shrine'], pl: 'stonewall' },
+  indonesia: { lo: ['baskets'], ov: ['garland'], ta: ['stall'], pl: 'wooddeck' },
 };
 const POWERS = [['magnet', 30], ['double', 26], ['spring', 26], ['dragon', 14]];
 const SPECIALS = [['dumpling', 50], ['cookie', 30], ['box', 20]];
@@ -37,14 +46,27 @@ export function createWorld(seed, { tutorial = false, script = null, startAt = 2
   let id = 1, genD = startAt, streak = 0, tut = tutorial ? 0 : -1, lastPower = -999;
   const w = { obs: [], coins: [], items: [], zones: [], reserved: [], tutorialEnd: tutorial ? Infinity : 0 };
 
-  // ---- zones: dining first, then a different one each time, 230 to 320 m each
+  // ---- zones: the restaurant first (dining, then a different room each
+  // time, 230 to 320 m each); from ASIA_AT the countries of Asia, each once
+  // in a shuffled order before any comes back, 480 to 640 m each
+  let tour = [];
   const addZone = () => {
     const last = w.zones[w.zones.length - 1];
-    let k = 'dining';
-    if (last) do { k = ZONES[Math.floor(r() * ZONES.length)]; } while (k === last.k);
     const d0 = last ? last.d1 : -80;
+    let k = 'dining', len = 300;
+    if (d0 >= ASIA_AT) {
+      if (!tour.length) {
+        tour = [...COUNTRIES];
+        for (let i = tour.length - 1; i > 0; i--) { const j = Math.floor(r() * (i + 1)); [tour[i], tour[j]] = [tour[j], tour[i]]; }
+        if (tour[0] === last.k) tour.push(tour.shift());
+      }
+      k = tour.shift(); len = 480 + Math.floor(r() * 160);
+    } else if (last) {
+      do { k = ZONES[Math.floor(r() * ZONES.length)]; } while (k === last.k);
+      len = 230 + Math.floor(r() * 90);
+    }
     // whole floor tiles of 8 m, so a doorway sits where the floor changes
-    w.zones.push({ k, d0, d1: d0 + 8 * Math.round((last ? 230 + Math.floor(r() * 90) : 300) / 8), i: w.zones.length });
+    w.zones.push({ k, d0, d1: d0 + 8 * Math.round(len / 8), i: w.zones.length });
   };
   addZone();
   w.zoneAt = d => {
@@ -124,15 +146,18 @@ export function createWorld(seed, { tutorial = false, script = null, startAt = 2
   }
 
   function choose(start) {
-    const diff = Math.min(1, start / 3000);
+    // diff: which patterns may come (all of them from about 1.8 km);
+    // late: after that it keeps getting harder, up to about 10 km
+    const diff = Math.min(1, start / 1800), late = Math.max(0, Math.min(1, (start - 1800) / 8200));
     const room = nextBoundary(start) - start;
     // a breather after a demanding stretch: longer stretches as the run goes on
-    const calm = start < 60 || streak >= 3 + Math.floor(diff * 3);
+    const calm = start < 60 || streak >= 3 + Math.floor(diff * 2) + Math.floor(late * 5);
     const list = PATTERNS.filter(p => p.min <= diff && (!!p.calm === calm || (calm && p.min === 0 && p.calm))
       && (!p.items.some(i => i[0] === 'pl') || room > p.T * speedAt(start) + 12));
     const pool = list.length ? list : PATTERNS.filter(p => p.calm);
-    // newer patterns a little more often, so the challenge keeps changing
-    const weight = p => p.w * (p.min >= diff - 0.3 ? 1.6 : 1);
+    // newer patterns more often, so the challenge keeps changing; later on
+    // mostly the hard ones
+    const weight = p => p.w * (p.min >= diff - 0.3 ? 1.6 : 1) * (p.min >= 0.5 ? 1 + late * 3 : p.calm ? 1 : 1 - late * 0.7);
     let n = r() * pool.reduce((a, p) => a + weight(p), 0);
     for (const p of pool) if ((n -= weight(p)) < 0) { streak = p.calm ? 0 : streak + 1; return p; }
     streak = 0;

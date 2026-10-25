@@ -53,7 +53,7 @@ export function coinsInside(w) {
 
 if (process.argv[2] === 'patterns') {
   let fails = 0, n = 0;
-  const speeds = [[0, 'slow'], [1300, 'mid'], [8000, 'top']];
+  const speeds = [[0, 'slow'], [1100, 'mid'], [20000, 'top']];
   for (const p of [...PATTERNS, ...TUTORIAL]) {
     for (const [D, name] of speeds) {
       for (const mirror of [false, true]) {

@@ -13,7 +13,7 @@ export const C = {
   LANE_T: 0.13,          // one lane change
   SLIDE_T: 0.62,
   STEP: 0.3,             // a surface this much above the feet is stepped onto
-  V0: 10, VMAX: 21.5, VRAMP: 1400,
+  V0: 11, VMAX: 25, VRAMP: 1100,   // about 19 m/s at 1 km, 24 at 3 km
   STUMBLE_T: 0.9, STUMBLE_SLOW: 0.72,
   CHEF_T: 4.5,           // after a stumble the chef stays close this long; a second stumble then ends the run
   INVULN_T: 1.8,
@@ -54,7 +54,11 @@ export const POWER = {
 };
 export const powerTime = (k, level = 0) => POWER[k].T + POWER[k].up * Math.max(0, Math.min(5, level));
 
+// The restaurant for the first ASIA_AT metres, then a journey through Asia.
 export const ZONES = ['dining', 'kitchen', 'storage', 'garden', 'takeaway'];
+export const COUNTRIES = ['japan', 'china', 'korea', 'thailand', 'vietnam', 'india', 'nepal', 'indonesia'];
+export const ASIA_AT = 8000;
+export const outdoors = k => COUNTRIES.includes(k);
 
 // A small seeded random generator: the same seed builds the same route.
 export function rng(seed) {

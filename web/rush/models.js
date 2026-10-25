@@ -29,6 +29,9 @@ export function materials() {
   MAT.vc = new THREE.MeshToonMaterial({ vertexColors: true, gradientMap: ramp() });
   MAT.glow = new THREE.MeshBasicMaterial({ vertexColors: true, toneMapped: false });
   MAT.glowAdd = new THREE.MeshBasicMaterial({ vertexColors: true, transparent: true, opacity: 0.55, blending: THREE.AdditiveBlending, depthWrite: false });
+  // far scenery (mountains, monuments): beyond the fog, hazed in its colours instead
+  MAT.far = new THREE.MeshToonMaterial({ vertexColors: true, gradientMap: ramp(), fog: false });
+  MAT.farGlow = new THREE.MeshBasicMaterial({ vertexColors: true, toneMapped: false, fog: false });
   return MAT;
 }
 export const toonMat = (opts) => new THREE.MeshToonMaterial({ gradientMap: ramp(), ...opts });
@@ -95,13 +98,13 @@ function merge(list) {
 
 // A model from a build function, its geometry made once and shared.
 const GEO = new Map();
-export function model(key, fn, { shadow = true } = {}) {
+export function model(key, fn, { shadow = true, far = false } = {}) {
   materials();
   let g = GEO.get(key);
   if (!g) { const b = new Build(); fn(b); g = b.geometries(); GEO.set(key, g); }
   const grp = new THREE.Group();
-  if (g.solid) { const m = new THREE.Mesh(g.solid, MAT.vc); m.castShadow = shadow; m.receiveShadow = true; grp.add(m); }
-  if (g.glow) grp.add(new THREE.Mesh(g.glow, MAT.glow));
+  if (g.solid) { const m = new THREE.Mesh(g.solid, far ? MAT.far : MAT.vc); m.castShadow = shadow && !far; m.receiveShadow = !far; grp.add(m); }
+  if (g.glow) grp.add(new THREE.Mesh(g.glow, far ? MAT.farGlow : MAT.glow));
   if (g.add) grp.add(new THREE.Mesh(g.add, MAT.glowAdd));
   return grp;
 }

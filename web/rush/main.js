@@ -96,7 +96,15 @@ const NEEDS = {
   slide: [['Veeg omlaag om te glijden', '向下滑动滑行', 'Húzd lefelé a csúszáshoz'], ['↓  S', '↓  S', '↓  S']],
   tray: [['Tik twee keer snel: dienblad!', '快速点两下：用托盘！', 'Koppints kétszer gyorsan: tálca!'], ['E', 'E', 'E']],
 };
+// the countries after the restaurant, and what stands on their horizon
+const LANDMARKS = {
+  japan: ['Fuji-san', '富士山', 'Fudzsi'], china: ['De Chinese Muur', '长城', 'A kínai nagy fal'], korea: ['Gyeongbokgung', '景福宫', 'Kjongbokkung'],
+  thailand: ['Wat Arun', '郑王庙', 'Vat Arun'], vietnam: ['Ha Long-baai', '下龙湾', 'Ha Long-öböl'], india: ['Taj Mahal', '泰姬陵', 'Tádzs Mahal'],
+  nepal: ['Himalaya · Boudhanath', '喜马拉雅 · 博达哈佛塔', 'Himalája · Bodnath'], indonesia: ['Borobudur', '婆罗浮屠', 'Borobudur'],
+};
 const ZONE_NAMES = {
+  japan: ['Japan', '日本', 'Japán'], china: ['China', '中国', 'Kína'], korea: ['Korea', '韩国', 'Korea'], thailand: ['Thailand', '泰国', 'Thaiföld'],
+  vietnam: ['Vietnam', '越南', 'Vietnám'], india: ['India', '印度', 'India'], nepal: ['Nepal', '尼泊尔', 'Nepál'], indonesia: ['Indonesië', '印度尼西亚', 'Indonézia'],
   dining: ['Restaurant', '餐厅', 'Étterem'], kitchen: ['Keuken', '厨房', 'Konyha'], storage: ['Voorraadkelder', '仓库', 'Raktár'],
   garden: ['Tuinterras', '花园露台', 'Kertterasz'], takeaway: ['Afhaalbalie', '外卖区', 'Elvitel'],
 };
@@ -586,7 +594,12 @@ export async function start({ root, me = {}, colors = null, lang = 'nl', api = n
       else if (e.type === 'crossWarn') hudWarn('cross');
       else if (e.type === 'zone') {
         audio.ambience(e.z.k);
-        if (e.z.k !== zoneShown) { zoneShown = e.z.k; toast(L3(ZONE_NAMES[e.z.k]), 'zone'); }
+        if (e.z.k !== zoneShown) {
+          // out of the restaurant: the journey through Asia begins
+          if (LANDMARKS[e.z.k] && !LANDMARKS[zoneShown]) toast(L3(['Het restaurant uit… op reis door Azië!', '跑出餐厅……开始亚洲之旅！', 'Ki az étteremből… irány Ázsia!']), 'mission');
+          zoneShown = e.z.k;
+          toast(LANDMARKS[e.z.k] ? `${L3(ZONE_NAMES[e.z.k])} · ${L3(LANDMARKS[e.z.k])}` : L3(ZONE_NAMES[e.z.k]), 'zone');
+        }
       } else if (e.type === 'crash' || e.type === 'caught') { audio.music(null); setTimeout(() => audio.play('caught'), 450); }
     }
     // missions finished during the run

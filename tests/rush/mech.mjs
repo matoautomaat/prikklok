@@ -132,7 +132,8 @@ const atObstacle = (r, o, lead) => until(r, () => o.d0 - r.p.d < lead);
     const script = [[2.0, 'left'], [3.1, 'up'], [4.0, 'right'], [5.5, 'down']].map(([t, a]) => ({ t, a }));
     while (clock < 8) {
       clock += 1 / fps;
-      while (sim + DT <= clock) {
+      // every run stops at the same moment of the run (8 s), wherever its frames fall
+      while (sim + DT <= Math.min(clock, 8) + 1e-9) {
         for (const s of script) if (!s.done && s.t <= sim) { r.input(s.a); s.done = true; }
         r.step(DT); sim += DT;
       }
@@ -140,7 +141,7 @@ const atObstacle = (r, o, lead) => until(r, () => o.d0 - r.p.d < lead);
     return r.p.d.toFixed(3) + '/' + r.p.lane + '/' + r.coins + '/' + r.state;
   };
   const a = play(30), b = play(144), c = play(60);
-  check('the same at 30, 60 and 144 frames a second', a.split('/').slice(1).join() === b.split('/').slice(1).join() && Math.abs(parseFloat(a) - parseFloat(b)) < 0.4, `${a} | ${c} | ${b}`);
+  check('the same at 30, 60 and 144 frames a second', a === b && b === c, `${a} | ${c} | ${b}`);
 }
 console.log(fails ? `\n${fails} FAILED` : '\nall rules hold');
 process.exit(fails ? 1 : 0);

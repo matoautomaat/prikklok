@@ -2,10 +2,11 @@
 // draws it; it never changes it. Everything is placed relative to the waiter,
 // who stays at z = 0 and runs toward -z, so numbers stay small on long runs.
 import * as THREE from '../vendor/three-0.169.0/three.module.min.js';
-import { C, SIZE, laneX } from './rules.js';
+import { C, SIZE, laneX, outdoors } from './rules.js';
 import { cartAt, trolleyX } from './world.js';
 import { PAL, makePerson, makeChef, makeDragon, makeTray, makePower, makeSpecial, coinTex, POWER_COLORS, model, toonMat, lookKey } from './models.js';
 import * as SC from './scenery.js';
+import * as A from './asia.js';
 
 const AHEAD = 125, BEHIND = 16, TILE = 8, COINS = 320;
 const damp = (a, b, rate, dt) => a + (b - a) * (1 - Math.exp(-rate * dt));
@@ -30,7 +31,7 @@ export function createView(canvas, { labels = {}, brand = "Chen's Garden", lowPo
   const fogCol = new THREE.Color(SC.ZONE_LOOK.dining.fog);
   scene.background = fogCol.clone();
   scene.fog = new THREE.Fog(fogCol.clone(), 38, AHEAD);
-  const camera = new THREE.PerspectiveCamera(70, 1, 0.1, 600);
+  const camera = new THREE.PerspectiveCamera(70, 1, 0.1, 900);
   camera.position.set(0, 3, 6);
 
   const hemi = new THREE.HemisphereLight('#FFE9C8', '#5A3A28', 1.6);
@@ -152,6 +153,7 @@ export function createView(canvas, { labels = {}, brand = "Chen's Garden", lowPo
       o.position.set(x, y, 0); o.rotation.y = ry;
       list.push([o, dz]);
     };
+    if (outdoors(zone)) return buildOutdoorTile(k, z);
     add(`floor:${zone}`, () => SC.floorTile(zone));
     add('lanes', () => SC.laneLines());
     add(`walls:${zone}`, () => SC.wallsModel(zone));
@@ -170,6 +172,31 @@ export function createView(canvas, { labels = {}, brand = "Chen's Garden", lowPo
     }
     return { list, zone };
   }
+  // outside, in Asia: the path, land or water, scenery near and far, the gate
+  function buildOutdoorTile(k, z) {
+    const zone = z.k, list = [];
+    const add = (key, make, x = 0, y = 0, dz = 0, ry = 0) => {
+      const o = take(key, make);
+      o.position.set(x, y, 0); o.rotation.y = ry;
+      list.push([o, dz]);
+    };
+    add(`ground:${zone}`, () => A.groundTile(zone));
+    add('lanes', () => SC.laneLines());
+    const door = z.d0 === k * TILE;
+    if (door) add(`gate:${zone}`, () => A.gate(zone, labels[zone] || zone), 0, 0, TILE / 2);
+    const dec = A.ASIA_DECOR[zone];
+    for (const s of [-1, 1]) {
+      if (!door && hash(k, s) < 0.8) {
+        const [kind, x] = dec.near[Math.floor(hash(k, s + 5) * dec.near.length)];
+        add(`adec:${zone}:${kind}:${s}`, () => A.decorModel(kind, s, zone), s * (x + hash(k, s + 7) * 0.8), A.sunk(kind), (hash(k, s + 9) - 0.5) * 3);
+      }
+      if (hash(k, s + 20) < 0.6) {
+        const [kind, x] = dec.far[Math.floor(hash(k, s + 25) * dec.far.length)];
+        add(`adec:${zone}:${kind}:${s}`, () => A.decorModel(kind, s, zone), s * (x + hash(k, s + 27) * 4), A.sunk(kind), (hash(k, s + 29) - 0.5) * 4);
+      }
+    }
+    return { list, zone };
+  }
   function updateTiles(pd, back = BEHIND) {
     const k0 = Math.floor((pd - back) / TILE), k1 = Math.floor((pd + AHEAD) / TILE);
     for (const [k, t] of tiles) if (k < k0 || k > k1) { for (const [o] of t.list) give(o); tiles.delete(k); }
@@ -184,17 +211,24 @@ export function createView(canvas, { labels = {}, brand = "Chen's Garden", lowPo
   function obstacleObj(o) {
     if (o.k === 'pl') {
       const L = Math.round((o.d1 - o.d0) * 2) / 2;
-      return take(`pl:${o.v}:${L}`, () => SC.platformModel(o.v, o.d1 - o.d0));
+      const ob = take(`pl:${o.v}:${L}`, () => (A.hasPlatform(o.v) ? A.platformModel(o.v, o.d1 - o.d0) : SC.platformModel(o.v, o.d1 - o.d0)));
+      ob.scale.z = (o.d1 - o.d0) / L;
+      return ob;
     }
     if (o.k === 'ramp') return take(`ramp:${o.v}`, () => SC.rampModel(o.v));
     if (o.k === 'ca') return take('ob:cart', () => SC.obstacleModel('cart'));
     if (o.k === 'cr') return take('ob:trolley', () => SC.obstacleModel('trolley'));
-    if (o.k === 'ov') return take(`ov:${o.v}:${o.lane}`, () => {
-      const g = new THREE.Group(), r = SC.overRail();
-      g.add(SC.obstacleModel(o.v)); r.position.x = -laneX(o.lane); g.add(r);
-      return g;
-    });
-    return take(`ob:${o.v}`, () => SC.obstacleModel(o.v));
+    const shape = v => (A.hasObstacle(v) ? A.obstacleModel(v) : SC.obstacleModel(v));
+    if (o.k === 'ov') {
+      // hanging from a rail across the hall, or outside from a frame of posts
+      const out = outdoors(w.zoneAt(o.d0).k);
+      return take(`ov:${o.v}:${o.lane}:${out}`, () => {
+        const g = new THREE.Group(), r = out ? A.outRail() : SC.overRail();
+        g.add(shape(o.v)); r.position.x = -laneX(o.lane); g.add(r);
+        return g;
+      });
+    }
+    return take(`ob:${o.v}`, () => shape(o.v));
   }
   function updateObstacles(pd, dt) {
     const seen = new Set();
@@ -291,15 +325,38 @@ export function createView(canvas, { labels = {}, brand = "Chen's Garden", lowPo
 
   // ---------------------------------------------------------- the lighting
   const target = { fog: new THREE.Color(), sky: new THREE.Color(), ground: new THREE.Color(), light: new THREE.Color() };
+  let skyFor = null;
   function updateZoneLight(zone, dt, instant = false) {
-    const L = SC.ZONE_LOOK[zone];
+    const L = SC.ZONE_LOOK[zone] || A.ASIA_LOOK[zone];
     target.fog.set(L.fog); target.sky.set(L.sky); target.ground.set(L.ground); target.light.set(L.light);
     const f = instant ? 1 : 1 - Math.exp(-dt * 1.5);
     scene.fog.color.lerp(target.fog, f); scene.background.lerp(target.fog, f);
     hemi.color.lerp(target.sky, f); hemi.groundColor.lerp(target.ground, f); sun.color.lerp(target.light, f);
-    sky.visible = zone === 'garden';
+    sky.visible = zone === 'garden' || outdoors(zone);
+    if (sky.visible && skyFor !== zone) {
+      skyFor = zone;
+      if (zone === 'garden') sky.userData.setColors(); else sky.userData.setColors(L.top, L.mid, L.fog);
+    }
     zoneLook = zone;
   }
+
+  // the country's landmark on the horizon: seen from its gate on, drawing a
+  // little closer while you run through the country
+  const lands = {};
+  let landOn = null;
+  function updateBackdrop(pd) {
+    const here = w.zoneAt(pd), ahead = w.zoneAt(pd + 90);
+    const z = outdoors(ahead.k) && ahead !== here ? ahead : outdoors(here.k) ? here : null;
+    const k = z ? z.k : null;
+    if (landOn !== k) {
+      if (landOn) lands[landOn].visible = false;
+      if (k) { if (!lands[k]) { lands[k] = A.landmark(k); scene.add(lands[k]); } lands[k].visible = true; }
+      landOn = k;
+    }
+    if (k) lands[k].position.set(0, 0, -340 + clamp((pd - z.d0) / (z.d1 - z.d0), 0, 1) * 60);
+  }
+
+  function hideBackdrop() { if (landOn) { lands[landOn].visible = false; landOn = null; } }
 
   // ------------------------------------------------------------ animation
   // Joint angles for each pose; the body eases from one pose to the next.
@@ -497,6 +554,7 @@ export function createView(canvas, { labels = {}, brand = "Chen's Garden", lowPo
     const zone = w.zoneAt(pd).k;
     updateZoneLight(zone, dt);
     updateTiles(pd);
+    updateBackdrop(pd);
     updateObstacles(pd, dt);
     updateCoins(pd, p);
     updateItems(pd);
@@ -531,7 +589,7 @@ export function createView(canvas, { labels = {}, brand = "Chen's Garden", lowPo
   // The menu: the waiter at the entrance of the dining room, idle.
   function frameMenu(dt) {
     const p = { x: 0, y: 0, d: 0 };
-    if (w) { updateZoneLight('dining', dt, true); updateTiles(0, 60); }
+    if (w) { updateZoneLight('dining', dt, true); updateTiles(0, 60); hideBackdrop(); }
     for (const [id, e] of ents) { give(e.obj); ents.delete(id); }
     for (const [id, e] of itemEnts) { give(e); itemEnts.delete(id); }
     coins.count = 0;
@@ -561,7 +619,7 @@ export function createView(canvas, { labels = {}, brand = "Chen's Garden", lowPo
   const INTRO = 4.2;
   const boxes = [];
   function frameIntro(dt, t) {
-    updateZoneLight('dining', dt, true); updateTiles(0, 60);
+    updateZoneLight('dining', dt, true); updateTiles(0, 60); hideBackdrop();
     for (const [id, e] of ents) { give(e.obj); ents.delete(id); }
     coins.count = 0;
     if (!boxes.length) for (let i = 0; i < 4; i++) { const b = model('introBox', bb => { bb.cyl(0.2, 0.26, 0, 0, 0, PAL.paper, { seg: 4, top: 1.3, ry: Math.PI / 4 }); bb.box(0.38, 0.05, 0.38, 0, 0.15, 0, PAL.red); }); scene.add(b); boxes.push(b); }
