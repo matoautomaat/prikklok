@@ -409,7 +409,7 @@ const LAND = {
   japan: b => {
     hills(b, 9, -40, 10, 14, 26, '#7FA06A', '#8AAA74', 340, 2);
     b.cone(190, 96, -30, 48, -150, hz('#4A6AA8', 0.25), { seg: 32 });
-    b.cone(86, 43.5, -30, 96 - 21.5, -150, hz('#FFFFFF', 0.05), { seg: 32 });
+    b.cone(92, 44, -30, 96 - 22 + 1.2, -150, hz('#FFFFFF', 0.05), { seg: 32 });
     const px = 90, pz = 120;
     b.box(14, 3, 14, px, 1.5, pz, hz('#8E8A80'));
     for (let t = 0; t < 5; t++) {
@@ -505,7 +505,8 @@ const LAND = {
   },
   // the Himalaya behind the white dome of the Boudhanath stupa, with its eyes
   nepal: b => {
-    const peak = (x, z, r, h) => { b.cone(r, h, x, h / 2, z, hz('#6E7A94', 0.35), { seg: 9 }); b.cone(r * 0.42, h * 0.42, x, h - h * 0.21, z, hz('#F6F8FF', 0.2), { seg: 9 }); };
+    // the snow cap stands a little proud of the rock, so the two never flicker
+    const peak = (x, z, r, h) => { b.cone(r, h, x, h / 2, z, hz('#6E7A94', 0.35), { seg: 9 }); b.cone(r * 0.47, h * 0.43, x, h - h * 0.215 + h * 0.012, z, hz('#F6F8FF', 0.2), { seg: 9 }); };
     peak(-200, -230, 120, 150); peak(-60, -260, 150, 190); peak(90, -240, 120, 160); peak(230, -220, 110, 130); peak(0, -200, 90, 110);
     hills(b, 8, -60, -20, 16, 30, '#7A9A5E', '#869E66', 360, 9);
     const z = 70, Wt = '#F6F3EC';

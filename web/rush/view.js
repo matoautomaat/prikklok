@@ -19,7 +19,8 @@ const hash = (a, b = 0) => {
 };
 
 export function createView(canvas, { labels = {}, brand = "Chen's Garden", lowPower = false } = {}) {
-  const renderer = new THREE.WebGLRenderer({ canvas, antialias: !lowPower, powerPreference: 'high-performance', stencil: false });
+  // a logarithmic depth buffer keeps far mountains and monuments from flickering
+  const renderer = new THREE.WebGLRenderer({ canvas, antialias: !lowPower, powerPreference: 'high-performance', stencil: false, logarithmicDepthBuffer: true });
   renderer.outputColorSpace = THREE.SRGBColorSpace;
   renderer.shadowMap.enabled = !lowPower;
   renderer.shadowMap.type = THREE.PCFShadowMap;
@@ -31,7 +32,7 @@ export function createView(canvas, { labels = {}, brand = "Chen's Garden", lowPo
   const fogCol = new THREE.Color(SC.ZONE_LOOK.dining.fog);
   scene.background = fogCol.clone();
   scene.fog = new THREE.Fog(fogCol.clone(), 38, AHEAD);
-  const camera = new THREE.PerspectiveCamera(70, 1, 0.1, 900);
+  const camera = new THREE.PerspectiveCamera(70, 1, 0.3, 900);
   camera.position.set(0, 3, 6);
 
   const hemi = new THREE.HemisphereLight('#FFE9C8', '#5A3A28', 1.6);
@@ -121,12 +122,19 @@ export function createView(canvas, { labels = {}, brand = "Chen's Garden", lowPo
   pgeo.setAttribute('palpha', new THREE.BufferAttribute(pAlpha, 1).setUsage(THREE.DynamicDrawUsage));
   const pmat = new THREE.ShaderMaterial({
     uniforms: { scale: { value: 400 } },
-    vertexShader: `attribute vec3 pcolor; attribute float psize; attribute float palpha; uniform float scale;
+    vertexShader: `#include <common>
+      #include <logdepthbuf_pars_vertex>
+      attribute vec3 pcolor; attribute float psize; attribute float palpha; uniform float scale;
       varying vec3 vC; varying float vA;
       void main() { vC = pcolor; vA = palpha; vec4 mv = modelViewMatrix * vec4(position, 1.0);
-        gl_PointSize = psize * scale / max(0.1, -mv.z); gl_Position = projectionMatrix * mv; }`,
-    fragmentShader: `varying vec3 vC; varying float vA;
-      void main() { float r = length(gl_PointCoord - 0.5); if (r > 0.5) discard;
+        gl_PointSize = psize * scale / max(0.1, -mv.z); gl_Position = projectionMatrix * mv;
+        #include <logdepthbuf_vertex>
+      }`,
+    fragmentShader: `#include <logdepthbuf_pars_fragment>
+      varying vec3 vC; varying float vA;
+      void main() {
+        #include <logdepthbuf_fragment>
+        float r = length(gl_PointCoord - 0.5); if (r > 0.5) discard;
         gl_FragColor = vec4(vC, vA * smoothstep(0.5, 0.15, r)); }`,
     transparent: true, depthWrite: false,
   });

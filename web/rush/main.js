@@ -549,9 +549,9 @@ export async function start({ root, me = {}, colors = null, lang = 'nl', api = n
     const box = $('.rush-toasts'), d = document.createElement('div');
     d.className = `rt ${kind}`; d.innerHTML = text;
     box.appendChild(d);
-    while (box.children.length > 3) box.firstChild.remove();
+    while (box.children.length > 2) box.firstChild.remove();
     // long remarks stay longer, so they can be read
-    const ms = kind === 'fortune' ? Math.min(5200, 1900 + d.textContent.length * 35) : 1900;
+    const ms = kind === 'fortune' ? Math.min(8000, 3500 + d.textContent.length * 50) : 3000;
     setTimeout(() => d.classList.add('out'), ms);
     setTimeout(() => d.remove(), ms + 500);
   }
@@ -566,7 +566,7 @@ export async function start({ root, me = {}, colors = null, lang = 'nl', api = n
   function newRun() {
     const tutorial = !save.tutorial;
     run = createRun({ tutorial, levels: save.up, mult: save.mult, trays: save.trays });
-    remarkT = 14 + Math.random() * 10;
+    remarkT = 25 + Math.random() * 15;
     run.bonus = 0; lessonsDone = new Set(); tutorialNoted = false; missionsHit = new Set(save.done); slow = 1;
     zoneShown = run.zone.k;
     view.attach(run);
@@ -871,7 +871,8 @@ export async function start({ root, me = {}, colors = null, lang = 'nl', api = n
       audio.tick(dt);
       if (run.state === 'run' && !run.inTutorial()) {
         remarkT -= dt;
-        if (remarkT <= 0) { remarkT = 40 + Math.random() * 30; toast(`💬 ${remark()}`, 'fortune'); }
+        // never on top of another remark: wait until it is gone
+        if (remarkT <= 0 && !el.querySelector('.rt.fortune')) { remarkT = 60 + Math.random() * 40; toast(`💬 ${remark()}`, 'fortune'); }
       }
       view.frame(dt * slow);
       if (run.state === 'over') { overT += dt; if (overT > 0.4) { overT = 0; gameOver(); } }
