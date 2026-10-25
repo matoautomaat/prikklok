@@ -175,9 +175,13 @@ const SERVER_NL = {
   'There is already a quiz for that week.': 'Er is al een quiz voor die week.',
   "A question that was already answered can't be removed.": 'Een vraag waarop al geantwoord is, kan niet meer weg.',
   "People already answered this quiz, so it can't be removed.": 'Er is al op deze quiz geantwoord, dus hij kan niet meer weg.',
+  "That game save can't be stored.": 'Je spelvoortgang kon niet bewaard worden.',
+  "That run doesn't add up.": 'Die run klopt niet.',
 };
 // What staff can run into, for who uses the app in Chinese.
 const SERVER_ZH = {
+  "That game save can't be stored.": '游戏进度无法保存。',
+  "That run doesn't add up.": '这次跑步的数据不对。',
   'Add a short reason so your manager knows what happened.': '请写个简短的原因，让负责人知道发生了什么。',
   'Check-out must be after check-in.': '下班时间必须在上班时间之后。',
   'Enter a check-in time.': '请填写上班时间。',
@@ -233,6 +237,8 @@ const SERVER_ZH_PATTERNS = [
 ];
 // And for who uses the app in Hungarian.
 const SERVER_HU = {
+  "That game save can't be stored.": 'A játékállást nem sikerült menteni.',
+  "That run doesn't add up.": 'Ez a futás nem stimmel.',
   'Add a short reason so your manager knows what happened.': 'Írj egy rövid indokot, hogy a vezetőd tudja, mi történt.',
   'Check-out must be after check-in.': 'A kicsekkolásnak a becsekkolás után kell lennie.',
   'Enter a check-in time.': 'Add meg a becsekkolás idejét.',
@@ -633,6 +639,7 @@ async function busy(btn, fn) {
 const quiet = p => p.catch(() => {});
 
 const ICONS = {
+  rush: '<svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"><circle cx="15" cy="4.5" r="2"/><path d="M5 11l4-3.5 4.5 1.5 2 4 3.5 1"/><path d="M11.5 9l-2 5 4 2.5-1 5"/><path d="M9.5 14l-2.5 3.5H3.5"/></svg>',
   clock: '<svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round"><circle cx="12" cy="12" r="9"/><path d="M12 7v5l3 2"/></svg>',
   shifts: '<svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round"><rect x="3" y="5" width="18" height="16" rx="2"/><path d="M3 10h18M8 3v4M16 3v4"/></svg>',
   hours: '<svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round"><path d="M6 3h12v18H6z"/><path d="M9 8h6M9 12h6M9 16h3"/></svg>',
@@ -1300,7 +1307,7 @@ const Updates = {
   },
   apply() {
     const typing = document.activeElement && document.activeElement.matches('input, textarea, select');
-    if (!this.pending || $('#modal').open || typing) return false;
+    if (!this.pending || $('#modal').open || typing || $('#rush-root')) return false;
     location.reload();
     return true;
   },
@@ -1314,6 +1321,8 @@ document.addEventListener('visibilitychange', () => {
 function route() {
   if (Updates.apply()) return;
   if (!S.me) return;
+  if (location.hash === '#rush' && playsRush()) { openRush(); return; }
+  if (Rush.game) Rush.game.close(); // the back button while playing
   const tabs = tabsFor().map(t => t[0]);
   let v = location.hash.replace('#', ''), tab = v;
   const member = v.match(/^team\/([0-9a-f-]{36})$/);
@@ -1350,7 +1359,7 @@ window.addEventListener('hashchange', route);
 
 async function renderView() {
   const el = $('#view');
-  if (!el) return;
+  if (!el || $('#rush-root')) return;
   const seq = ++S.renderSeq;
   const key = S.view === 'member' ? `member/${S.memberId}` : S.view === 'quiz' ? `quiz/${S.quizId || ''}${S.quizEdit ? '/edit' : ''}` : S.view;
   if (!el.dataset.view || el.dataset.key !== key) {
@@ -1564,6 +1573,7 @@ async function viewStart(el, current) {
       </section>
       <div style="display:flex;flex-direction:column;gap:18px;min-width:0">
         ${quizCard(quiz)}
+        ${rushButton()}
         ${avatarCta()}
         <div class="stats">
           <div class="stat"><span class="v">${fmt.dur(planned)}</span><span class="k">${T('Ingepland deze week', '本周排班', 'Beosztva ezen a héten')}</span></div>
@@ -1598,6 +1608,7 @@ async function viewClock(el, current) {
       ${punchCard()}
       <div style="display:flex;flex-direction:column;gap:18px;min-width:0">
         ${quizCard(quiz)}
+        ${rushButton()}
         ${avatarCta()}
         <div class="stats stats-3">
           <div class="stat"><span class="v">${fmt.dur(weekMins)}</span><span class="k">${T('Gewerkt deze week', '本周工时', 'Ledolgozva ezen a héten')}</span></div>
@@ -4072,6 +4083,61 @@ async function viewProfile(el, current) {
   });
 }
 
+/* -------------------------------------------------- Chen's Garden Rush */
+
+// The arcade game (web/rush): a waiter runs through an endless Chen's Garden
+// away from the chef. It opens full screen at #rush, with the player's own
+// avatar; progress and best runs are kept per person (rush_* functions), so
+// colleagues can see each other's best on the game's leaderboard.
+const playsRush = () => !!S.me && !isViewer();
+const Rush = { game: null, opening: false };
+const rushBest = () => { try { return (JSON.parse(localStorage.getItem(`rush.save.${S.me.id}`)) || {}).best || 0; } catch { return 0; } };
+function rushButton() {
+  if (!playsRush()) return '';
+  const best = rushBest();
+  return `<button type="button" class="rank-game" data-go="rush">
+      <span class="remind-icon" aria-hidden="true">${ICONS.rush}</span>
+      <span class="rank-quiz-text"><strong>Chen's Garden Rush</strong><span>${best
+        ? T(`Jouw beste score: ${best.toLocaleString(loc())}. Kan het beter?`, `你的最高分：${best.toLocaleString(loc())}。还能更高吗？`, `A legjobb pontszámod: ${best.toLocaleString(loc())}. Megy ez jobban is?`)
+        : T('Ren door het restaurant, weg van de chef!', '在餐厅里奔跑，别被大厨抓住！', 'Fuss végig az éttermen, el a séf elől!')}</span></span>
+      <span class="pill accent">${T('Spelen', '开始', 'Játék')}</span></button>`;
+}
+async function openRush() {
+  if (Rush.game || Rush.opening) return;
+  Rush.opening = true;
+  stopPolling();
+  const back = S.view || tabsFor()[0][0];
+  const root = document.createElement('div');
+  root.id = 'rush-root';
+  document.body.appendChild(root);
+  document.documentElement.classList.add('rush-open');
+  const done = () => {
+    Rush.game = null;
+    root.remove();
+    document.documentElement.classList.remove('rush-open');
+    if (location.hash === '#rush') location.hash = back;
+  };
+  try {
+    const mod = await import('./rush/main.js');
+    Rush.game = await mod.start({
+      root, lang: ui(), colors: Avatar.COLORS,
+      me: { id: S.me.id, name: S.me.name, avatar: S.me.avatar },
+      pic: p => personPic(p),
+      api: {
+        state: () => rpc('rush_state'),
+        save: save => rpc('rush_save', { p_save: save }),
+        finish: (run, save) => rpc('rush_finish', { p_run: run, p_save: save }),
+      },
+      onExit: done,
+    });
+  } catch (e) {
+    toast(T('Het spel kon niet starten. Probeer het later opnieuw.', '游戏无法启动，请稍后再试。', 'A játék nem tudott elindulni. Próbáld újra később.'), 'error');
+    done();
+  } finally {
+    Rush.opening = false;
+  }
+}
+
 /* ------------------------------------------------------------- ranking */
 
 // The quiz of the week, as a button above the ranking: how far you are, or
@@ -4132,6 +4198,7 @@ async function viewRanking(el, current) {
       </div>
     </div>
     ${rankQuizButton(quiz)}
+    ${rushButton()}
     ${me ? `<p class="hint info">${T(`Jij staat <strong>${me.rank}e</strong> van ${ranked.length}${mode === 'month' ? ` in ${month}` : ''}, met ${me[key]} XP.`, `你${mode === 'month' ? `在${month}` : ''}排第 <strong>${me.rank}</strong>（共 ${ranked.length} 人），有 ${me[key]} XP。`, `${ranked.length} ember közül <strong>${me.rank}.</strong> vagy${mode === 'month' ? ` ${month} hónapban` : ''}, ${me[key]} XP-vel.`)}${above && above[key] > me[key] ? T(` Nog ${above[key] - me[key] + 1} XP om ${esc(above.name)} in te halen.`, `再得 ${above[key] - me[key] + 1} XP 就能超过 ${esc(above.name)}。`, ` Még ${above[key] - me[key] + 1} XP kell, hogy megelőzd őt: ${esc(above.name)}.`) : ''}</p>` : ''}
     ${anyXp ? `<section class="card podium" aria-label="${T('Top drie', '前三名', 'Első három')}">${spot(ranked[1], 2)}${spot(ranked[0], 1)}${spot(ranked[2], 3)}</section>`
       : `<p class="empty">${mode === 'month' ? T(`Nog niemand heeft XP in ${month}. Wie als eerste werkt, staat bovenaan.`, `${month}还没有人有 XP。先上班的人排第一。`, `${month} hónapban még senkinek nincs XP-je. Aki elsőként dolgozik, az lesz az élen.`) : T('Nog niemand heeft XP. Wie als eerste werkt, staat bovenaan.', '还没有人有 XP。先上班的人排第一。', 'Még senkinek nincs XP-je. Aki elsőként dolgozik, az lesz az élen.')}</p>`}

@@ -38,3 +38,7 @@
   Cache-Control: public, max-age=604800
 /vendor/leaflet/*
   Cache-Control: public, max-age=604800
+/rush/*
+  Cache-Control: no-cache
+/vendor/three-0.169.0/*
+  Cache-Control: public, max-age=2592000, immutable

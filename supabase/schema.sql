@@ -3815,3 +3815,109 @@ begin
 end $$;
 
 revoke all on all functions in schema app_private from public, anon, authenticated;
+
+-- ------------------------------------------------------ Chen's Garden Rush
+-- The game runs in the browser (web/rush). Per person the database keeps the
+-- progress (coins, shop, missions, settings: one JSON object the game writes)
+-- and the best run, for the leaderboard with colleagues.
+create table public.rush_players (
+  staff_id      uuid primary key references public.staff (id) on delete cascade,
+  save          jsonb not null default '{}'::jsonb check (jsonb_typeof(save) = 'object' and pg_column_size(save) <= 16000),
+  best          int not null default 0 check (best >= 0),
+  best_distance int not null default 0 check (best_distance >= 0),
+  best_at       timestamptz,
+  runs          int not null default 0 check (runs >= 0),
+  updated_at    timestamptz not null default now()
+);
+alter table public.rush_players enable row level security;
+revoke all on public.rush_players from anon, authenticated;
+
+-- A whole number from the game's JSON, within limits (null when it isn't one).
+create function app_private.rush_int(p jsonb, p_key text, p_max bigint) returns bigint
+language plpgsql immutable set search_path = public as $$
+declare v numeric;
+begin
+  v := (p ->> p_key)::numeric;
+  return case when v >= 0 and v <= p_max then floor(v)::bigint end;
+exception when others then
+  return null;
+end $$;
+
+-- A save from the game: an object with its time ('at', ms), not too big.
+create function app_private.rush_check_save(p_save jsonb) returns bigint
+language plpgsql immutable set search_path = public as $$
+declare v_at bigint;
+begin
+  if p_save is null or jsonb_typeof(p_save) <> 'object' or pg_column_size(p_save) > 16000 then
+    raise exception using message = 'That game save can''t be stored.', errcode = 'P0001';
+  end if;
+  v_at := app_private.rush_int(p_save, 'at', 9999999999999);
+  if v_at is null then
+    raise exception using message = 'That game save can''t be stored.', errcode = 'P0001';
+  end if;
+  return v_at;
+end $$;
+
+-- Everyone active who played, best run first; ties share a place.
+create function app_private.rush_board(p_me uuid) returns json
+language sql stable set search_path = public as $$
+  select coalesce(json_agg(json_build_object('id', b.id, 'name', b.name, 'avatar', b.avatar, 'best', b.best,
+      'distance', b.best_distance, 'rank', b.rk, 'me', b.id = p_me) order by b.rk, lower(b.name)), '[]'::json)
+    from (select st.id, st.name, st.avatar, r.best, r.best_distance, rank() over (order by r.best desc) as rk
+            from public.rush_players r
+            join public.staff st on st.id = r.staff_id
+           where r.best > 0 and st.active and not st.view_only) b
+$$;
+
+revoke all on all functions in schema app_private from public, anon, authenticated;
+
+-- Your saved game and the leaderboard.
+create function public.rush_state(p_token text) returns json
+language plpgsql stable security definer set search_path = public, extensions as $$
+declare v public.staff; r public.rush_players;
+begin
+  v := app_private.current_staff(p_token);
+  select * into r from public.rush_players where staff_id = v.id;
+  return json_build_object('save', r.save, 'best', coalesce(r.best, 0), 'runs', coalesce(r.runs, 0), 'board', app_private.rush_board(v.id));
+end $$;
+
+-- Stores the game's progress (after a purchase or a change in the settings).
+-- The newest save wins, so an older phone can't undo a newer one.
+create function public.rush_save(p_token text, p_save jsonb) returns json
+language plpgsql security definer set search_path = public, extensions as $$
+declare v public.staff; v_at bigint;
+begin
+  v := app_private.current_staff(p_token);
+  v_at := app_private.rush_check_save(p_save);
+  insert into public.rush_players as r (staff_id, save) values (v.id, p_save)
+  on conflict (staff_id) do update set save = excluded.save, updated_at = now()
+   where coalesce(app_private.rush_int(r.save, 'at', 9999999999999), 0) <= v_at;
+  return json_build_object('ok', true);
+end $$;
+
+-- A finished run: counts it, keeps the best score and stores the progress.
+-- The score is distance × multiplier, and the multiplier is at most 10 (20
+-- with Double Tips), so a score above that doesn't count.
+create function public.rush_finish(p_token text, p_run jsonb, p_save jsonb) returns json
+language plpgsql security definer set search_path = public, extensions as $$
+declare v public.staff; v_at bigint; v_score bigint; v_dist bigint; v_old int;
+begin
+  v := app_private.current_staff(p_token);
+  v_at := app_private.rush_check_save(p_save);
+  v_score := app_private.rush_int(p_run, 'score', 2000000000);
+  v_dist := app_private.rush_int(p_run, 'dist', 100000000);
+  if v_score is null or v_dist is null or v_score > v_dist * 20 + 50 then
+    raise exception using message = 'That run doesn''t add up.', errcode = 'P0001';
+  end if;
+  select best into v_old from public.rush_players where staff_id = v.id;
+  insert into public.rush_players as r (staff_id, save, best, best_distance, best_at, runs)
+  values (v.id, p_save, v_score, v_dist, case when v_score > 0 then now() end, 1)
+  on conflict (staff_id) do update set
+    best = greatest(r.best, excluded.best),
+    best_distance = greatest(r.best_distance, excluded.best_distance),
+    best_at = case when excluded.best > r.best then now() else r.best_at end,
+    runs = r.runs + 1,
+    save = case when coalesce(app_private.rush_int(r.save, 'at', 9999999999999), 0) <= v_at then excluded.save else r.save end,
+    updated_at = now();
+  return json_build_object('ok', true, 'record', v_score > coalesce(v_old, 0), 'board', app_private.rush_board(v.id));
+end $$;
