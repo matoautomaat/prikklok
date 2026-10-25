@@ -672,7 +672,8 @@ export async function start({ root, me = {}, colors = null, lang = 'nl', api = n
         if (e.p === 'cookie') toast(`🥠 “${remark()}” <b>+${sp.coins}</b>`, 'fortune');
         else if (e.p === 'dumpling') toast(`🥟 ${L3(sp.name)} <b>+${sp.coins}</b> ${coinIcon}`);
         // takeaway boxes: just the coins going up (the sound and sparkle say enough)
-      } else if (e.type === 'trayBreak') { toast(t('trayBroke'), 'warn'); flash('rgba(255,255,255,.55)'); }
+      } else if (e.type === 'power') toast(`<span class="pw-dot" style="--c:${POWER_COLORS[e.p]}"></span>${L3(POWER_NAMES[e.p])}`, 'power');
+      else if (e.type === 'trayBreak') { toast(t('trayBroke'), 'warn'); flash('rgba(255,255,255,.55)'); }
       else if (e.type === 'trayNo' && run.trays <= 0 && !run.p.fly) toast(t('trayNone'));
       else if (e.type === 'cartWarn') hudWarn('cart');
       else if (e.type === 'crossWarn') hudWarn('cross');
