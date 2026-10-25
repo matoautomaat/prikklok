@@ -57,7 +57,7 @@ export const powerTime = (k, level = 0) => POWER[k].T + POWER[k].up * Math.max(0
 // The restaurant for the first ASIA_AT metres, then a journey through Asia.
 export const ZONES = ['dining', 'kitchen', 'storage', 'garden', 'takeaway'];
 export const COUNTRIES = ['japan', 'china', 'korea', 'thailand', 'vietnam', 'india', 'nepal', 'indonesia'];
-export const ASIA_AT = 8000;
+export const ASIA_AT = 3000;
 export const outdoors = k => COUNTRIES.includes(k);
 
 // A small seeded random generator: the same seed builds the same route.
