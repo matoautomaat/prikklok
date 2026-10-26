@@ -1163,3 +1163,12 @@ button.rank-game { margin-top: 10px; background: linear-gradient(120deg, #6E141A
 .rank-game .pill { background: #FFE08A; color: #3D2618; }
 .grid-2 button.rank-game { margin-top: 0; }
 html.rush-open, html.rush-open body { overflow: hidden; overscroll-behavior: none; }
+
+/* the screen after clocking in or out */
+.punch-done { text-align: center; display: flex; flex-direction: column; align-items: center; gap: 8px; }
+.punch-done .form-actions { justify-content: center; width: 100%; }
+.punch-done .form-actions .primary { min-width: 160px; }
+.punch-check { width: 84px; height: 84px; border-radius: 50%; display: grid; place-items: center; font-size: 44px; font-weight: 800; color: #FFFFFF; background: var(--good, #2E8B57); animation: punch-pop .35s ease-out; }
+.punch-done.is-out .punch-check { background: var(--accent); }
+.punch-time { font: 700 2.2rem/1 var(--f-mono); margin: 0; }
+@keyframes punch-pop { from { transform: scale(.4); opacity: 0; } }

@@ -1458,24 +1458,50 @@ function punchCard({ compact = false } = {}) {
 }
 
 function bindPunch(root, after) {
+  // first a confirmation, then a screen that shows it worked
   const inBtn = $('[data-act=clock-in]', root);
-  if (inBtn) inBtn.addEventListener('click', () => busy(inBtn, async () => {
-    await rpc('clock_in');
-    await refreshMe();
-    toast(T(`Ingeklokt om ${fmt.time(now())}`, `${fmt.time(now())} 上班打卡成功`, `Becsekkolva: ${fmt.time(now())}`));
-    after();
-  }).catch(() => {}));
+  if (inBtn) inBtn.addEventListener('click', async () => {
+    if (!await modal.confirm({ title: T('Nu inklokken?', '现在上班打卡？', 'Becsekkolsz most?'),
+      body: T(`Je begint te werken om <strong>${fmt.time(now())}</strong>.`, `你将在 <strong>${fmt.time(now())}</strong> 开始工作。`, `Ekkor kezdesz dolgozni: <strong>${fmt.time(now())}</strong>.`),
+      ok: T('Ja, inklokken', '是，上班打卡', 'Igen, becsekkolok') })) return;
+    busy(inBtn, async () => {
+      await rpc('clock_in');
+      await refreshMe();
+      after();
+      punchDone(true);
+    }).catch(() => {});
+  });
   const outBtn = $('[data-act=clock-out]', root);
-  if (outBtn) outBtn.addEventListener('click', () => busy(outBtn, async () => {
-    await rpc('clock_out', { p_note: ($('#out-note', root) || {}).value || '' });
-    await refreshMe();
-    toast(T(`Uitgeklokt om ${fmt.time(now())}`, `${fmt.time(now())} 下班打卡成功`, `Kicsekkolva: ${fmt.time(now())}`));
-    if (canClock()) after(); else renderShell(); // the clock was only there to clock out
-  }).catch(() => {}));
+  if (outBtn) outBtn.addEventListener('click', async () => {
+    if (!await modal.confirm({ title: T('Nu uitklokken?', '现在下班打卡？', 'Kicsekkolsz most?'),
+      body: T(`Je stopt met werken om <strong>${fmt.time(now())}</strong>.`, `你将在 <strong>${fmt.time(now())}</strong> 结束工作。`, `Ekkor fejezed be a munkát: <strong>${fmt.time(now())}</strong>.`),
+      ok: T('Ja, uitklokken', '是，下班打卡', 'Igen, kicsekkolok') })) return;
+    const since = S.openEntry && S.openEntry.clock_in;
+    busy(outBtn, async () => {
+      await rpc('clock_out', { p_note: ($('#out-note', root) || {}).value || '' });
+      await refreshMe();
+      if (canClock()) after(); else renderShell(); // the clock was only there to clock out
+      punchDone(false, since);
+    }).catch(() => {});
+  });
   const forgot = $('[data-act=forgot-out]', root);
   if (forgot) forgot.addEventListener('click', () => forgotCheckout(after));
   const missed = $('[data-act=forgot-in]', root);
   if (missed) missed.addEventListener('click', () => timeFixModal(null));
+}
+
+// The screen after clocking in or out: a big check, the time, a friendly word.
+function punchDone(isIn, since) {
+  const t = now(), mins = since ? minutesBetween(since, t) : 0;
+  modal.open(`
+    <div class="punch-done ${isIn ? 'is-in' : 'is-out'}">
+      <div class="punch-check" aria-hidden="true">✓</div>
+      <h2 id="modal-title">${isIn ? T('Je bent ingeklokt', '上班打卡成功', 'Becsekkoltál') : T('Je bent uitgeklokt', '下班打卡成功', 'Kicsekkoltál')}</h2>
+      <p class="punch-time">${fmt.time(t)}</p>
+      <p>${isIn ? T(`Fijne shift, ${esc(S.me.name.split(' ')[0])}!`, `${esc(S.me.name.split(' ')[0])}，工作顺利！`, `Jó műszakot, ${esc(S.me.name.split(' ')[0])}!`)
+        : `${since ? T(`Je werkte ${fmt.dur(mins)}. `, `你工作了 ${fmt.dur(mins)}。`, `${fmt.dur(mins)} dolgoztál. `) : ''}${T(`Bedankt en tot de volgende keer, ${esc(S.me.name.split(' ')[0])}!`, `辛苦了，${esc(S.me.name.split(' ')[0])}，下次见！`, `Köszönjük, ${esc(S.me.name.split(' ')[0])}, viszlát legközelebb!`)}`}</p>
+      <div class="form-actions"><button type="button" class="primary" data-close>${T('OK', '好的', 'OK')}</button></div>
+    </div>`);
 }
 
 function forgotCheckout(after) {
