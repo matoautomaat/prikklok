@@ -1279,7 +1279,7 @@ function updateBadges() {
 const VIEWS = {
   clock: (el, current) => isDriver() ? viewDriver(el, current) : viewClock(el, current), shifts: viewShifts, hours: viewHours, profile: viewProfile, ranking: viewRanking,
   today: viewToday, schedule: viewSchedule, monthly: viewMonthly, requests: viewRequests, team: viewTeam, member: viewMember,
-  family: viewFamily, famstaff: viewFamilyStaff, contracts: viewContracts, routes: viewRoutes,
+  family: viewFamily, famstaff: viewFamilyStaff, docs: viewDocs, contracts: viewContracts, routes: viewRoutes,
   quiz: (el, current) => isManager() ? (S.quizEdit ? viewQuizEdit(el, current) : S.quizId ? viewQuizResults(el, current) : viewQuizAdmin(el, current))
     : S.quizId ? viewPastQuiz(el, current) : viewQuiz(el, current),
 };
@@ -1343,7 +1343,7 @@ function route() {
     S.routeDay = rt[2] ? new Date(rt[2] + 'T00:00') : rt[1] ? null : S.routeDay;
   }
   if (member && isManager()) { S.memberId = member[1]; v = 'member'; tab = 'team'; }
-  else if ((v === 'family' || v === 'famstaff') && isManager()) tab = 'team';
+  else if ((v === 'family' || v === 'famstaff' || v === 'docs') && isManager()) tab = 'team';
   else if (((v === 'contracts' || v === 'routes') && isManager()) || quiz) { /* set above */ }
   else if (!tabs.includes(v)) { v = tabs[0]; tab = v; }
   if (S.view !== v) S.month = null;
@@ -4972,6 +4972,50 @@ const roleOptions = sel => Object.entries({ staff: 'Medewerker', manager: 'Veran
 const payOptions = sel => `<option value="">Niet ingevuld</option>${Object.entries(PAY)
   .map(([k, [l]]) => `<option value="${k}" ${k === sel ? 'selected' : ''}>${l}</option>`).join('')}`;
 
+/* ------------------------------------------------------------ documents */
+
+// Managers: everyone's contracts and payslips on one page, per person.
+async function viewDocs(el, current) {
+  const list = await rpc('mgr_documents');
+  if (!current()) return;
+  const SHOW = 6;
+  const slipRow = x => `<div class="row"><div class="row-main"><span class="row-title">${fmt.month(new Date(x.month + 'T00:00'))}</span>
+      <span class="row-sub">${x.net_pay != null ? `Netto ${fmt.money(x.net_pay)}` : ''}${x.gross_pay != null ? ` · bruto ${fmt.money(x.gross_pay)}` : ''}</span></div>
+      <div class="row-actions"><button class="sm" data-slip-get="${x.id}">Downloaden</button></div></div>`;
+  const card = p => {
+    const now = new Date().toISOString().slice(0, 10);
+    const ended = p.contracts.length && p.contracts.every(c => c.ends_on && c.ends_on < now);
+    return `<section class="card doc-person" data-name="${esc(p.name.toLowerCase())}">
+      <div class="card-head"><h2>${esc(p.name)}</h2><span class="toolbar">
+        ${p.active ? '' : '<span class="pill">Inactief</span>'}
+        ${p.contracts.length ? (ended ? '<span class="pill warn">Contract afgelopen</span>' : '') : '<span class="pill warn">Geen contract</span>'}
+        <span class="pill">${p.payslips.length} ${p.payslips.length === 1 ? 'loonfiche' : 'loonfiches'}</span>
+        <button class="sm" data-open="${p.id}">Openen</button></span></div>
+      <div class="grid-2" style="margin-top:8px">
+        <div><h3 class="small muted">Contracten</h3>
+          <div class="rows">${p.contracts.length ? p.contracts.map(c => `<div class="row"><div class="row-main"><span class="row-title">${esc(c.title)}</span>
+            <span class="row-sub">${contractPeriod(c)}</span></div>
+            <div class="row-actions"><button class="sm" data-contract-get="${c.id}">Downloaden</button></div></div>`).join('') : '<p class="muted small">Nog geen contract.</p>'}</div></div>
+        <div><h3 class="small muted">Loonfiches</h3>
+          <div class="rows">${p.payslips.length ? p.payslips.slice(0, SHOW).map(slipRow).join('') : '<p class="muted small">Nog geen loonfiches.</p>'}</div>
+          ${p.payslips.length > SHOW ? `<details><summary class="small">Alle ${p.payslips.length} loonfiches tonen</summary><div class="rows">${p.payslips.slice(SHOW).map(slipRow).join('')}</div></details>` : ''}</div>
+      </div></section>`;
+  };
+  el.innerHTML = `
+    <div class="view-head"><div><h1>Loonfiches en contracten</h1><p>Per persoon alle contracten en loonfiches, om te downloaden.</p></div>
+      <button class="sm" id="back">Terug naar Team</button></div>
+    <div class="field" style="max-width:320px;margin-bottom:12px"><input type="search" id="doc-q" placeholder="Zoek een naam"></div>
+    ${list.length ? list.map(card).join('') : '<section class="card"><p class="muted">Nog niemand in het team.</p></section>'}`;
+  $('#back', el).addEventListener('click', () => { location.hash = 'team'; });
+  $('#doc-q', el).addEventListener('input', e => {
+    const q = e.target.value.trim().toLowerCase();
+    $$('.doc-person', el).forEach(c => { c.hidden = !!q && !c.dataset.name.includes(q); });
+  });
+  $$('[data-open]', el).forEach(b => b.addEventListener('click', () => { location.hash = `team/${b.dataset.open}`; }));
+  $$('[data-slip-get]', el).forEach(b => b.addEventListener('click', () => downloadPayslip(b.dataset.slipGet, b)));
+  $$('[data-contract-get]', el).forEach(b => b.addEventListener('click', () => downloadContract(b.dataset.contractGet, b)));
+}
+
 async function viewTeam(el, current) {
   const [staff, off, contact] = await Promise.all([loadStaff(true), rpc('mgr_officient_status'), rpc('shift_contact')]);
   if (!current()) return;
@@ -4981,7 +5025,7 @@ async function viewTeam(el, current) {
   const cutLabel = h => h === 0 ? 'De shift begint' : h === 168 ? '1 week ervoor' : `${h} uur ervoor`;
   el.innerHTML = `
     <div class="view-head"><div><h1>Team</h1><p>Voeg mensen toe, reset pincodes en stel de app in.</p></div>
-      <button class="sm" id="see-family">Familie-overzicht bekijken</button></div>
+      <span class="toolbar"><button class="sm primary" id="see-docs">Loonfiches en contracten</button><button class="sm" id="see-family">Familie-overzicht bekijken</button></span></div>
     <section class="card">
       <h2>Delen met je personeel</h2>
       <p class="muted" style="margin-top:6px">Stuur deze link. Iedereen meldt zich aan met de eigen naam en de pincode die je hieronder instelt.</p>
@@ -5076,6 +5120,7 @@ async function viewTeam(el, current) {
   });
   $$('[data-person]', el).forEach(b => b.addEventListener('click', () => { location.hash = `team/${b.dataset.person}`; }));
   $('#see-family', el).addEventListener('click', () => { location.hash = 'family'; });
+  $('#see-docs', el).addEventListener('click', () => { location.hash = 'docs'; });
   // a family account needs no wage, contract or employee number
   const apRole = $('#ap-role', ap);
   apRole.addEventListener('change', () => {

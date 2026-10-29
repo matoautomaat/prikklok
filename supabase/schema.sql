@@ -3952,3 +3952,20 @@ begin
     updated_at = now();
   return json_build_object('ok', true, 'record', v_score > coalesce(v_old, 0), 'board', app_private.rush_board(v.id));
 end $$;
+
+-- Documenten (managers): every team member with their contracts and payslips.
+create function public.mgr_documents(p_token text) returns json
+language plpgsql stable security definer set search_path = public, extensions as $$
+declare v public.staff;
+begin
+  v := app_private.current_manager(p_token);
+  return coalesce((select json_agg(json_build_object(
+      'id', s.id, 'name', s.name, 'active', s.active, 'contract_type', s.contract_type,
+      'contracts', app_private.contracts_json(s.id),
+      'payslips', coalesce((select json_agg(json_build_object(
+          'id', p.id, 'month', p.month, 'file_name', p.file_name,
+          'gross_pay', p.gross_pay, 'net_pay', p.net_pay) order by p.month desc)
+        from public.payslips p where p.staff_id = s.id and p.archived_at is null), '[]'::json))
+      order by not s.active, s.name)
+    from public.staff s where not s.view_only), '[]'::json);
+end $$;
