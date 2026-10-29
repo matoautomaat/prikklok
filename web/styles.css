@@ -1172,3 +1172,10 @@ html.rush-open, html.rush-open body { overflow: hidden; overscroll-behavior: non
 .punch-done.is-out .punch-check { background: var(--accent); }
 .punch-time { font: 700 2.2rem/1 var(--f-mono); margin: 0; }
 @keyframes punch-pop { from { transform: scale(.4); opacity: 0; } }
+
+/* birthday popup */
+.bday-pop { text-align: center; }
+.bday-pop .bday-cake { font-size: 56px; line-height: 1; margin: 4px 0 10px; animation: bday-bounce 1.2s ease-in-out infinite; }
+.bday-pop .form-actions { justify-content: center; }
+@keyframes bday-bounce { 0%, 100% { transform: translateY(0); } 50% { transform: translateY(-6px); } }
+@media (prefers-reduced-motion: reduce) { .bday-pop .bday-cake { animation: none; } }

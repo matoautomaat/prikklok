@@ -835,6 +835,32 @@ function titlePicker(current, level, after) {
   if (c) c.addEventListener('click', () => save(null, c));
 }
 
+/* ----------------------------------------------------- birthday popup */
+
+// On a colleague's birthday everyone sees a popup, once a day per device;
+// the birthday person gets their own congratulations.
+async function maybeBirthday() {
+  if (!S.me || $('#modal').open || Date.now() - (S.bdayAt || 0) < 5 * 60000) return;
+  S.bdayAt = Date.now();
+  let list;
+  try { list = await rpc('birthdays_today'); } catch { return; }
+  if (!S.me || $('#modal').open || !list.length) return;
+  const key = `prikklok.bday.${S.me.id}`, today = toDateInput(now());
+  if (store.get(key) === today) return;
+  store.set(key, today);
+  const mine = list.some(x => x.me), others = list.filter(x => !x.me).map(x => esc(x.name));
+  const names = others.length > 1 ? `${others.slice(0, -1).join(', ')} ${T('en', '和', 'és')} ${others[others.length - 1]}` : others[0];
+  modal.open(`
+    <div class="bday-pop">
+      <div class="bday-cake" aria-hidden="true">🎂</div>
+      <h2 id="modal-title">${mine ? T('Gelukkige verjaardag!', '生日快乐！', 'Boldog születésnapot!') : T(`${names} ${others.length > 1 ? 'verjaren' : 'verjaart'} vandaag!`, `今天是${names}的生日！`, `Ma ${names} születésnapja!`)}</h2>
+      <p>${mine ? T('Het hele team van Chen\'s Garden wenst je een fantastische dag. 🎉', 'Chen\'s Garden 全体同事祝你度过美好的一天！🎉', 'A Chen\'s Garden egész csapata csodás napot kíván! 🎉')
+        : T('Vergeet niet om proficiat te wensen! 🎉', '别忘了说一声生日快乐！🎉', 'Ne felejts el boldog születésnapot kívánni! 🎉')}</p>
+      ${mine && others.length ? `<p class="muted small">${T(`Ook ${names} verjaart vandaag.`, `${names}今天也过生日。`, `Ma ${names} is ünnepel.`)}</p>` : ''}
+      <div class="form-actions"><button type="button" class="primary" data-close>${mine ? T('Dank je!', '谢谢！', 'Köszönöm!') : T('Proficiat!', '生日快乐！', 'Boldog szülinapot!')}</button></div>
+    </div>`, null, { sheet: true });
+}
+
 /* ------------------------------------------------- open shift reminder */
 
 // Who picks shifts (not fixed workers, drivers or managers) hears about open
@@ -1369,7 +1395,7 @@ async function renderView() {
   }
   try {
     await VIEWS[S.view](el, () => seq === S.renderSeq);
-    if (seq === S.renderSeq) { showLevelUp(); maybeShiftReminder(); maybeQuizReminder(); maybeInstallGuide(); }
+    if (seq === S.renderSeq) { showLevelUp(); maybeBirthday().then(maybeShiftReminder); maybeQuizReminder(); maybeInstallGuide(); }
   } catch (e) {
     if (e.code === 'auth') return;
     if (seq === S.renderSeq) el.innerHTML = `<div class="card"><h2>${T('Deze pagina kon niet geladen worden', '这个页面无法加载', 'Ezt az oldalt nem sikerült betölteni')}</h2><p class="muted">${esc(e.message)}</p><div class="form-actions"><button class="primary" id="retry">${T('Opnieuw proberen', '重试', 'Újrapróbálás')}</button></div></div>`;

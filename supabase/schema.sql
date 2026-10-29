@@ -3969,3 +3969,17 @@ begin
       order by not s.active, s.name)
     from public.staff s where not s.view_only), '[]'::json);
 end $$;
+
+-- Whose birthday is it today: the first names, for the birthday popup (no
+-- dates or ages). 'me' marks the person asking.
+create function public.birthdays_today(p_token text) returns json
+language plpgsql stable security definer set search_path = public, extensions as $$
+declare v public.staff; v_today date;
+begin
+  v := app_private.current_staff(p_token);
+  v_today := (now() at time zone coalesce((select timezone from public.settings where id = 1), 'UTC'))::date;
+  return coalesce((select json_agg(json_build_object('name', split_part(s.name, ' ', 1), 'me', s.id = v.id) order by s.name)
+    from public.staff s
+   where s.active and (not s.view_only or s.in_ranking) and s.birth_date is not null
+     and app_private.rush_bday(s.birth_date, extract(year from v_today)::int) = v_today), '[]'::json);
+end $$;
