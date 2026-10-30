@@ -92,6 +92,10 @@ const SERVER_NL = {
   'Pick cash or registered.': 'Kies cash of ingeschreven.',
   'Say briefly why you give this shift back.': 'Zeg kort waarom je deze shift teruggeeft.',
   'Someone else already picked up this shift.': 'Iemand anders heeft deze shift al opgenomen.',
+  'This shift already has hours.': 'Deze shift heeft al uren.',
+  "This shift isn't over yet. Clock them in instead.": 'Deze shift is nog niet voorbij. Klok de persoon in.',
+  'Clocking in only works during the shift.': 'Inklokken kan alleen tijdens de shift.',
+  'Pick how to clock in.': 'Kies hoe je inklokt.',
   "Next month's planning is fixed. Ask your manager.": 'De planning van volgende maand ligt vast. Vraag het aan je verantwoordelijke.',
   'Someone on the team already has that name. Try adding a last initial.': 'Iemand in het team heeft die naam al. Voeg bijvoorbeeld de eerste letter van de achternaam toe.',
   "Start and end can't be the same time.": 'Begin en einde kunnen niet hetzelfde uur zijn.',
@@ -4297,6 +4301,48 @@ function shiftStatus(s, working, t, grace) {
   return ['warn', 'Begint nu', 'due'];
 }
 
+// A manager clocks someone in for a shift they're on now, or marks a shift
+// that showed as missed as worked after all.
+function clockShiftButton(s, code) {
+  if (code === 'notin' || code === 'due') return `<button class="sm" data-clock-shift="${s.id}">Inklokken</button>`;
+  if (code === 'missed') return `<button class="sm" data-came-shift="${s.id}">Wel gekomen</button>`;
+  return '';
+}
+
+function bindClockShift(el, shifts) {
+  $$('[data-clock-shift]', el).forEach(b => b.addEventListener('click', ev => {
+    ev.stopPropagation();
+    const s = shifts.find(x => x.id === b.dataset.clockShift);
+    modal.open(`
+      <h2 id="modal-title">${esc(s.staff_name)} inklokken</h2>
+      <p>Shift <span class="time">${fmt.range(s.starts_at, s.ends_at)}</span>. ${esc(s.staff_name)} blijft ingeklokt tot die zelf uitklokt, of tot jij uitklokt bij <b>Nu aan het werk</b>.</p>
+      <p class="form-error" id="cs-err"></p>
+      <div class="form-actions"><button type="button" data-close>Annuleren</button>
+        ${new Date(s.starts_at) < now() ? `<button type="button" data-mode="start">Vanaf ${fmt.time(s.starts_at)}</button>` : ''}
+        <button type="button" class="primary" data-mode="now">Nu (${fmt.time(now())})</button></div>`, d => {
+      $$('[data-mode]', d).forEach(m => m.addEventListener('click', () => busy(m, async () => {
+        await rpc('mgr_clock_shift', { p_shift_id: s.id, p_mode: m.dataset.mode });
+        modal.close();
+        toast(`${s.staff_name} is ingeklokt.`);
+        renderView();
+      }).catch(e => { $('#cs-err', d).textContent = e.message; })));
+    });
+  }));
+  $$('[data-came-shift]', el).forEach(b => b.addEventListener('click', async ev => {
+    ev.stopPropagation();
+    const s = shifts.find(x => x.id === b.dataset.cameShift), name = s.staff_name || s.name;
+    const ok = await modal.confirm({ title: `${name} was er wel?`,
+      body: `De shift van ${fmt.day(s.starts_at)}, ${fmt.range(s.starts_at, s.ends_at)}, telt dan als gewerkt. Andere uren pas je daarna aan in Overzicht.`,
+      ok: 'Wel gekomen' });
+    if (!ok) return;
+    busy(null, async () => {
+      await rpc('mgr_clock_shift', { p_shift_id: s.id, p_mode: 'came' });
+      toast(`De shift van ${name} telt als gewerkt.`);
+      renderView();
+    }).catch(() => {});
+  }));
+}
+
 async function viewToday(el, current) {
   const t = now(), day = startOfDay(t);
   const [ov] = await Promise.all([
@@ -4336,12 +4382,12 @@ async function viewToday(el, current) {
         <section class="card">
           <div class="card-head"><h2>Planning van vandaag</h2><button class="sm" data-go="schedule">Planning wijzigen</button></div>
           ${ov.today.length ? `<div class="rows">${ov.today.map(s => {
-            const [k, label] = shiftStatus(s, ov.working, t, grace);
+            const [k, label, code] = shiftStatus(s, ov.working, t, grace);
             return `<div class="row">
               <div class="person">${s.staff_id ? picFor(s.staff_id, s.staff_name) : '<span class="avatar open" aria-hidden="true">?</span>'}
               <div class="row-main"><span class="row-title">${s.staff_id ? esc(s.staff_name) : '<span class="muted">Open shift</span>'}</span>
               <span class="row-sub"><span class="time">${fmt.range(s.starts_at, s.ends_at)}</span>${s.label ? ' · ' + esc(s.label) : ''}</span></div></div>
-              <span class="pill ${k}">${esc(label)}</span>
+              <div class="row-actions"><span class="pill ${k}">${esc(label)}</span>${clockShiftButton(s, code)}</div>
             </div>`;
           }).join('')}</div>` : '<p class="empty">Vandaag geen shiften gepland. <button class="link" data-go="schedule">Voeg er toe</button></p>'}
         </section>
@@ -4359,6 +4405,7 @@ async function viewToday(el, current) {
       ${punchCard({ compact: true })}
     </div>`;
   bindPunch(el, renderView);
+  bindClockShift(el, ov.today);
   $$('[data-go]', el).forEach(b => b.addEventListener('click', () => { location.hash = b.dataset.go; }));
   $$('[data-route]', el).forEach(b => b.addEventListener('click', () => { location.hash = `routes/${b.dataset.route}`; }));
   $$('[data-checkout]', el).forEach(b => b.addEventListener('click', async () => {
@@ -4847,6 +4894,7 @@ async function viewMonthly(el, current) {
     ev.stopPropagation();
     entryModal(rep.entries.find(x => x.id === b.dataset.editEntry));
   }));
+  bindClockShift(el, rep.missed);
   $('#add-entry', el).addEventListener('click', () => entryModal(null, el.dataset.openPerson));
   bindSecurex(el, m, sx);
   $$('[data-goto-month]', el).forEach(tr => {
@@ -4887,7 +4935,7 @@ function personDetail(p, rep) {
   const entries = rep.entries.filter(x => x.staff_id === p.id).slice().reverse();
   const missed = rep.missed.filter(x => x.staff_id === p.id);
   return `
-    ${missed.length ? `<p class="hint bad" style="margin:8px 0">Niet gekomen: ${missed.map(s => `${fmt.day(s.starts_at)} ${fmt.range(s.starts_at, s.ends_at)}`).join(' · ')}</p>` : ''}
+    ${missed.length ? `<div class="hint bad" style="margin:8px 0">Niet gekomen: ${missed.map(s => `${fmt.day(s.starts_at)} ${fmt.range(s.starts_at, s.ends_at)} <button class="sm" data-came-shift="${s.id}">Wel gekomen</button>`).join(' · ')}</div>` : ''}
     ${entries.length ? entries.map(x => `
       <div class="entry">
         <div class="row-main">

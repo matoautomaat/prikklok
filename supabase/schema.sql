@@ -1219,6 +1219,43 @@ begin
   return json_build_object('ok', true);
 end $$;
 
+-- A manager clocks someone in for their shift: from the shift's start or now
+-- (p_mode 'start' or 'now', still checked in), or marks a shift that showed
+-- as missed as worked ('came': from start to end).
+create function public.mgr_clock_shift(p_token text, p_shift_id uuid, p_mode text) returns json
+language plpgsql security definer set search_path = public, extensions as $$
+declare v public.staff; s public.shifts; v_in timestamptz; v_out timestamptz; v_id uuid;
+begin
+  v := app_private.current_manager(p_token);
+  select * into s from public.shifts where id = p_shift_id and cancelled_at is null and staff_id is not null;
+  if not found then
+    raise exception using message = 'That shift no longer exists.', errcode = 'P0001';
+  end if;
+  if exists (select 1 from public.time_entries where shift_id = s.id and deleted_at is null) then
+    raise exception using message = 'This shift already has hours.', errcode = 'P0001';
+  end if;
+  if p_mode = 'came' then
+    if s.ends_at > now() then
+      raise exception using message = 'This shift isn''t over yet. Clock them in instead.', errcode = 'P0001';
+    end if;
+    v_in := s.starts_at; v_out := s.ends_at;
+  elsif p_mode in ('start', 'now') then
+    if s.starts_at > now() + interval '1 hour' or s.ends_at <= now() then
+      raise exception using message = 'Clocking in only works during the shift.', errcode = 'P0001';
+    end if;
+    v_in := case when p_mode = 'start' then least(s.starts_at, now()) else now() end;
+  else
+    raise exception using message = 'Pick how to clock in.', errcode = 'P0001';
+  end if;
+  insert into public.time_entries (staff_id, shift_id, clock_in, clock_out, note, edited)
+  values (s.staff_id, s.id, v_in, v_out,
+          case when p_mode = 'came' then 'Wel gekomen, bevestigd door ' else 'Ingeklokt door ' end || v.name, true)
+  returning id into v_id;
+  return json_build_object('ok', true, 'id', v_id);
+exception when unique_violation then
+  raise exception using message = 'This person is already checked in. Close that entry first.', errcode = 'P0001';
+end $$;
+
 -- Removing an entry archives it; it stops counting toward hours.
 create function public.mgr_remove_entry(p_token text, p_id uuid) returns json
 language plpgsql security definer set search_path = public, extensions as $$
