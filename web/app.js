@@ -3323,6 +3323,7 @@ async function viewContracts(el, current) {
         <span class="row-title">${miniPic(p)} ${esc(p.name)}</span>
         <span class="row-sub">${p.planned_minutes ? `${fmt.hours2(p.planned_minutes)} u gepland op ${plural(p.planned_days, 'dag', 'dagen')}` : 'Nog niets gepland'}
           ${c ? ` · contract ${fmt.short(c.starts_on)} – ${fmt.short(c.ends_on)}${c.hours != null ? `, ${num(Number(c.hours))} u` : ''}` : ''}</span>
+        ${c && c.hours != null && Math.abs(p.planned_minutes / 60 - Number(c.hours)) >= 0.01 ? `<span class="row-sub"><span class="pill warn">Contract zegt ${num(Number(c.hours))} u, gepland is ${fmt.hours2(p.planned_minutes)} u</span> Maak het contract opnieuw, en daarna de uren in Officient.</span>` : ''}
         ${p.missing.length ? `<span class="row-sub"><span class="pill warn">Ontbreekt: ${p.missing.map(k => CONTRACT_MISSING[k]).join(', ')}</span> <a href="#team/${p.staff_id}">Aanvullen</a></span>` : ''}
         ${c ? `<span class="row-sub">${pills(c)}</span>` : ''}
         ${!p.officient_id ? `<span class="row-sub"><span class="muted small">Nog niet in Officient.</span> <a href="#team/${p.staff_id}">Aanmaken bij de persoon</a></span>` : ''}
