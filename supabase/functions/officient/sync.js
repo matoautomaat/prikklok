@@ -112,7 +112,8 @@ export function makeOfficient({ db: query, fetch, readPayslip, api = OFFICIENT_A
 
   async function sync(access, job) {
     const report = { at: new Date().toISOString(), people: 0, matched: 0, linked: 0, updated: [], unmatched: [],
-                     payslips: [], already: 0, no_month: 0, read: 0, document_types: {}, more: false, skipped: 0, fields: {} };
+                     payslips: [], already: 0, no_month: 0, read: 0, document_types: {}, more: false, skipped: 0, fields: {},
+                     signed: [], unsigned: [] };
     let downloads = 0;
     // current records before archived ones, so a person's earlier employment
     // never takes the link or the details from the current one
@@ -160,8 +161,38 @@ export function makeOfficient({ db: query, fetch, readPayslip, api = OFFICIENT_A
         else if (res === 'already') report.already++;
       }
     }
+    await fetchSigned(access, report);
     await readWaiting(job, report);
     return report;
+  }
+
+  // Student contracts sent to be signed: once everyone signed in Officient,
+  // the signed PDF takes the place of the one the app wrote. Without
+  // contracts:read the rest of the night goes on as before.
+  async function fetchSigned(access, report) {
+    const waiting = await db('select app_private.contracts_awaiting_signature() as r', []);
+    for (const c of Array.isArray(waiting) ? waiting : []) {
+      try {
+        const detail = await get(access, `/contracts/${c.officient_contract_id}/detail`);
+        const signatures = (detail && detail.signatures) || [];
+        const employee = signatures.find(x => x.type === 'employee');
+        if (!employee || employee.status !== 'signed' || signatures.some(x => x.status !== 'signed')) {
+          report.unsigned.push({ name: c.name, signatures: signatures.map(x => `${x.type}: ${x.status}`) });
+          continue;
+        }
+        const pdf = await get(access, `/contracts/${c.officient_contract_id}/pdf`);
+        if (!pdf || !pdf.download_url) continue;
+        const file = await fetch(pdf.download_url);
+        if (!file.ok) continue;
+        const bytes = new Uint8Array(await file.arrayBuffer());
+        if (await db('select app_private.contract_signed($1::uuid, $2::date, $3) as r', [c.id, employee.date_signed || null, toBase64(bytes)])) {
+          report.signed.push({ name: c.name, signed_on: employee.date_signed || null });
+        }
+      } catch (e) {
+        report.signed_error = String(e.message || e);
+        return;
+      }
+    }
   }
 
   // The kinds of events in Officient's calendar for a year, and the one for
@@ -318,8 +349,9 @@ export function makeOfficient({ db: query, fetch, readPayslip, api = OFFICIENT_A
     const c = await db('select app_private.contract_for_officient($1, $2::uuid) as r', [appToken, id]);
     let officientId = c.officient_contract_id;
     if (!officientId) {
+      // template_id only goes with Officient's own templates: an empty one is refused
       const r = await send(access, 'POST', '/contracts/add', { person_id: Number(c.officient_id), file_type: 'pdf', contract_name: c.title,
-                                                               template_id: '', pdf_base64: c.data }, NO_CONTRACTS);
+                                                               pdf_base64: c.data }, NO_CONTRACTS);
       if (r.error) throw new Error(`Officient refused the contract: ${r.error}`);
       officientId = String((r.data && r.data.id) || '');
       if (!officientId) throw new Error('Officient did not take the contract.');
@@ -456,7 +488,7 @@ export function makeOfficient({ db: query, fetch, readPayslip, api = OFFICIENT_A
   }
 
   // action 'connect': right after the manager signed in at Officient (code, state);
-  // action 'sync': a manager pressing "Nu ophalen", or the nightly job (cron);
+  // action 'sync': a manager pressing "Nu ophalen", or the nightly job (cron); also fetches signed contracts;
   // action 'read': read payslips uploaded by hand, right after the upload;
   // action 'calendar': Officient's calendar for a month (month: YYYY-MM);
   // action 'hours': make it count a month's clocked hours (month, people; dry: only the plan);

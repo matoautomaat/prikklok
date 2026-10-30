@@ -3313,7 +3313,8 @@ async function viewContracts(el, current) {
   const info = r.info || {}, ready = !!(info.employer && info.representative);
   const pills = c => [
     c.officient_sent_at ? `<span class="pill on">In Officient</span>` : '',
-    c.signature_requested_at ? `<span class="pill">Ter ondertekening sinds ${fmt.short(c.signature_requested_at)}</span>` : '',
+    c.signed_at ? `<span class="pill on">Ondertekend op ${fmt.short(c.signed_at)}</span>`
+      : c.signature_requested_at ? `<span class="pill">Ter ondertekening sinds ${fmt.short(c.signature_requested_at)}</span>` : '',
     c.officient_hours_at ? `<span class="pill on">Uren in Officient</span>` : ''].join(' ');
   const row = p => {
     const c = p.contract;
@@ -3469,7 +3470,8 @@ function sendContractModal(p) {
     <h2 id="modal-title">Naar Officient · ${esc(p.name)}</h2>
     <p>${c.officient_sent_at ? `Het contract staat al bij ${esc(p.name)} in Officient.` : `De app zet het contract bij ${esc(p.name)} in Officient, bij de contracten.`}</p>
     <label class="check"><input type="checkbox" id="cts-sign" ${p.email || c.officient_sent_at ? 'checked' : ''}> Laten ondertekenen: Officient mailt ${esc(p.name)} om te tekenen</label>
-    <p class="muted small">Officient gebruikt het e-mailadres dat het zelf van ${esc(p.name)} heeft.${c.signature_requested_at ? ` Er werd al gevraagd op ${fmt.short(c.signature_requested_at)}; opnieuw vragen stuurt een nieuwe mail.` : ''}</p>
+    <p class="muted small">Officient gebruikt het e-mailadres dat het zelf van ${esc(p.name)} heeft.${c.signature_requested_at ? ` Er werd al gevraagd op ${fmt.short(c.signature_requested_at)}; opnieuw vragen stuurt een nieuwe mail.` : ''}
+      Is het ondertekend, dan haalt de app de getekende versie 's nachts op (of meteen met <b>Nu ophalen</b> bij Team → Exact Officient).</p>
     <p class="form-error" id="cts-err"></p>
     <div class="form-actions"><button type="button" data-close>Annuleren</button><button type="button" class="primary" id="cts-go">${c.officient_sent_at ? 'Versturen' : 'Naar Officient'}</button></div>`, d => {
     const go = $('#cts-go', d);

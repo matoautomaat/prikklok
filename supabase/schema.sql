@@ -1619,6 +1619,7 @@ create table public.contracts (
   officient_sent_at      timestamptz,
   signature_requested_at timestamptz, -- Officient e-mailed the student to sign it
   officient_hours_at     timestamptz, -- the planned hours went into Officient's calendar
+  signed_at              date,        -- signed in Officient: data is then the signed PDF
   check (ends_on is null or starts_on is null or ends_on >= starts_on)
 );
 create index contracts_staff_idx on public.contracts (staff_id);
@@ -2969,7 +2970,7 @@ begin
         'contract', (select json_build_object('id', c.id, 'starts_on', c.starts_on, 'ends_on', c.ends_on, 'created_at', c.created_at,
                               'hours', c.details -> 'hours', 'officient_contract_id', c.officient_contract_id,
                               'officient_sent_at', c.officient_sent_at, 'signature_requested_at', c.signature_requested_at,
-                              'officient_hours_at', c.officient_hours_at)
+                              'officient_hours_at', c.officient_hours_at, 'signed_at', c.signed_at)
                        from public.contracts c
                       where c.staff_id = st.id and c.archived_at is null and c.details ->> 'kind' = 'student'
                         and c.starts_on <= v_end and coalesce(c.ends_on, c.starts_on) >= v_month
@@ -3083,6 +3084,30 @@ begin
   return found;
 end $$;
 
+-- For the Edge Function: contracts waiting on a signature in Officient.
+create function app_private.contracts_awaiting_signature() returns json
+language sql stable set search_path = public as $$
+  select coalesce(json_agg(json_build_object('id', c.id, 'officient_contract_id', c.officient_contract_id, 'name', s.name)), '[]'::json)
+    from public.contracts c join public.staff s on s.id = c.staff_id
+   where c.archived_at is null and c.officient_contract_id is not null
+     and c.signature_requested_at is not null and c.signed_at is null
+$$;
+
+-- For the Edge Function: the signed PDF from Officient in place of the one the app wrote.
+create function app_private.contract_signed(p_id uuid, p_signed_on date, p_data text) returns boolean
+language plpgsql set search_path = public as $$
+declare v_bytes bytea := decode(p_data, 'base64');
+begin
+  if substring(v_bytes from 1 for 4) <> '\x25504446'::bytea then
+    return false; -- not a PDF
+  end if;
+  update public.contracts
+     set data = v_bytes, size_bytes = length(v_bytes), content_type = 'application/pdf',
+         file_name = regexp_replace(file_name, '(\.pdf)?$', ' (ondertekend).pdf', 'i'),
+         signed_at = coalesce(p_signed_on, current_date)
+   where id = p_id and archived_at is null and signed_at is null;
+  return found;
+end $$;
 
 -- People into Officient ------------------------------------------------------
 -- With personal.info:write and basics:write the manager sends details changed
