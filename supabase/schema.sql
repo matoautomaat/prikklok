@@ -17,6 +17,8 @@ create table public.settings (
   id                int primary key default 1 check (id = 1),
   business_name     text not null default 'Ons team',
   drop_cutoff_hours int  not null default 24 check (drop_cutoff_hours between 0 and 336),
+  -- from this day of the month, next month's planning is fixed: staff can't pick up or give back its shifts
+  plan_lock_day     int  not null default 24 check (plan_lock_day between 2 and 28),
   grace_minutes     int  not null default 5  check (grace_minutes between 0 and 120),
   currency          text not null default '€',
   timezone          text, -- set from the manager's device; standard shifts use it
@@ -608,21 +610,31 @@ begin
      and (not v.shifts_hidden or sh.staff_id = v.id)), '[]'::json);
 end $$;
 
+-- Whether a shift is in next month's planning, once that is fixed (from
+-- settings.plan_lock_day on): only a manager changes it then.
+create function app_private.plan_locked(p_starts_at timestamptz) returns boolean
+language sql stable set search_path = public as $$
+  select extract(day from now() at time zone st.tz) >= st.plan_lock_day
+     and date_trunc('month', p_starts_at at time zone st.tz) = date_trunc('month', now() at time zone st.tz) + interval '1 month'
+    from (select coalesce(timezone, 'UTC') as tz, plan_lock_day from public.settings where id = 1) st
+$$;
+
 -- What to remind someone who picks shifts of: open shifts for the rest of this
--- month (and next month from the 20th on) that don't clash with their own,
+-- month (and next month from the 10th until its planning is fixed) that don't clash with their own,
 -- with who gave a shift back in the last 30 days. Not for fixed workers,
 -- drivers or managers.
 create function public.shift_alerts(p_token text) returns json
 language plpgsql volatile security definer set search_path = public, extensions as $$
-declare v public.staff; v_tz text; v_to timestamptz;
+declare v public.staff; v_tz text; v_lock int; v_day int; v_to timestamptz;
 begin
   v := app_private.current_staff(p_token);
   if v.role = 'manager' or v.driver or v.contract_type = 'vast' or v.shifts_hidden then
     return json_build_object('open', '[]'::json);
   end if;
-  select coalesce(timezone, 'UTC') into v_tz from public.settings where id = 1;
+  select coalesce(timezone, 'UTC'), plan_lock_day into v_tz, v_lock from public.settings where id = 1;
+  v_day := extract(day from now() at time zone v_tz);
   v_to := (date_trunc('month', now() at time zone v_tz)
-           + case when extract(day from now() at time zone v_tz) >= 20 then interval '2 months' else interval '1 month' end)
+           + case when v_day >= 10 and v_day < v_lock then interval '2 months' else interval '1 month' end)
           at time zone v_tz;
   perform app_private.ensure_template_shifts(now(), v_to);
   return json_build_object('open', coalesce((select json_agg(json_build_object(
@@ -660,6 +672,9 @@ begin
   if s.ends_at <= now() then
     raise exception using message = 'This shift is already over.', errcode = 'P0001';
   end if;
+  if v.role <> 'manager' and app_private.plan_locked(s.starts_at) then
+    raise exception using message = 'Next month''s planning is fixed. Ask your manager.', errcode = 'P0001';
+  end if;
   if exists (select 1 from public.shifts
               where staff_id = v.id and cancelled_at is null
                 and starts_at < s.ends_at and ends_at > s.starts_at) then
@@ -691,6 +706,9 @@ begin
    where id = p_shift_id and staff_id = v.id and cancelled_at is null for update;
   if not found then
     raise exception using message = 'That isn''t one of your shifts.', errcode = 'P0001';
+  end if;
+  if v.role <> 'manager' and app_private.plan_locked(s.starts_at) then
+    raise exception using message = 'Next month''s planning is fixed. Ask your manager.', errcode = 'P0001';
   end if;
   select drop_cutoff_hours into v_cut from public.settings where id = 1;
   if v.role <> 'manager' and s.starts_at < now() + make_interval(hours => v_cut) then
