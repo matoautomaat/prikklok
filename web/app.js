@@ -18,7 +18,7 @@ const store = {
 // the family pages are Dutch or Chinese, manager screens are Dutch. Kept on the
 // phone and, for staff, on the server. A text without Hungarian shows in Dutch.
 const LANG_KEY = 'prikklok.lang';
-const lang = () => { const l = store.get(LANG_KEY); return l === 'zh' || l === 'hu' ? l : 'nl'; };
+const lang = () => { const l = store.get(LANG_KEY); return l === 'zh' || l === 'hu' || l === 'fr' ? l : 'nl'; };
 const L = (nl, zh, hu) => { const l = lang(); return l === 'zh' ? zh : l === 'hu' && hu != null ? hu : nl; };
 const langAttr = () => ({ zh: 'zh-Hans', hu: 'hu' })[lang()] || 'nl-BE';
 
@@ -318,8 +318,36 @@ const SERVER_NL_PATTERNS = [
     'Op vraag $1 is al geantwoord: je kan de tekst en het juiste antwoord nog aanpassen, maar niet het aantal antwoorden.'],
   [/^You're (\d+) m from the restaurant\. Clock in and out at the restaurant\.$/, (_, m) => `Je bent ${metres(+m)} van het restaurant. In- en uitklokken kan alleen aan het restaurant.`],
 ];
+// French: the messages staff and the driver meet; the rest falls back to Dutch.
+const SERVER_FR = {
+  "You're already checked in.": 'Tu as déjà pointé ton arrivée.',
+  "You're not checked in.": 'Tu n’as pas pointé ton arrivée.',
+  "You're not on the schedule right now. Pick up a shift first, or ask your manager.": 'Tu n’as pas de service maintenant. Prends d’abord un service ou demande à ton responsable.',
+  'Clocking in is off for you. Ask your manager.': 'Le pointage est désactivé pour toi. Demande à ton responsable.',
+  "The restaurant's location isn't set yet. Ask your manager.": 'L’emplacement du restaurant n’est pas encore réglé. Demande à ton responsable.',
+  'Your location is needed to clock in or out. Allow it and try again.': 'Ta position est nécessaire pour pointer. Autorise-la et réessaie.',
+  'Drivers clock in at the restaurant, with their location.': 'Les chauffeurs pointent au restaurant, avec leur position.',
+  'Drivers clock out at the restaurant, with their location.': 'Les chauffeurs pointent leur départ au restaurant, avec leur position.',
+  'Your sign-in has expired. Please sign in again.': 'Ta connexion a expiré. Reconnecte-toi.',
+  'Wrong name or PIN.': 'Nom ou code PIN incorrect.',
+  'Someone else already picked up this shift.': 'Quelqu’un d’autre a déjà pris ce service.',
+  'This overlaps a shift you already have.': 'Ce service chevauche un service que tu as déjà.',
+  "Next month's planning is fixed. Ask your manager.": 'Le planning du mois prochain est fixé. Demande à ton responsable.',
+  'Say briefly why you give this shift back.': 'Dis brièvement pourquoi tu rends ce service.',
+  'Pick a language.': 'Choisis une langue.',
+};
+const SERVER_FR_PATTERNS = [
+  [/^You're (\d+) m from the restaurant\. Clock in and out at the restaurant\.$/, (_, m) => `Tu es à ${metres(+m)} du restaurant. Le pointage se fait uniquement au restaurant.`],
+  [/^Your shift starts at (\d\d:\d\d)\. You can check in from (\d\d:\d\d)\.$/, 'Ton service commence à $1. Tu peux pointer à partir de $2.'],
+  [/^Shifts can't be dropped less than (\d+) hours before they start\. Ask your manager\.$/, 'Tu ne peux plus rendre un service moins de $1 h avant le début. Demande à ton responsable.'],
+  [/^Too many wrong PINs\. Try again in (\d+) min, or ask your manager to reset your PIN\.$/, 'Trop de codes PIN incorrects. Réessaie dans $1 min, ou demande un nouveau code à ton responsable.'],
+];
 function tr(msg) {
   if (!msg) return msg;
+  if (ui() === 'fr') {
+    if (SERVER_FR[msg]) return SERVER_FR[msg];
+    for (const [re, fr] of SERVER_FR_PATTERNS) if (re.test(msg)) return msg.replace(re, fr);
+  }
   if (zhUI()) {
     if (SERVER_ZH[msg]) return SERVER_ZH[msg];
     for (const [re, zh] of SERVER_ZH_PATTERNS) if (re.test(msg)) return msg.replace(re, zh);
@@ -347,7 +375,7 @@ async function rpc(fn, args = {}, { auth = true, path = `/rest/v1/rpc/${fn}`, ke
   try {
     res = await fetch(`${CFG.url}${path}`, { method: 'POST', headers, body: JSON.stringify(body), keepalive });
   } catch {
-    throw new AppError(T('Kan de server niet bereiken. Controleer je verbinding en probeer opnieuw.', '连不上服务器。请检查网络后重试。', 'Nem érhető el a szerver. Ellenőrizd a kapcsolatot, és próbáld újra.'), 'network');
+    throw new AppError(T('Kan de server niet bereiken. Controleer je verbinding en probeer opnieuw.', '连不上服务器。请检查网络后重试。', 'Nem érhető el a szerver. Ellenőrizd a kapcsolatot, és próbáld újra.', 'Impossible de joindre le serveur. Vérifie ta connexion et réessaie.'), 'network');
   }
   const text = await res.text();
   let data = null;
@@ -357,7 +385,7 @@ async function rpc(fn, args = {}, { auth = true, path = `/rest/v1/rpc/${fn}`, ke
       signOut({ silent: true });
       throw new AppError(tr(data.message), 'auth');
     }
-    throw new AppError(tr(data && data.message) || T(`Er ging iets mis (fout ${res.status}).`, `出错了（错误 ${res.status}）。`, `Valami hiba történt (hibakód: ${res.status}).`));
+    throw new AppError(tr(data && data.message) || T(`Er ging iets mis (fout ${res.status}).`, `出错了（错误 ${res.status}）。`, `Valami hiba történt (hibakód: ${res.status}).`, `Un problème est survenu (erreur ${res.status}).`));
   }
   return data;
 }
@@ -413,7 +441,7 @@ function dateField(id, selected, from, to) {
   return `<select id="${id}">${opts.map(d => `<option value="${toDateInput(d)}" ${toDateInput(d) === sel ? 'selected' : ''}>${dayLabel(d)}</option>`).join('')}</select>`;
 }
 function timeField(id, value, { required = true } = {}) {
-  return `<input id="${id}" class="time-field" inputmode="numeric" maxlength="5" autocomplete="off" spellcheck="false" placeholder="${T('uu:mm', '时:分', 'óó:pp')}" value="${value || ''}" ${required ? 'required' : ''}>`;
+  return `<input id="${id}" class="time-field" inputmode="numeric" maxlength="5" autocomplete="off" spellcheck="false" placeholder="${T('uu:mm', '时:分', 'óó:pp', 'hh:mm')}" value="${value || ''}" ${required ? 'required' : ''}>`;
 }
 // "17:30", "1730", "17.30", "17u30", "9:05" -> "17:30"; anything else -> null
 function parseHM(v) {
@@ -445,9 +473,9 @@ const fmt = {
   range: (a, b) => `${fmt.time(a)} – ${fmt.time(b)}`,
   when(d) {
     const x = new Date(d), today = now();
-    if (sameDay(x, today)) return `${T('vandaag', '今天', 'ma')} ${fmt.time(x)}`;
-    if (sameDay(x, addDays(today, 1))) return `${T('morgen', '明天', 'holnap')} ${fmt.time(x)}`;
-    if (sameDay(x, addDays(today, -1))) return `${T('gisteren', '昨天', 'tegnap')} ${fmt.time(x)}`;
+    if (sameDay(x, today)) return `${T('vandaag', '今天', 'ma', 'aujourd’hui')} ${fmt.time(x)}`;
+    if (sameDay(x, addDays(today, 1))) return `${T('morgen', '明天', 'holnap', 'demain')} ${fmt.time(x)}`;
+    if (sameDay(x, addDays(today, -1))) return `${T('gisteren', '昨天', 'tegnap', 'hier')} ${fmt.time(x)}`;
     return `${fmt.day(x)} ${fmt.time(x)}`;
   },
   dur(mins) {
@@ -455,6 +483,7 @@ const fmt = {
     const h = Math.floor(t / 60), m = t % 60;
     if (zhUI()) return h ? `${h}小时${m ? `${m}分` : ''}` : `${m}分钟`;
     if (ui() === 'hu') return h ? `${h}ó ${pad(m)}p` : `${m}p`;
+    if (ui() === 'fr') return h ? `${h} h ${pad(m)}` : `${m} min`;
     return h ? `${h}u ${pad(m)}m` : `${m}m`;
   },
   hours: mins => num(Math.round(mins / 6) / 10, 1),
@@ -479,10 +508,13 @@ const canClock = () => !!(S.me && (S.me.can_clock || S.openEntry));
 const seesShifts = () => !S.me || S.me.shifts !== false;
 // Staff screens follow the person's language (Profiel → Taal, or on the
 // sign-in screen); manager and driver screens stay Dutch.
-const ui = () => isManager() || isDriver() ? 'nl' : lang();
+// Managers see Dutch; a driver's screens exist in Dutch and French.
+const ui = () => isManager() || (isDriver() && lang() !== 'fr') ? 'nl' : lang();
 const zhUI = () => ui() === 'zh';
-const T = (nl, zh, hu) => { const u = ui(); return u === 'zh' ? zh : u === 'hu' && hu != null ? hu : nl; };
-const loc = () => ({ zh: 'zh-CN', hu: 'hu-HU' })[ui()] || LOCALE;
+const T = (nl, zh, hu, fr) => { const u = ui(); return u === 'zh' ? zh : u === 'hu' && hu != null ? hu : u === 'fr' && fr != null ? fr : nl; };
+// Text only the driver's screens have, in Dutch or French.
+const F = (nl, fr) => (ui() === 'fr' ? fr : nl);
+const loc = () => ({ zh: 'zh-CN', hu: 'hu-HU', fr: 'fr-BE' })[ui()] || LOCALE;
 
 /* ------------------------------------------------ people, avatars, levels */
 
@@ -506,16 +538,19 @@ const LEVEL_TITLES_ZH = ['新人', '新手', '团队成员', '中坚力量', '�
 const LEVEL_TITLES_HU = ['Újonc', 'Kezdő', 'Csapatjátékos', 'Oszlopos tag', 'Kitartó', 'Sztár', 'Menő', 'Bajnok', 'Hős', 'Legenda',
   'Mester', 'Nagymester', 'Ász', 'Tigris', 'Daru', 'Főnix', 'Sárkány', 'Császár', 'Jáde', 'Aranysárkány',
   'Jádesárkány', 'Égi sárkány', 'Sárkánykirály', 'Halhatatlan', 'Alapító'];
-const levelTitle = l => ({ zh: LEVEL_TITLES_ZH, hu: LEVEL_TITLES_HU }[ui()] || LEVEL_TITLES)[Math.min(l, LEVEL_TITLES.length) - 1];
-const levelPill = xp => `<span class="pill lvl">${T('Level', '等级', 'Szint')} ${xp ? xp.level : 1}</span>`;
+const LEVEL_TITLES_FR = ['Nouveau', 'Débutant', 'Équipier', 'Pilier', 'Persévérant', 'Étoile', 'As', 'Champion', 'Héros', 'Légende',
+  'Maître', 'Grand maître', 'Crack', 'Tigre', 'Grue', 'Phénix', 'Dragon', 'Empereur', 'Jade', 'Dragon d’or',
+  'Dragon de jade', 'Dragon céleste', 'Roi des dragons', 'Immortel', 'Fondateur'];
+const levelTitle = l => ({ zh: LEVEL_TITLES_ZH, hu: LEVEL_TITLES_HU, fr: LEVEL_TITLES_FR }[ui()] || LEVEL_TITLES)[Math.min(l, LEVEL_TITLES.length) - 1];
+const levelPill = xp => `<span class="pill lvl">${T('Level', '等级', 'Szint', 'Niveau')} ${xp ? xp.level : 1}</span>`;
 const TOP_LEVEL = LEVEL_TITLES.length; // 25: the founders' level
 function xpBar(xp) {
   const l = xp.level, a = xpForLevel(l), b = xpForLevel(l + 1);
-  if (l >= TOP_LEVEL) return `<div class="xpbar" role="progressbar" aria-valuemin="0" aria-valuemax="100" aria-valuenow="100" aria-label="${T('Hoogste level', '最高等级', 'Legmagasabb szint')}"><span style="width:100%"></span></div>
-    <p class="xp-text"><span class="mono">${xp.xp} XP</span><span class="muted">${T('Hoogste level', '最高等级', 'Legmagasabb szint')}</span></p>`;
+  if (l >= TOP_LEVEL) return `<div class="xpbar" role="progressbar" aria-valuemin="0" aria-valuemax="100" aria-valuenow="100" aria-label="${T('Hoogste level', '最高等级', 'Legmagasabb szint', 'Niveau maximum')}"><span style="width:100%"></span></div>
+    <p class="xp-text"><span class="mono">${xp.xp} XP</span><span class="muted">${T('Hoogste level', '最高等级', 'Legmagasabb szint', 'Niveau maximum')}</span></p>`;
   const pct = Math.max(0, Math.min(100, Math.round((xp.xp - a) / (b - a) * 100)));
-  return `<div class="xpbar" role="progressbar" aria-valuemin="0" aria-valuemax="100" aria-valuenow="${pct}" aria-label="${T(`Op weg naar level ${l + 1}`, `距离 ${l + 1} 级`, `Úton a(z) ${l + 1}. szint felé`)}"><span style="width:${pct}%"></span></div>
-    <p class="xp-text"><span class="mono">${xp.xp} XP</span><span class="muted">${T(`nog ${b - xp.xp} XP tot level ${l + 1}`, `还差 ${b - xp.xp} XP 升到 ${l + 1} 级`, `még ${b - xp.xp} XP, és ${l + 1}. szintre lépsz`)}</span></p>`;
+  return `<div class="xpbar" role="progressbar" aria-valuemin="0" aria-valuemax="100" aria-valuenow="${pct}" aria-label="${T(`Op weg naar level ${l + 1}`, `距离 ${l + 1} 级`, `Úton a(z) ${l + 1}. szint felé`, `En route vers le niveau ${l + 1}`)}"><span style="width:${pct}%"></span></div>
+    <p class="xp-text"><span class="mono">${xp.xp} XP</span><span class="muted">${T(`nog ${b - xp.xp} XP tot level ${l + 1}`, `还差 ${b - xp.xp} XP 升到 ${l + 1} 级`, `még ${b - xp.xp} XP, és ${l + 1}. szintre lépsz`, `encore ${b - xp.xp} XP avant le niveau ${l + 1}`)}</span></p>`;
 }
 
 function checkLevelUp() {
@@ -533,12 +568,12 @@ function showLevelUp() {
   const d = modal.open(`
     <div class="levelup">
       <div class="levelup-pic">${S.me.avatar ? Avatar.render(S.me.avatar, { view: 'bust' }) : `<span class="levelup-num">${up.to}</span>`}</div>
-      <p class="section-label">${T('Level omhoog', '升级了', 'Szintet léptél')}</p>
-      <h2 id="modal-title">${T('Level', '等级', 'Szint')} ${up.to} · ${esc(levelTitle(up.to))}</h2>
-      <p>${T(`Goed bezig, ${esc(S.me.name.split(' ')[0])}!`, `做得好，${esc(S.me.name.split(' ')[0])}！`, `Szép munka, ${esc(S.me.name.split(' ')[0])}!`)} ${rewards.length > 4 ? T(`Je hebt <strong>${rewards.length} nieuwe dingen</strong> voor je avatar vrijgespeeld.`, `你为头像解锁了 <strong>${rewards.length} 样新东西</strong>。`, `<strong>${rewards.length} új dolgot</strong> nyitottál meg az avatarodhoz.`)
-        : rewards.length ? `${T('Nieuw voor je avatar:', '头像新物品：', 'Új az avatarodhoz:')} <strong>${rewards.map(esc).join(T(', ', '、', ', '))}</strong>.` : T('Blijf zo doorgaan voor de volgende beloning.', '继续加油，下一个奖励在等你。', 'Csak így tovább a következő jutalomért.')}</p>
+      <p class="section-label">${T('Level omhoog', '升级了', 'Szintet léptél', 'Niveau supérieur')}</p>
+      <h2 id="modal-title">${T('Level', '等级', 'Szint', 'Niveau')} ${up.to} · ${esc(levelTitle(up.to))}</h2>
+      <p>${T(`Goed bezig, ${esc(S.me.name.split(' ')[0])}!`, `做得好，${esc(S.me.name.split(' ')[0])}！`, `Szép munka, ${esc(S.me.name.split(' ')[0])}!`, `Bravo, ${esc(S.me.name.split(' ')[0])} !`)} ${rewards.length > 4 ? T(`Je hebt <strong>${rewards.length} nieuwe dingen</strong> voor je avatar vrijgespeeld.`, `你为头像解锁了 <strong>${rewards.length} 样新东西</strong>。`, `<strong>${rewards.length} új dolgot</strong> nyitottál meg az avatarodhoz.`, `Tu as débloqué <strong>${rewards.length} nouveaux objets</strong> pour ton avatar.`)
+        : rewards.length ? `${T('Nieuw voor je avatar:', '头像新物品：', 'Új az avatarodhoz:', 'Nouveau pour ton avatar :')} <strong>${rewards.map(esc).join(T(', ', '、', ', ', ', '))}</strong>.` : T('Blijf zo doorgaan voor de volgende beloning.', '继续加油，下一个奖励在等你。', 'Csak így tovább a következő jutalomért.', 'Continue comme ça pour la prochaine récompense.')}</p>
     </div>
-    <div class="form-actions"><button type="button" data-close>${T('Sluiten', '关闭', 'Bezárás')}</button>${rewards.length ? `<button type="button" class="primary" id="lu-avatar">${T('Avatar aanpassen', '修改头像', 'Avatar szerkesztése')}</button>` : ''}</div>`);
+    <div class="form-actions"><button type="button" data-close>${T('Sluiten', '关闭', 'Bezárás', 'Fermer')}</button>${rewards.length ? `<button type="button" class="primary" id="lu-avatar">${T('Avatar aanpassen', '修改头像', 'Avatar szerkesztése', 'Modifier l’avatar')}</button>` : ''}</div>`);
   const b = $('#lu-avatar', d);
   if (b) b.addEventListener('click', () => { modal.close(); openAvatarEditor(); });
 }
@@ -590,10 +625,10 @@ const showValue = (k, v) => k === 'national_id' ? fmtNid(v) : k === 'iban' ? fmt
 
 function profileFields(prefix, pr) {
   return PROFILE_FIELDS.map(([k, label, o]) => `
-    <div class="field${o.wide ? ' wide' : ''}"><label for="${prefix}-${k}">${T(label, o.zh || label, o.hu)}</label>
+    <div class="field${o.wide ? ' wide' : ''}"><label for="${prefix}-${k}">${T(label, o.zh || label, o.hu, label)}</label>
       <input id="${prefix}-${k}" data-k="${k}" ${o.type ? `type="${o.type}"` : ''} maxlength="${o.max || 10}" ${o.auto ? `autocomplete="${o.auto}"` : 'autocomplete="off"'}
-        ${o.mode ? `inputmode="${o.mode}"` : ''} ${o.date ? `inputmode="numeric" placeholder="${T('dd/mm/jjjj', '日/月/年', 'nn/hh/éééé')}"` : o.ph ? `placeholder="${o.ph}"` : ''} class="${o.mono ? 'mono-field' : ''}"
-        value="${esc(showValue(k, pr[k]))}">${o.help ? `<span class="help">${T(o.help, o.zhHelp || o.help, o.huHelp)}</span>` : ''}</div>`).join('');
+        ${o.mode ? `inputmode="${o.mode}"` : ''} ${o.date ? `inputmode="numeric" placeholder="${T('dd/mm/jjjj', '日/月/年', 'nn/hh/éééé', 'jj/mm/aaaa')}"` : o.ph ? `placeholder="${o.ph}"` : ''} class="${o.mono ? 'mono-field' : ''}"
+        value="${esc(showValue(k, pr[k]))}">${o.help ? `<span class="help">${T(o.help, o.zhHelp || o.help, o.huHelp, o.help)}</span>` : ''}</div>`).join('');
 }
 // Reads the fields back; returns { values } or { error }.
 function readProfile(root) {
@@ -602,15 +637,15 @@ function readProfile(root) {
     const k = inp.dataset.k, v = inp.value.trim();
     if (k === 'birth_date' || k === 'start_date') {
       const iso = parseDMY(v);
-      if (iso == null) return { error: T(`Vul de ${k === 'birth_date' ? 'geboortedatum' : 'datum van indiensttreding'} in als dd/mm/jjjj, bv. 30/07/1999.`, `请按 日/月/年 填写${k === 'birth_date' ? '出生日期' : '入职日期'}，例如 30/07/1999。`, `${k === 'birth_date' ? 'A születési dátumot' : 'A belépés dátumát'} nn/hh/éééé formában add meg, pl. 30/07/1999.`), field: inp };
+      if (iso == null) return { error: T(`Vul de ${k === 'birth_date' ? 'geboortedatum' : 'datum van indiensttreding'} in als dd/mm/jjjj, bv. 30/07/1999.`, `请按 日/月/年 填写${k === 'birth_date' ? '出生日期' : '入职日期'}，例如 30/07/1999。`, `${k === 'birth_date' ? 'A születési dátumot' : 'A belépés dátumát'} nn/hh/éééé formában add meg, pl. 30/07/1999.`, `Indique la ${k === 'birth_date' ? 'date de naissance' : 'date d’entrée en service'} au format jj/mm/aaaa, p. ex. 30/07/1999.`), field: inp };
       out[k] = iso;
     } else if (k === 'national_id') {
       const d = cleanNid(v);
-      if (d && !Loonfiche.validNationalId(d)) return { error: T('Dat rijksregisternummer klopt niet. Het heeft 11 cijfers, bv. 85.07.30-033.28.', '国民编号不对。它有 11 位数字，例如 85.07.30-033.28。', 'Ez a nemzeti nyilvántartási szám (rijksregisternummer) nem jó. 11 számjegyből áll, pl. 85.07.30-033.28.'), field: inp };
+      if (d && !Loonfiche.validNationalId(d)) return { error: T('Dat rijksregisternummer klopt niet. Het heeft 11 cijfers, bv. 85.07.30-033.28.', '国民编号不对。它有 11 位数字，例如 85.07.30-033.28。', 'Ez a nemzeti nyilvántartási szám (rijksregisternummer) nem jó. 11 számjegyből áll, pl. 85.07.30-033.28.', 'Ce numéro de registre national n’est pas correct. Il compte 11 chiffres, p. ex. 85.07.30-033.28.'), field: inp };
       out[k] = d;
     } else if (k === 'iban') {
       const d = cleanIban(v);
-      if (d && !Loonfiche.validIban(d)) return { error: T('Dat rekeningnummer klopt niet. Controleer de IBAN, bv. BE68 5390 0754 7034.', '银行账号不对。请检查 IBAN，例如 BE68 5390 0754 7034。', 'Ez a bankszámlaszám nem jó. Ellenőrizd az IBAN-t, pl. BE68 5390 0754 7034.'), field: inp };
+      if (d && !Loonfiche.validIban(d)) return { error: T('Dat rekeningnummer klopt niet. Controleer de IBAN, bv. BE68 5390 0754 7034.', '银行账号不对。请检查 IBAN，例如 BE68 5390 0754 7034。', 'Ez a bankszámlaszám nem jó. Ellenőrizd az IBAN-t, pl. BE68 5390 0754 7034.', 'Ce numéro de compte n’est pas correct. Vérifie l’IBAN, p. ex. BE68 5390 0754 7034.'), field: inp };
       out[k] = d;
     } else out[k] = v;
   }
@@ -638,7 +673,7 @@ function toast(msg, kind = '') {
 }
 
 async function busy(btn, fn) {
-  if (btn) { btn.disabled = true; btn.dataset.label = btn.textContent; btn.textContent = T('Bezig…', '请稍候…', 'Egy pillanat…'); }
+  if (btn) { btn.disabled = true; btn.dataset.label = btn.textContent; btn.textContent = T('Bezig…', '请稍候…', 'Egy pillanat…', 'En cours…'); }
   try { return await fn(); }
   catch (e) { if (e.code !== 'auth') toast(e.message, 'error'); throw e; }
   finally { if (btn && btn.isConnected) { btn.disabled = false; btn.textContent = btn.dataset.label; } }
@@ -684,8 +719,8 @@ function applyTheme() {
   if (meta) meta.setAttribute('content', dark ? '#4A0D12' : '#6E141A');
   $$('[data-theme-btn]').forEach(b => {
     b.innerHTML = dark ? ICONS.sun : ICONS.moon;
-    b.setAttribute('aria-label', dark ? T('Licht thema', '浅色主题', 'Világos téma') : T('Donker thema', '深色主题', 'Sötét téma'));
-    b.title = dark ? T('Licht thema', '浅色主题', 'Világos téma') : T('Donker thema', '深色主题', 'Sötét téma');
+    b.setAttribute('aria-label', dark ? T('Licht thema', '浅色主题', 'Világos téma', 'Thème clair') : T('Donker thema', '深色主题', 'Sötét téma', 'Thème sombre'));
+    b.title = dark ? T('Licht thema', '浅色主题', 'Világos téma', 'Thème clair') : T('Donker thema', '深色主题', 'Sötét téma', 'Thème sombre');
   });
   $$('[data-theme-pick]').forEach(b => {
     const on = b.dataset.themePick === pref;
@@ -700,12 +735,12 @@ if (darkQuery && darkQuery.addEventListener) darkQuery.addEventListener('change'
 
 function tabsFor() {
   if (isViewer()) return [['family', L('Kalender', '排班')], ['famstaff', L('Personeel', '员工')]];
-  if (isDriver()) return [['clock', 'Klok'], ['hours', 'Mijn uren'], ['profile', 'Profiel']];
+  if (isDriver()) return [['clock', F('Klok', 'Pointage')], ['hours', F('Mijn uren', 'Mes heures')], ['profile', F('Profiel', 'Profil')]];
   if (isManager()) return [['today', 'Vandaag'], ['schedule', 'Planning'], ['monthly', 'Overzicht'], ['requests', 'Aanvragen'],
     ...(S.settings.has_drivers ? [['routes', 'Ritten']] : []), ['team', 'Team'], ['quiz', 'Quiz'], ['ranking', 'Ranglijst'], ['profile', 'Profiel']];
   // Who doesn't clock in gets a start page instead of the clock.
-  return [['clock', canClock() ? T('Klok', '打卡', 'Óra') : T('Start', '首页', 'Kezdőlap')], ...(seesShifts() ? [['shifts', T('Shiften', '班次', 'Műszakok')]] : []),
-    ['hours', T('Mijn uren', '我的工时', 'Óráim')], ['ranking', T('Ranglijst', '排行榜', 'Ranglista')], ['profile', T('Profiel', '我的资料', 'Profil')]];
+  return [['clock', canClock() ? T('Klok', '打卡', 'Óra', 'Pointage') : T('Start', '首页', 'Kezdőlap', 'Accueil')], ...(seesShifts() ? [['shifts', T('Shiften', '班次', 'Műszakok', 'Services')]] : []),
+    ['hours', T('Mijn uren', '我的工时', 'Óráim', 'Mes heures')], ['ranking', T('Ranglijst', '排行榜', 'Ranglista', 'Classement')], ['profile', T('Profiel', '我的资料', 'Profil', 'Profil')]];
 }
 const ICON_FOR = { home: 'home', clock: 'clock', shifts: 'shifts', hours: 'hours', profile: 'profile', ranking: 'ranking', today: 'today', schedule: 'shifts', monthly: 'monthly', requests: 'requests', team: 'team', routes: 'route', quiz: 'quiz' };
 
@@ -725,7 +760,7 @@ const modal = {
     return d;
   },
   close() { const d = $('#modal'); if (d.open) d.close(); d.innerHTML = ''; d.classList.remove('wide', 'sheet'); },
-  confirm({ title, body = '', ok = T('Bevestigen', '确定', 'Megerősítés'), cancel = T('Annuleren', '取消', 'Mégse'), danger = false }) {
+  confirm({ title, body = '', ok = T('Bevestigen', '确定', 'Megerősítés', 'Confirmer'), cancel = T('Annuleren', '取消', 'Mégse', 'Annuler'), danger = false }) {
     return new Promise(resolve => {
       let done = false;
       const finish = v => { if (!done) { done = true; resolve(v); } };
@@ -764,22 +799,29 @@ const TITLE_HU = {
   chopsticks: 'Pálcikanindzsa', springroll: 'Tavaszitekercs-legenda', boss: 'A bár főnöke', zen: 'Zen a csúcsidőben',
   dragon: 'Sárkányszív', emperor: 'A konyha császára', legend: 'Élő legenda',
 };
+const TITLE_FR = {
+  dumpling: 'Roi des raviolis', wok: 'Maître du wok', rice: 'Chevalier du riz', tea: 'Maître du thé', fortune: 'Biscuit de la chance', panda: 'Le panda de la maison',
+  spicy: 'Petit piment', clown: 'Bouffon', owl: 'Oiseau de nuit', bird: 'Lève-tôt', smile: 'Le sourire de la salle',
+  noodle: 'Fou de nouilles', dishes: 'Champion de la vaisselle', karaoke: 'Star du karaoké', speed: 'Assiette la plus rapide de Torhout',
+  chopsticks: 'Ninja des baguettes', springroll: 'Légende du loempia', boss: 'Patron du bar', zen: 'Zen pendant le rush',
+  dragon: 'Cœur de dragon', emperor: 'Empereur de la cuisine', legend: 'Légende vivante',
+};
 const TITLE_BY = Object.fromEntries(TITLES.map(t => [t[0], t]));
 // The title on someone's card: theirs, the manager's own words, or one the app picks for them.
 function funTitle(p) {
   const t = p && p.title;
-  if (t) return TITLE_BY[t] ? T(TITLE_BY[t][1], TITLE_BY[t][2], TITLE_HU[t]) : t;
+  if (t) return TITLE_BY[t] ? T(TITLE_BY[t][1], TITLE_BY[t][2], TITLE_HU[t], TITLE_FR[t]) : t;
   const free = TITLES.filter(x => x[3] === 1);
   const n = [...String((p && p.id) || '')].reduce((a, c) => a + c.charCodeAt(0), 0);
   const f = free[n % free.length];
-  return T(f[1], f[2], TITLE_HU[f[0]]);
+  return T(f[1], f[2], TITLE_HU[f[0]], TITLE_FR[f[0]]);
 }
 // "2 jaar en 1 maand" since a date
 function sinceText(iso) {
   const d = new Date(iso + 'T00:00'), t = now();
   const m = Math.max(0, (t.getFullYear() - d.getFullYear()) * 12 + t.getMonth() - d.getMonth() - (t.getDate() < d.getDate() ? 1 : 0));
   const y = Math.floor(m / 12), r = m % 12;
-  if (!m) return T('net begonnen', '刚加入', 'most kezdett');
+  if (!m) return T('net begonnen', '刚加入', 'most kezdett', 'vient de commencer');
   if (zhUI()) return `${y ? `${y}年` : ''}${r ? `${r}个月` : ''}`;
   if (ui() === 'hu') return [y && `${y} év`, r && `${r} hónap`].filter(Boolean).join(' és ');
   return [y && `${y} jaar`, r && plural(r, 'maand', 'maanden')].filter(Boolean).join(' en ');
@@ -790,24 +832,24 @@ function sinceText(iso) {
 async function mateCard(id) {
   let p;
   try { p = await rpc('colleague', { p_id: id }); } catch (e) { if (e.code !== 'auth') toast(e.message, 'error'); return; }
-  const role = { manager: T('Verantwoordelijke', '负责人', 'Vezető'), driver: T('Chauffeur', '司机', 'Sofőr'), viewer: T('Familie', '家人', 'Család') }[p.role];
+  const role = { manager: T('Verantwoordelijke', '负责人', 'Vezető', 'Responsable'), driver: T('Chauffeur', '司机', 'Sofőr', 'Chauffeur'), viewer: T('Familie', '家人', 'Család', 'Famille') }[p.role];
   const d = modal.open(`
     <div class="mate">
       <div class="mate-pic">${p.avatar ? Avatar.render(p.avatar, { title: p.name }) : `<span class="hero-empty">${Avatar.render(Avatar.DEFAULT)}</span>`}</div>
       <div class="mate-main">
         <p class="mate-title">“${esc(funTitle(p))}”</p>
-        <h2 id="modal-title">${esc(p.name)}${p.me ? ` <span class="pill accent">${T('jij', '你', 'te')}</span>` : ''}</h2>
+        <h2 id="modal-title">${esc(p.name)}${p.me ? ` <span class="pill accent">${T('jij', '你', 'te', 'toi')}</span>` : ''}</h2>
         <p class="lvl-line">${levelPill(p)} <span>${esc(levelTitle(p.level))}</span></p>
         ${xpBar({ xp: p.xp, level: p.level })}
         <dl class="kv">
-          <dt>${p.since_app ? T('In de app sinds', '开始用 app', 'Kezdés az appban') : T(`Bij ${esc(S.settings.business_name)} sinds`, `加入 ${esc(S.settings.business_name)}`, `Kezdés dátuma`)}</dt>
+          <dt>${p.since_app ? T('In de app sinds', '开始用 app', 'Kezdés az appban', 'Dans l’app depuis') : T(`Bij ${esc(S.settings.business_name)} sinds`, `加入 ${esc(S.settings.business_name)}`, `Kezdés dátuma`, `Chez ${esc(S.settings.business_name)} depuis`)}</dt>
           <dd>${fmtDate(p.since)} <span class="muted">· ${sinceText(p.since)}</span></dd>
-          ${role ? `<dt>${T('Rol', '角色', 'Szerep')}</dt><dd>${role}</dd>` : ''}
+          ${role ? `<dt>${T('Rol', '角色', 'Szerep', 'Rôle')}</dt><dd>${role}</dd>` : ''}
         </dl>
       </div>
     </div>
-    <div class="form-actions">${p.me ? `<button type="button" id="mate-title">${T('Titel kiezen', '选择称号', 'Titulus választása')}</button>` : ''}${isManager() && !p.me
-      ? '<button type="button" id="mate-team">Openen bij Team</button>' : ''}<button type="button" class="primary" data-close>${T('Sluiten', '关闭', 'Bezárás')}</button></div>`, null, { sheet: true });
+    <div class="form-actions">${p.me ? `<button type="button" id="mate-title">${T('Titel kiezen', '选择称号', 'Titulus választása', 'Choisir un titre')}</button>` : ''}${isManager() && !p.me
+      ? '<button type="button" id="mate-team">Openen bij Team</button>' : ''}<button type="button" class="primary" data-close>${T('Sluiten', '关闭', 'Bezárás', 'Fermer')}</button></div>`, null, { sheet: true });
   const team = $('#mate-team', d);
   if (team) team.addEventListener('click', () => { modal.close(); location.hash = `team/${p.id}`; });
   const ti = $('#mate-title', d);
@@ -822,19 +864,19 @@ function bindMates(el) {
 
 function titlePicker(current, level, after) {
   const d = modal.open(`
-    <h2 id="modal-title">${T('Kies je titel', '选择你的称号', 'Válaszd ki a titulusodat')}</h2>
-    <p>${T('Je collega\'s zien hem op je kaart. Sommige titels krijg je pas op een hoger level.', '同事会在你的名片上看到它。有些称号升级后才能用。', 'A kollégáid a kártyádon látják. Néhány titulust csak magasabb szinten kapsz meg.')}</p>
+    <h2 id="modal-title">${T('Kies je titel', '选择你的称号', 'Válaszd ki a titulusodat', 'Choisis ton titre')}</h2>
+    <p>${T('Je collega\'s zien hem op je kaart. Sommige titels krijg je pas op een hoger level.', '同事会在你的名片上看到它。有些称号升级后才能用。', 'A kollégáid a kártyádon látják. Néhány titulust csak magasabb szinten kapsz meg.', 'Tes collègues le voient sur ta carte. Certains titres ne se débloquent qu’à un niveau plus élevé.')}</p>
     <div class="title-grid">${TITLES.map(([k, nl, zh, l]) => {
       const lock = l > level;
       return `<button type="button" class="title-pick${current === k ? ' is-on' : ''}" data-title="${k}" aria-pressed="${current === k}" ${lock ? 'disabled' : ''}>
-        <span>${esc(T(nl, zh, TITLE_HU[k]))}</span>${lock ? `<span class="av-lock">${LOCK_ICON}${T('Level', '等级', 'Szint')} ${l}</span>` : ''}</button>`;
+        <span>${esc(T(nl, zh, TITLE_HU[k], TITLE_FR[k]))}</span>${lock ? `<span class="av-lock">${LOCK_ICON}${T('Level', '等级', 'Szint', 'Niveau')} ${l}</span>` : ''}</button>`;
     }).join('')}</div>
     <p class="form-error" id="tp-err"></p>
-    <div class="form-actions">${current ? `<button type="button" id="title-clear">${T('Laat de app kiezen', '让 app 来选', 'Válasszon az app')}</button>` : ''}<button type="button" data-close>${T('Annuleren', '取消', 'Mégse')}</button></div>`, null, { sheet: true });
+    <div class="form-actions">${current ? `<button type="button" id="title-clear">${T('Laat de app kiezen', '让 app 来选', 'Válasszon az app', 'Laisser l’app choisir')}</button>` : ''}<button type="button" data-close>${T('Annuleren', '取消', 'Mégse', 'Annuler')}</button></div>`, null, { sheet: true });
   const save = (key, b) => busy(b, async () => {
     await rpc('save_my_title', { p_key: key });
     modal.close();
-    toast(T('Je titel is opgeslagen.', '称号已保存。', 'Titulus elmentve.'));
+    toast(T('Je titel is opgeslagen.', '称号已保存。', 'Titulus elmentve.', 'Ton titre a été enregistré.'));
     if (after) after();
   }).catch(e => { $('#tp-err', d).textContent = e.message; });
   $$('[data-title]', d).forEach(b => b.addEventListener('click', () => save(b.dataset.title, b)));
@@ -856,15 +898,15 @@ async function maybeBirthday() {
   if (store.get(key) === today) return;
   store.set(key, today);
   const mine = list.some(x => x.me), others = list.filter(x => !x.me).map(x => esc(x.name));
-  const names = others.length > 1 ? `${others.slice(0, -1).join(', ')} ${T('en', '和', 'és')} ${others[others.length - 1]}` : others[0];
+  const names = others.length > 1 ? `${others.slice(0, -1).join(', ')} ${T('en', '和', 'és', 'et')} ${others[others.length - 1]}` : others[0];
   modal.open(`
     <div class="bday-pop">
       <div class="bday-cake" aria-hidden="true">🎂</div>
-      <h2 id="modal-title">${mine ? T('Gelukkige verjaardag!', '生日快乐！', 'Boldog születésnapot!') : T(`${names} ${others.length > 1 ? 'verjaren' : 'verjaart'} vandaag!`, `今天是${names}的生日！`, `Ma ${names} születésnapja!`)}</h2>
-      <p>${mine ? T('Het hele team van Chen\'s Garden wenst je een fantastische dag. 🎉', 'Chen\'s Garden 全体同事祝你度过美好的一天！🎉', 'A Chen\'s Garden egész csapata csodás napot kíván! 🎉')
-        : T('Vergeet niet om proficiat te wensen! 🎉', '别忘了说一声生日快乐！🎉', 'Ne felejts el boldog születésnapot kívánni! 🎉')}</p>
-      ${mine && others.length ? `<p class="muted small">${T(`Ook ${names} verjaart vandaag.`, `${names}今天也过生日。`, `Ma ${names} is ünnepel.`)}</p>` : ''}
-      <div class="form-actions"><button type="button" class="primary" data-close>${mine ? T('Dank je!', '谢谢！', 'Köszönöm!') : T('Proficiat!', '生日快乐！', 'Boldog szülinapot!')}</button></div>
+      <h2 id="modal-title">${mine ? T('Gelukkige verjaardag!', '生日快乐！', 'Boldog születésnapot!', 'Joyeux anniversaire !') : T(`${names} ${others.length > 1 ? 'verjaren' : 'verjaart'} vandaag!`, `今天是${names}的生日！`, `Ma ${names} születésnapja!`, `${names} ${others.length > 1 ? 'fêtent leur anniversaire' : 'fête son anniversaire'} aujourd’hui !`)}</h2>
+      <p>${mine ? T('Het hele team van Chen\'s Garden wenst je een fantastische dag. 🎉', 'Chen\'s Garden 全体同事祝你度过美好的一天！🎉', 'A Chen\'s Garden egész csapata csodás napot kíván! 🎉', 'Toute l’équipe de Chen\'s Garden te souhaite une super journée. 🎉')
+        : T('Vergeet niet om proficiat te wensen! 🎉', '别忘了说一声生日快乐！🎉', 'Ne felejts el boldog születésnapot kívánni! 🎉', 'N’oublie pas de lui souhaiter un joyeux anniversaire ! 🎉')}</p>
+      ${mine && others.length ? `<p class="muted small">${T(`Ook ${names} verjaart vandaag.`, `${names}今天也过生日。`, `Ma ${names} is ünnepel.`, `${names} fête aussi son anniversaire aujourd’hui.`)}</p>` : ''}
+      <div class="form-actions"><button type="button" class="primary" data-close>${mine ? T('Dank je!', '谢谢！', 'Köszönöm!', 'Merci !') : T('Proficiat!', '生日快乐！', 'Boldog szülinapot!', 'Félicitations !')}</button></div>
     </div>`, null, { sheet: true });
 }
 
@@ -906,31 +948,31 @@ function shiftReminder(list, urgent) {
     const part = shiftPart(s);
     return `<div class="remind-row">
       <span class="cal-tag${partClass(part)}">${esc(partName(part))}</span>
-      <div class="remind-when"><strong>${esc(fmt.dayLong(s.starts_at))}</strong><span class="time">${fmt.range(s.starts_at, s.ends_at)}${s.count > 1 ? ` <span class="muted">· ${T(`${s.count} plaatsen`, `${s.count} 个位置`, `${s.count} hely`)}</span>` : ''}</span>
-        ${s.released ? `<span class="muted small">${T(`${esc(s.released.name)} gaf hem terug`, `${esc(s.released.name)} 退回了这个班次`, `${esc(s.released.name)} visszaadta`)}</span>` : ''}</div>
-      <button type="button" class="sm primary" data-take="${s.id}">${T('Opnemen', '认领', 'Elvállalom')}</button>
+      <div class="remind-when"><strong>${esc(fmt.dayLong(s.starts_at))}</strong><span class="time">${fmt.range(s.starts_at, s.ends_at)}${s.count > 1 ? ` <span class="muted">· ${T(`${s.count} plaatsen`, `${s.count} 个位置`, `${s.count} hely`, `${s.count} places`)}</span>` : ''}</span>
+        ${s.released ? `<span class="muted small">${T(`${esc(s.released.name)} gaf hem terug`, `${esc(s.released.name)} 退回了这个班次`, `${esc(s.released.name)} visszaadta`, `${esc(s.released.name)} l’a rendu`)}</span>` : ''}</div>
+      <button type="button" class="sm primary" data-take="${s.id}">${T('Opnemen', '认领', 'Elvállalom', 'Prendre')}</button>
     </div>`;
   };
   const d = modal.open(`
     <div class="remind-head"><span class="remind-icon" aria-hidden="true">${ICONS.shifts}</span>
-      <div><h2 id="modal-title">${urgent ? T('Een collega gaf een shift terug', '有同事退回了班次', 'Egy kolléga visszaadott egy műszakot') : T('Er zijn nog shiften vrij', '还有空班次', 'Még vannak szabad műszakok')}</h2>
+      <div><h2 id="modal-title">${urgent ? T('Een collega gaf een shift terug', '有同事退回了班次', 'Egy kolléga visszaadott egy műszakot', 'Un collègue a rendu un service') : T('Er zijn nog shiften vrij', '还有空班次', 'Még vannak szabad műszakok', 'Il reste des services libres')}</h2>
         <p class="muted small">${[...months].map(([m, n]) => T(`${plural(n, 'open shift', 'open shiften')} in ${fmt.monthName(new Date(m + 'T00:00'))}`,
-          `${fmt.monthName(new Date(m + 'T00:00'))}有 ${n} 个空班次`, `${fmt.monthName(new Date(m + 'T00:00'))}: ${n} szabad műszak`)).join(' · ')}</p></div></div>
-    ${back.length ? `<h3 class="remind-sub">${T('Teruggegeven en nog open', '退回的，还空着', 'Visszaadva, még szabad')}</h3><div class="remind-list">${back.map(row).join('')}</div>` : ''}
-    ${soon.length ? `<h3 class="remind-sub">${T('De eerstvolgende open shiften', '最近的空班次', 'A legközelebbi szabad műszakok')}</h3><div class="remind-list">${soon.map(row).join('')}</div>` : ''}
-    <p class="muted small remind-tip">${T('Tik op Opnemen en dan op Zeker? om een shift op jouw naam te zetten.', '点“认领”，再点“确定？”，班次就是你的了。', 'Koppints az Elvállalom, majd a Biztos? gombra, és a műszak a tiéd.')}</p>
+          `${fmt.monthName(new Date(m + 'T00:00'))}有 ${n} 个空班次`, `${fmt.monthName(new Date(m + 'T00:00'))}: ${n} szabad műszak`, `${plural(n, 'service libre', 'services libres')} en ${fmt.monthName(new Date(m + 'T00:00'))}`)).join(' · ')}</p></div></div>
+    ${back.length ? `<h3 class="remind-sub">${T('Teruggegeven en nog open', '退回的，还空着', 'Visszaadva, még szabad', 'Rendus et toujours libres')}</h3><div class="remind-list">${back.map(row).join('')}</div>` : ''}
+    ${soon.length ? `<h3 class="remind-sub">${T('De eerstvolgende open shiften', '最近的空班次', 'A legközelebbi szabad műszakok', 'Les prochains services libres')}</h3><div class="remind-list">${soon.map(row).join('')}</div>` : ''}
+    <p class="muted small remind-tip">${T('Tik op Opnemen en dan op Zeker? om een shift op jouw naam te zetten.', '点“认领”，再点“确定？”，班次就是你的了。', 'Koppints az Elvállalom, majd a Biztos? gombra, és a műszak a tiéd.', 'Touche Prendre puis Sûr ? pour mettre un service à ton nom.')}</p>
     <p class="form-error" id="rm-err"></p>
-    <div class="form-actions"><button type="button" id="rm-cal">${T('Naar de kalender', '去看日历', 'A naptárhoz')}</button><button type="button" class="primary" data-close>${T('Later', '以后再说', 'Később')}</button></div>`, null, { sheet: true });
+    <div class="form-actions"><button type="button" id="rm-cal">${T('Naar de kalender', '去看日历', 'A naptárhoz', 'Vers le calendrier')}</button><button type="button" class="primary" data-close>${T('Later', '以后再说', 'Később', 'Plus tard')}</button></div>`, null, { sheet: true });
   // a first tap asks "Zeker?", the second takes the shift
   $$('[data-take]', d).forEach(b => b.addEventListener('click', async () => {
-    if (!b.dataset.sure) { b.dataset.sure = '1'; b.textContent = T('Zeker?', '确定？', 'Biztos?'); return; }
-    b.disabled = true; b.textContent = T('Bezig…', '请稍候…', 'Egy pillanat…');
+    if (!b.dataset.sure) { b.dataset.sure = '1'; b.textContent = T('Zeker?', '确定？', 'Biztos?', 'Sûr ?'); return; }
+    b.disabled = true; b.textContent = T('Bezig…', '请稍候…', 'Egy pillanat…', 'En cours…');
     try {
       await rpc('claim_shift', { p_shift_id: b.dataset.take });
-      b.replaceWith(Object.assign(document.createElement('span'), { className: 'pill on', textContent: T('Van jou', '你的了', 'A tiéd') }));
+      b.replaceWith(Object.assign(document.createElement('span'), { className: 'pill on', textContent: T('Van jou', '你的了', 'A tiéd', 'À toi') }));
       await refreshMe();
       if (['clock', 'shifts'].includes(S.view)) renderView();
-    } catch (e) { $('#rm-err', d).textContent = e.message; b.disabled = false; b.textContent = T('Opnemen', '认领', 'Elvállalom'); delete b.dataset.sure; }
+    } catch (e) { $('#rm-err', d).textContent = e.message; b.disabled = false; b.textContent = T('Opnemen', '认领', 'Elvállalom', 'Prendre'); delete b.dataset.sure; }
   }));
   $('#rm-cal', d).addEventListener('click', () => { modal.close(); S.month = startOfMonth(now()); if (S.view === 'shifts') renderView(); else location.hash = 'shifts'; });
 }
@@ -967,7 +1009,7 @@ const IK = {
 };
 // The guide alone also exists in French: a manager can send it in French (Team → person).
 let guideLang = null;
-const G = (nl, zh, hu, fr) => (guideLang === 'fr' ? fr : T(nl, zh, hu));
+const G = (nl, zh, hu, fr) => (guideLang === 'fr' ? fr : T(nl, zh, hu, fr));
 const ikey = (icon, label = '') => `<span class="ikey">${icon}${label ? `<span>${label}</span>` : ''}</span>`;
 
 // The steps for one kind of phone.
@@ -1072,7 +1114,7 @@ function maybeInstallGuide() {
   }, 1500);
 }
 const installButton = (id, cls = '') => device.phone && !installed()
-  ? `<button type="button" class="${cls}" id="${id}">${IK.add}<span>${T('Zet Prikklok op je telefoon', '把 Prikklok 添加到手机', 'Tedd fel a Prikklokot a telefonodra')}</span></button>` : '';
+  ? `<button type="button" class="${cls}" id="${id}">${IK.add}<span>${T('Zet Prikklok op je telefoon', '把 Prikklok 添加到手机', 'Tedd fel a Prikklokot a telefonodra', 'Installe Prikklok sur ton téléphone')}</span></button>` : '';
 
 /* ------------------------------------------------------------ app shell */
 
@@ -1085,7 +1127,7 @@ const authBrand = name => CFG.logo
   : '<div class="brand"><span class="mark" aria-hidden="true"></span><span class="section-label">Prikklok</span></div>';
 
 function loadError(e) {
-  renderAuthShell(`<div class="card"><h1>Kan niet laden</h1><p>${esc(e.message)}</p><button class="primary" id="reload">Opnieuw proberen</button></div>`);
+  renderAuthShell(`<div class="card"><h1>${T('Kan niet laden', '无法加载', 'Nem sikerült betölteni', 'Chargement impossible')}</h1><p>${esc(e.message)}</p><button class="primary" id="reload">${T('Opnieuw proberen', '重试', 'Újrapróbálás', 'Réessayer')}</button></div>`);
   $('#reload').addEventListener('click', () => location.reload());
 }
 
@@ -1258,12 +1300,12 @@ function bottomTabs() {
 function openMore() {
   const { more } = bottomTabs();
   const d = modal.open(`
-    <h2 id="modal-title">${T('Meer', '更多', 'Több')}</h2>
+    <h2 id="modal-title">${T('Meer', '更多', 'Több', 'Plus')}</h2>
     <div class="sheet-list">
       ${more.map(([k, l]) => `<button type="button" class="sheet-item" data-sheet-tab="${k}">${ICONS[ICON_FOR[k]]}<span>${l}</span></button>`).join('')}
-      <button type="button" class="sheet-item" id="sheet-signout">${ICONS.signout}<span>${T('Afmelden', '退出登录', 'Kilépés')}</span></button>
+      <button type="button" class="sheet-item" id="sheet-signout">${ICONS.signout}<span>${T('Afmelden', '退出登录', 'Kilépés', 'Se déconnecter')}</span></button>
     </div>
-    <div class="form-actions"><button type="button" data-close>${T('Sluiten', '关闭', 'Bezárás')}</button></div>`, null, { sheet: true });
+    <div class="form-actions"><button type="button" data-close>${T('Sluiten', '关闭', 'Bezárás', 'Fermer')}</button></div>`, null, { sheet: true });
   $$('[data-sheet-tab]', d).forEach(b => b.addEventListener('click', () => { modal.close(); location.hash = b.dataset.sheetTab; }));
   $('#sheet-signout', d).addEventListener('click', () => { modal.close(); askSignOut(); });
 }
@@ -1278,23 +1320,23 @@ function renderShell() {
     <header class="topbar">
       <div class="topbar-inner">
         <div class="brand">
-          <button class="me-btn" id="me-btn" aria-label="${T('Mijn profiel', '我的资料', 'Profilom')}" title="${T('Mijn profiel', '我的资料', 'Profilom')}">${personPic(S.me, 'lg')}${S.me.avatar ? '' : '<span class="me-plus" aria-hidden="true">+</span>'}</button>
+          <button class="me-btn" id="me-btn" aria-label="${T('Mijn profiel', '我的资料', 'Profilom', 'Mon profil')}" title="${T('Mijn profiel', '我的资料', 'Profilom', 'Mon profil')}">${personPic(S.me, 'lg')}${S.me.avatar ? '' : '<span class="me-plus" aria-hidden="true">+</span>'}</button>
           <div class="brand-text">
             <div class="biz">${esc(S.me.name)}</div>
-            <div class="who">${isManager() ? 'Verantwoordelijke' : isDriver() ? 'Chauffeur' : `${T('Level', '等级', 'Szint')} ${S.me.xp ? S.me.xp.level : 1} · ${esc(levelTitle(S.me.xp ? S.me.xp.level : 1))}`}</div>
+            <div class="who">${isManager() ? 'Verantwoordelijke' : isDriver() ? F('Chauffeur', 'Chauffeur') : `${T('Level', '等级', 'Szint', 'Niveau')} ${S.me.xp ? S.me.xp.level : 1} · ${esc(levelTitle(S.me.xp ? S.me.xp.level : 1))}`}</div>
           </div>
         </div>
-        <a class="logo-link" href="#" aria-label="${esc(S.settings.business_name)}${T(', naar het begin', '，回到首页', ', vissza a kezdőlapra')}">${logoHTML('logo')}</a>
-        <div class="topbar-end"><button type="button" class="icon ghost theme-btn" data-theme-btn></button><button class="ghost sm" id="signout">${T('Afmelden', '退出登录', 'Kilépés')}</button></div>
+        <a class="logo-link" href="#" aria-label="${esc(S.settings.business_name)}${T(', naar het begin', '，回到首页', ', vissza a kezdőlapra', ', vers le début')}">${logoHTML('logo')}</a>
+        <div class="topbar-end"><button type="button" class="icon ghost theme-btn" data-theme-btn></button><button class="ghost sm" id="signout">${T('Afmelden', '退出登录', 'Kilépés', 'Se déconnecter')}</button></div>
       </div>
-      <nav class="tabs" aria-label="${T('Onderdelen', '页面', 'Menü')}"><div class="tabs-inner">
+      <nav class="tabs" aria-label="${T('Onderdelen', '页面', 'Menü', 'Sections')}"><div class="tabs-inner">
         ${tabs.map(([k, l]) => `<button class="tab" data-tab="${k}">${l}${badge(k)}</button>`).join('')}
       </div></nav>
     </header>
     <main class="view" id="view"></main>
-    <nav class="bnav" aria-label="${T('Onderdelen', '页面', 'Menü')}">
+    <nav class="bnav" aria-label="${T('Onderdelen', '页面', 'Menü', 'Sections')}">
       ${main.map(([k, l]) => `<button data-tab="${k}">${ICONS[k === 'clock' && !canClock() && !isManager() ? 'home' : ICON_FOR[k]]}<span>${l}</span>${badge(k)}</button>`).join('')}
-      ${more.length ? `<button id="bnav-more" data-more="${more.map(t => t[0]).join(' ')}" aria-haspopup="dialog">${ICONS.more}<span>${T('Meer', '更多', 'Több')}</span></button>` : ''}
+      ${more.length ? `<button id="bnav-more" data-more="${more.map(t => t[0]).join(' ')}" aria-haspopup="dialog">${ICONS.more}<span>${T('Meer', '更多', 'Több', 'Plus')}</span></button>` : ''}
     </nav>`;
   $('#signout').addEventListener('click', askSignOut);
   $('[data-theme-btn]').addEventListener('click', () => setTheme(isDark() ? 'light' : 'dark'));
@@ -1410,7 +1452,7 @@ async function renderView() {
   const seq = ++S.renderSeq;
   const key = S.view === 'member' ? `member/${S.memberId}` : S.view === 'quiz' ? `quiz/${S.quizId || ''}${S.quizEdit ? '/edit' : ''}` : S.view;
   if (!el.dataset.view || el.dataset.key !== key) {
-    el.innerHTML = `<div class="empty">${T('Laden…', '加载中…', 'Betöltés…')}</div>`;
+    el.innerHTML = `<div class="empty">${T('Laden…', '加载中…', 'Betöltés…', 'Chargement…')}</div>`;
     el.dataset.view = S.view;
     el.dataset.key = key;
   }
@@ -1419,7 +1461,7 @@ async function renderView() {
     if (seq === S.renderSeq) { showLevelUp(); maybeBirthday().then(maybeShiftReminder); maybeQuizReminder(); maybeInstallGuide(); }
   } catch (e) {
     if (e.code === 'auth') return;
-    if (seq === S.renderSeq) el.innerHTML = `<div class="card"><h2>${T('Deze pagina kon niet geladen worden', '这个页面无法加载', 'Ezt az oldalt nem sikerült betölteni')}</h2><p class="muted">${esc(e.message)}</p><div class="form-actions"><button class="primary" id="retry">${T('Opnieuw proberen', '重试', 'Újrapróbálás')}</button></div></div>`;
+    if (seq === S.renderSeq) el.innerHTML = `<div class="card"><h2>${T('Deze pagina kon niet geladen worden', '这个页面无法加载', 'Ezt az oldalt nem sikerült betölteni', 'Impossible de charger cette page')}</h2><p class="muted">${esc(e.message)}</p><div class="form-actions"><button class="primary" id="retry">${T('Opnieuw proberen', '重试', 'Újrapróbálás', 'Réessayer')}</button></div></div>`;
     const r = $('#retry'); if (r) r.addEventListener('click', renderView);
   }
 }
@@ -1468,34 +1510,34 @@ function punchCard({ compact = false } = {}) {
     const longOpen = minutesBetween(since, t) > 14 * 60;
     const early = sh && t < new Date(new Date(sh.ends_at).getTime() - grace * 60000);
     body = `
-      <div class="punch-status"><span class="dot"></span>${T('Ingeklokt sinds', '上班打卡于', 'Becsekkolva ekkor:')} ${sameDay(since, t) ? fmt.time(since) : fmt.when(since)}</div>
+      <div class="punch-status"><span class="dot"></span>${T('Ingeklokt sinds', '上班打卡于', 'Becsekkolva ekkor:', 'Pointé depuis')} ${sameDay(since, t) ? fmt.time(since) : fmt.when(since)}</div>
       <div class="punch-elapsed" data-live="since" data-since="${e.clock_in}">${fmt.dur(minutesBetween(since, t))}</div>
-      ${sh ? `<div class="punch-meta">${T('Shift', '班次', 'Műszak')} ${fmt.range(sh.starts_at, sh.ends_at)}${sh.label ? ' · ' + esc(partName(sh.label)) : ''}</div>` : ''}
-      ${longOpen ? `<p class="hint bad">${T(`Je bent ingeklokt sinds ${fmt.when(since)}. Vergeten uit te klokken?`, `你从${fmt.when(since)}起一直是上班状态。忘记下班打卡了？`, `Becsekkoltál (${fmt.when(since)}). Elfelejtettél kicsekkolni?`)} <button class="link" data-act="forgot-out">${T('Vul in wanneer je vertrok', '填写你离开的时间', 'Add meg, mikor mentél el')}</button></p>`
-        : early ? `<p class="hint warn">${T(`Je shift eindigt om ${fmt.time(sh.ends_at)}. Als je nu uitklokt, telt dat als vroeger vertrokken.`, `你的班次 ${fmt.time(sh.ends_at)} 结束。现在下班打卡算提前离开。`, `A műszakod ${fmt.time(sh.ends_at)}-kor ér véget. Ha most csekkolsz ki, az korábbi távozásnak számít.`)}</p>` : ''}
+      ${sh ? `<div class="punch-meta">${T('Shift', '班次', 'Műszak', 'Service')} ${fmt.range(sh.starts_at, sh.ends_at)}${sh.label ? ' · ' + esc(partName(sh.label)) : ''}</div>` : ''}
+      ${longOpen ? `<p class="hint bad">${T(`Je bent ingeklokt sinds ${fmt.when(since)}. Vergeten uit te klokken?`, `你从${fmt.when(since)}起一直是上班状态。忘记下班打卡了？`, `Becsekkoltál (${fmt.when(since)}). Elfelejtettél kicsekkolni?`, `Tu as pointé ton arrivée ${fmt.when(since)}. Tu as oublié de pointer ton départ ?`)} <button class="link" data-act="forgot-out">${T('Vul in wanneer je vertrok', '填写你离开的时间', 'Add meg, mikor mentél el', 'Indique quand tu es parti')}</button></p>`
+        : early ? `<p class="hint warn">${T(`Je shift eindigt om ${fmt.time(sh.ends_at)}. Als je nu uitklokt, telt dat als vroeger vertrokken.`, `你的班次 ${fmt.time(sh.ends_at)} 结束。现在下班打卡算提前离开。`, `A műszakod ${fmt.time(sh.ends_at)}-kor ér véget. Ha most csekkolsz ki, az korábbi távozásnak számít.`, `Ton service se termine à ${fmt.time(sh.ends_at)}. Si tu pointes ton départ maintenant, ce sera compté comme un départ anticipé.`)}</p>` : ''}
       <div class="field">
-        <label for="out-note">${T('Opmerking voor je verantwoordelijke (optioneel)', '给负责人的备注（可不填）', 'Megjegyzés a vezetődnek (nem kötelező)')}</label>
-        <input id="out-note" maxlength="300" placeholder="${early ? T('bv. vroeger weg, afspraak bij de dokter', '例如：提前走，去看医生', 'pl. korábban kell mennem, orvoshoz megyek') : T('bv. de bar overgenomen na 17u', '例如：17点后接了吧台', 'pl. 17 órától átvettem a bárt')}">
+        <label for="out-note">${T('Opmerking voor je verantwoordelijke (optioneel)', '给负责人的备注（可不填）', 'Megjegyzés a vezetődnek (nem kötelező)', 'Remarque pour ton responsable (facultatif)')}</label>
+        <input id="out-note" maxlength="300" placeholder="${early ? T('bv. vroeger weg, afspraak bij de dokter', '例如：提前走，去看医生', 'pl. korábban kell mennem, orvoshoz megyek', 'p. ex. parti plus tôt, rendez-vous chez le médecin') : T('bv. de bar overgenomen na 17u', '例如：17点后接了吧台', 'pl. 17 órától átvettem a bárt', 'p. ex. repris le bar après 17h')}">
       </div>
-      <button class="big stop" data-act="clock-out">${T('Uitklokken', '下班打卡', 'Kicsekkolás')}</button>`;
+      <button class="big stop" data-act="clock-out">${T('Uitklokken', '下班打卡', 'Kicsekkolás', 'Pointer le départ')}</button>`;
   } else {
     const can = clockInState();
     const soon = can.from && can.from - t < 18 * 3600000;
     const from = can.from && (sameDay(can.from, t) ? fmt.time(can.from) : fmt.when(can.from)), early = S.settings.clock_in_early_minutes;
     body = `
-      <div class="punch-status"><span class="dot"></span>${T('Je bent niet ingeklokt', '你还没有上班打卡', 'Nem vagy becsekkolva')}</div>
-      ${next ? `<div class="punch-meta">${new Date(next.starts_at) <= t ? T('Je shift is nu bezig', '你的班次正在进行', 'A műszakod most zajlik') : T('Volgende shift', '下一个班次', 'Következő műszak')}: ${fmt.when(next.starts_at)} – ${fmt.time(next.ends_at)}${next.label ? ' · ' + esc(partName(next.label)) : ''}</div>`
-        : `<div class="punch-meta muted">${seesShifts() ? T('Geen shiften gepland. Neem er een op bij Shiften.', '还没有排班。去“班次”页选一个。', 'Nincs beosztott műszakod. Vállalj egyet a Műszakok alatt.') : T('Geen shiften gepland.', '还没有排班。', 'Nincs beosztott műszakod.')}</div>`}
-      ${can.ok ? `<button class="big go" data-act="clock-in">${T('Inklokken', '上班打卡', 'Becsekkolás')}</button>` : `
-        <button class="big go" disabled aria-describedby="in-why">${T('Inklokken', '上班打卡', 'Becsekkolás')}</button>
+      <div class="punch-status"><span class="dot"></span>${T('Je bent niet ingeklokt', '你还没有上班打卡', 'Nem vagy becsekkolva', 'Tu n’as pas pointé ton arrivée')}</div>
+      ${next ? `<div class="punch-meta">${new Date(next.starts_at) <= t ? T('Je shift is nu bezig', '你的班次正在进行', 'A műszakod most zajlik', 'Ton service est en cours') : T('Volgende shift', '下一个班次', 'Következő műszak', 'Prochain service')}: ${fmt.when(next.starts_at)} – ${fmt.time(next.ends_at)}${next.label ? ' · ' + esc(partName(next.label)) : ''}</div>`
+        : `<div class="punch-meta muted">${seesShifts() ? T('Geen shiften gepland. Neem er een op bij Shiften.', '还没有排班。去“班次”页选一个。', 'Nincs beosztott műszakod. Vállalj egyet a Műszakok alatt.', 'Aucun service prévu. Prends-en un dans Services.') : T('Geen shiften gepland.', '还没有排班。', 'Nincs beosztott műszakod.', 'Aucun service prévu.')}</div>`}
+      ${can.ok ? `<button class="big go" data-act="clock-in">${T('Inklokken', '上班打卡', 'Becsekkolás', 'Pointer l’arrivée')}</button>` : `
+        <button class="big go" disabled aria-describedby="in-why">${T('Inklokken', '上班打卡', 'Becsekkolás', 'Pointer l’arrivée')}</button>
         <p class="hint info" id="in-why" ${soon ? `data-unlock-at="${can.from.toISOString()}"` : ''}>${soon
           ? T(`Je kan inklokken vanaf <strong>${from}</strong>, ${early ? `${early} minuten voor je shift begint` : 'als je shift begint'}.`,
-              `你可以从 <strong>${from}</strong> 开始打卡（${early ? `班次开始前 ${early} 分钟` : '班次开始时'}）。`, `Becsekkolni <strong>${from}</strong>-tól lehet, ${early ? `${early} perccel a műszakod előtt` : 'a műszakod kezdetétől'}.`)
-          : T('Je kan alleen inklokken tijdens een shift waarvoor je ingepland bent. Neem er een op bij Shiften.', '只有在排给你的班次期间才能打卡。去“班次”页选一个。', 'Csak olyan műszak alatt csekkolhatsz be, amelyre be vagy osztva. Vállalj egyet a Műszakok alatt.')}
-          ${T('Gewerkt zonder in te klokken?', '上班了却没打卡？', 'Dolgoztál becsekkolás nélkül?')} <button class="link" data-act="forgot-in">${T('Vergeten uren toevoegen', '补登工时', 'Elfelejtett órák hozzáadása')}</button></p>`}`;
+              `你可以从 <strong>${from}</strong> 开始打卡（${early ? `班次开始前 ${early} 分钟` : '班次开始时'}）。`, `Becsekkolni <strong>${from}</strong>-tól lehet, ${early ? `${early} perccel a műszakod előtt` : 'a műszakod kezdetétől'}.`, `Tu peux pointer ton arrivée à partir de <strong>${from}</strong>, ${early ? `${early} minutes avant le début de ton service` : 'au début de ton service'}.`)
+          : T('Je kan alleen inklokken tijdens een shift waarvoor je ingepland bent. Neem er een op bij Shiften.', '只有在排给你的班次期间才能打卡。去“班次”页选一个。', 'Csak olyan műszak alatt csekkolhatsz be, amelyre be vagy osztva. Vállalj egyet a Műszakok alatt.', 'Tu ne peux pointer ton arrivée que pendant un service pour lequel tu es prévu. Prends-en un dans Services.')}
+          ${T('Gewerkt zonder in te klokken?', '上班了却没打卡？', 'Dolgoztál becsekkolás nélkül?', 'Travaillé sans pointer ?')} <button class="link" data-act="forgot-in">${T('Vergeten uren toevoegen', '补登工时', 'Elfelejtett órák hozzáadása', 'Ajouter des heures oubliées')}</button></p>`}`;
   }
   return `
-    <section class="punch ${e ? 'is-on' : ''} ${compact ? 'compact' : ''}" aria-label="${T('In- en uitklokken', '打卡', 'Be- és kicsekkolás')}">
+    <section class="punch ${e ? 'is-on' : ''} ${compact ? 'compact' : ''}" aria-label="${T('In- en uitklokken', '打卡', 'Be- és kicsekkolás', 'Pointer l’arrivée et le départ')}">
       <div class="punch-top">
         <span class="punch-clock" data-live="clock">${fmt.clock(t)}</span>
         <span class="punch-date">${fmt.dayLong(t)}</span>
@@ -1508,9 +1550,9 @@ function bindPunch(root, after) {
   // first a confirmation, then a screen that shows it worked
   const inBtn = $('[data-act=clock-in]', root);
   if (inBtn) inBtn.addEventListener('click', async () => {
-    if (!await modal.confirm({ title: T('Nu inklokken?', '现在上班打卡？', 'Becsekkolsz most?'),
-      body: T(`Je begint te werken om <strong>${fmt.time(now())}</strong>.`, `你将在 <strong>${fmt.time(now())}</strong> 开始工作。`, `Ekkor kezdesz dolgozni: <strong>${fmt.time(now())}</strong>.`),
-      ok: T('Ja, inklokken', '是，上班打卡', 'Igen, becsekkolok') })) return;
+    if (!await modal.confirm({ title: T('Nu inklokken?', '现在上班打卡？', 'Becsekkolsz most?', 'Pointer ton arrivée maintenant ?'),
+      body: T(`Je begint te werken om <strong>${fmt.time(now())}</strong>.`, `你将在 <strong>${fmt.time(now())}</strong> 开始工作。`, `Ekkor kezdesz dolgozni: <strong>${fmt.time(now())}</strong>.`, `Tu commences à travailler à <strong>${fmt.time(now())}</strong>.`),
+      ok: T('Ja, inklokken', '是，上班打卡', 'Igen, becsekkolok', 'Oui, pointer l’arrivée') })) return;
     busy(inBtn, async () => {
       await rpc('clock_in');
       await refreshMe();
@@ -1520,9 +1562,9 @@ function bindPunch(root, after) {
   });
   const outBtn = $('[data-act=clock-out]', root);
   if (outBtn) outBtn.addEventListener('click', async () => {
-    if (!await modal.confirm({ title: T('Nu uitklokken?', '现在下班打卡？', 'Kicsekkolsz most?'),
-      body: T(`Je stopt met werken om <strong>${fmt.time(now())}</strong>.`, `你将在 <strong>${fmt.time(now())}</strong> 结束工作。`, `Ekkor fejezed be a munkát: <strong>${fmt.time(now())}</strong>.`),
-      ok: T('Ja, uitklokken', '是，下班打卡', 'Igen, kicsekkolok') })) return;
+    if (!await modal.confirm({ title: T('Nu uitklokken?', '现在下班打卡？', 'Kicsekkolsz most?', 'Pointer ton départ maintenant ?'),
+      body: T(`Je stopt met werken om <strong>${fmt.time(now())}</strong>.`, `你将在 <strong>${fmt.time(now())}</strong> 结束工作。`, `Ekkor fejezed be a munkát: <strong>${fmt.time(now())}</strong>.`, `Tu arrêtes de travailler à <strong>${fmt.time(now())}</strong>.`),
+      ok: T('Ja, uitklokken', '是，下班打卡', 'Igen, kicsekkolok', 'Oui, pointer le départ') })) return;
     const since = S.openEntry && S.openEntry.clock_in;
     busy(outBtn, async () => {
       await rpc('clock_out', { p_note: ($('#out-note', root) || {}).value || '' });
@@ -1543,11 +1585,11 @@ function punchDone(isIn, since) {
   modal.open(`
     <div class="punch-done ${isIn ? 'is-in' : 'is-out'}">
       <div class="punch-check" aria-hidden="true">✓</div>
-      <h2 id="modal-title">${isIn ? T('Je bent ingeklokt', '上班打卡成功', 'Becsekkoltál') : T('Je bent uitgeklokt', '下班打卡成功', 'Kicsekkoltál')}</h2>
+      <h2 id="modal-title">${isIn ? T('Je bent ingeklokt', '上班打卡成功', 'Becsekkoltál', 'Ton arrivée est pointée') : T('Je bent uitgeklokt', '下班打卡成功', 'Kicsekkoltál', 'Ton départ est pointé')}</h2>
       <p class="punch-time">${fmt.time(t)}</p>
-      <p>${isIn ? T(`Fijne shift, ${esc(S.me.name.split(' ')[0])}!`, `${esc(S.me.name.split(' ')[0])}，工作顺利！`, `Jó műszakot, ${esc(S.me.name.split(' ')[0])}!`)
-        : `${since ? T(`Je werkte ${fmt.dur(mins)}. `, `你工作了 ${fmt.dur(mins)}。`, `${fmt.dur(mins)} dolgoztál. `) : ''}${T(`Bedankt en tot de volgende keer, ${esc(S.me.name.split(' ')[0])}!`, `辛苦了，${esc(S.me.name.split(' ')[0])}，下次见！`, `Köszönjük, ${esc(S.me.name.split(' ')[0])}, viszlát legközelebb!`)}`}</p>
-      <div class="form-actions"><button type="button" class="primary" data-close>${T('OK', '好的', 'OK')}</button></div>
+      <p>${isIn ? T(`Fijne shift, ${esc(S.me.name.split(' ')[0])}!`, `${esc(S.me.name.split(' ')[0])}，工作顺利！`, `Jó műszakot, ${esc(S.me.name.split(' ')[0])}!`, `Bon service, ${esc(S.me.name.split(' ')[0])} !`)
+        : `${since ? T(`Je werkte ${fmt.dur(mins)}. `, `你工作了 ${fmt.dur(mins)}。`, `${fmt.dur(mins)} dolgoztál. `, `Tu as travaillé ${fmt.dur(mins)}. `) : ''}${T(`Bedankt en tot de volgende keer, ${esc(S.me.name.split(' ')[0])}!`, `辛苦了，${esc(S.me.name.split(' ')[0])}，下次见！`, `Köszönjük, ${esc(S.me.name.split(' ')[0])}, viszlát legközelebb!`, `Merci et à la prochaine, ${esc(S.me.name.split(' ')[0])} !`)}`}</p>
+      <div class="form-actions"><button type="button" class="primary" data-close>${T('OK', '好的', 'OK', 'OK')}</button></div>
     </div>`);
 }
 
@@ -1558,27 +1600,27 @@ function forgotCheckout(after) {
   let guess = e.shift ? new Date(e.shift.ends_at) : new Date(since.getTime() + 8 * 3600000);
   if (guess > now()) guess = now();
   modal.open(`
-    <h2 id="modal-title">${T('Wanneer ben je vertrokken?', '你几点离开的？', 'Mikor mentél el?')}</h2>
+    <h2 id="modal-title">${T('Wanneer ben je vertrokken?', '你几点离开的？', 'Mikor mentél el?', 'Quand es-tu parti ?')}</h2>
     <p>${T(`Je klokte in ${fmt.when(since)}. We klokken je nu uit en sturen het juiste uur naar je verantwoordelijke om goed te keuren.`,
-      `你在${fmt.when(since)}上班打卡。现在帮你下班打卡，并把正确的时间发给负责人审核。`, `Ekkor csekkoltál be: ${fmt.when(since)}. Most kicsekkolunk, és a helyes időpontot elküldjük a vezetődnek jóváhagyásra.`)}</p>
+      `你在${fmt.when(since)}上班打卡。现在帮你下班打卡，并把正确的时间发给负责人审核。`, `Ekkor csekkoltál be: ${fmt.when(since)}. Most kicsekkolunk, és a helyes időpontot elküldjük a vezetődnek jóváhagyásra.`, `Tu as pointé ton arrivée ${fmt.when(since)}. Nous pointons ton départ maintenant et envoyons l’heure correcte à ton responsable pour validation.`)}</p>
     <form id="forgot-form" novalidate>
       <div class="form-grid">
-        <div class="field"><label for="f-day">${T('Dag', '日期', 'Nap')}</label>${dateField('f-day', guess, since, now())}</div>
-        <div class="field"><label for="f-out">${T('Ik vertrok om', '我离开的时间', 'Ekkor mentem el')}</label>${timeField('f-out', toTimeInput(guess))}</div>
-        <div class="field wide"><label for="f-reason">${T('Reden', '原因', 'Indok')}</label><input id="f-reason" maxlength="300" value="${T('Vergeten uit te klokken', '忘记下班打卡', 'Elfelejtettem kicsekkolni')}"></div>
+        <div class="field"><label for="f-day">${T('Dag', '日期', 'Nap', 'Jour')}</label>${dateField('f-day', guess, since, now())}</div>
+        <div class="field"><label for="f-out">${T('Ik vertrok om', '我离开的时间', 'Ekkor mentem el', 'Je suis parti à')}</label>${timeField('f-out', toTimeInput(guess))}</div>
+        <div class="field wide"><label for="f-reason">${T('Reden', '原因', 'Indok', 'Raison')}</label><input id="f-reason" maxlength="300" value="${T('Vergeten uit te klokken', '忘记下班打卡', 'Elfelejtettem kicsekkolni', 'Oublié de pointer le départ')}"></div>
       </div>
       <p class="form-error" id="f-err"></p>
-      <div class="form-actions"><button type="button" data-close>${T('Annuleren', '取消', 'Mégse')}</button><button type="submit" class="primary">${T('Uitklokken en versturen', '下班打卡并发送', 'Kicsekkolás és küldés')}</button></div>
+      <div class="form-actions"><button type="button" data-close>${T('Annuleren', '取消', 'Mégse', 'Annuler')}</button><button type="submit" class="primary">${T('Uitklokken en versturen', '下班打卡并发送', 'Kicsekkolás és küldés', 'Pointer le départ et envoyer')}</button></div>
     </form>`, d => {
     $('#forgot-form', d).addEventListener('submit', async ev => {
       ev.preventDefault();
       const hm = parseHM($('#f-out', d).value);
       const reason = $('#f-reason', d).value.trim();
       const err = $('#f-err', d);
-      if (!hm) { err.textContent = T('Vul in hoe laat je vertrok, bv. 22:30.', '请填写你离开的时间，例如 22:30。', 'Add meg, mikor mentél el, pl. 22:30.'); return; }
+      if (!hm) { err.textContent = T('Vul in hoe laat je vertrok, bv. 22:30.', '请填写你离开的时间，例如 22:30。', 'Add meg, mikor mentél el, pl. 22:30.', 'Indique à quelle heure tu es parti, p. ex. 22:30.'); return; }
       const out = atTime(new Date($('#f-day', d).value + 'T00:00'), hm);
-      if (out <= since || out > now()) { err.textContent = T('Kies een uur tussen je inklokken en nu.', '请选一个在上班打卡之后、现在之前的时间。', 'Válassz egy időpontot a becsekkolás és a mostani idő között.'); return; }
-      if (reason.length < 3) { err.textContent = T('Geef een korte reden.', '请简单写个原因。', 'Adj meg egy rövid indokot.'); return; }
+      if (out <= since || out > now()) { err.textContent = T('Kies een uur tussen je inklokken en nu.', '请选一个在上班打卡之后、现在之前的时间。', 'Válassz egy időpontot a becsekkolás és a mostani idő között.', 'Choisis une heure entre ton arrivée et maintenant.'); return; }
+      if (reason.length < 3) { err.textContent = T('Geef een korte reden.', '请简单写个原因。', 'Adj meg egy rövid indokot.', 'Donne une courte raison.'); return; }
       const btn = $('button[type=submit]', d);
       btn.disabled = true;
       try {
@@ -1586,7 +1628,7 @@ function forgotCheckout(after) {
         await rpc('request_time_edit', { p_entry_id: e.id, p_in: since.toISOString(), p_out: out.toISOString(), p_reason: reason });
         modal.close();
         await refreshMe();
-        toast(T('Uitgeklokt. Je verantwoordelijke keurt het ingevulde uur goed.', '已下班打卡。负责人会审核你填的时间。', 'Kicsekkolva. A vezetőd jóváhagyja a megadott időpontot.'));
+        toast(T('Uitgeklokt. Je verantwoordelijke keurt het ingevulde uur goed.', '已下班打卡。负责人会审核你填的时间。', 'Kicsekkolva. A vezetőd jóváhagyja a megadott időpontot.', 'Départ pointé. Ton responsable va valider l’heure indiquée.'));
         after();
       } catch (x) { err.textContent = x.message; btn.disabled = false; }
     });
@@ -1595,26 +1637,26 @@ function forgotCheckout(after) {
 
 /* ------------------------------------------------------------ staff: clock */
 
-const hello = () => { const h = now().getHours(); return h < 12 ? T('Goedemorgen', '早上好', 'Jó reggelt') : h < 18 ? T('Goedemiddag', '下午好', 'Szép napot') : T('Goedenavond', '晚上好', 'Jó estét'); };
+const hello = () => { const h = now().getHours(); return h < 12 ? T('Goedemorgen', '早上好', 'Jó reggelt', 'Bonjour') : h < 18 ? T('Goedemiddag', '下午好', 'Szép napot', 'Bon après-midi') : T('Goedenavond', '晚上好', 'Jó estét', 'Bonsoir'); };
 const helloHead = () => `
     <div class="view-head"><div class="hello">
-      <button class="hello-pic" data-go="profile" aria-label="${T('Mijn profiel', '我的资料', 'Profilom')}">${personPic(S.me, 'xl')}</button>
-      <div><h1>${hello()}${T(', ', '，', ', ')}${esc(S.me.name.split(' ')[0])}</h1>
+      <button class="hello-pic" data-go="profile" aria-label="${T('Mijn profiel', '我的资料', 'Profilom', 'Mon profil')}">${personPic(S.me, 'xl')}</button>
+      <div><h1>${hello()}${T(', ', '，', ', ', ', ')}${esc(S.me.name.split(' ')[0])}</h1>
         <p class="lvl-line">${levelPill(S.me.xp)} <span>${esc(levelTitle(S.me.xp.level))}</span> <span class="muted">· ${S.me.xp.xp} XP</span></p></div>
     </div></div>`;
 const avatarCta = () => S.me.avatar ? '' : `<section class="card avatar-cta">
           <div class="cta-pic" aria-hidden="true">${Avatar.render(Avatar.DEFAULT, { view: 'bust' })}</div>
-          <div><h2>${T('Maak je avatar', '创建你的头像', 'Készítsd el az avatarodat')}</h2><p class="muted small">${T('Kies je kapsel, je kleren en je schoenen. Met elk level krijg je nieuwe dingen om te dragen.', '选发型、衣服和鞋子。每升一级都能解锁新的装扮。', 'Válassz frizurát, ruhát és cipőt. Minden szinttel új dolgokat kapsz, amiket felvehetsz.')}</p>
-          <button class="primary sm" id="make-avatar">${T('Maak je avatar', '创建你的头像', 'Készítsd el az avatarodat')}</button></div></section>`;
+          <div><h2>${T('Maak je avatar', '创建你的头像', 'Készítsd el az avatarodat', 'Crée ton avatar')}</h2><p class="muted small">${T('Kies je kapsel, je kleren en je schoenen. Met elk level krijg je nieuwe dingen om te dragen.', '选发型、衣服和鞋子。每升一级都能解锁新的装扮。', 'Válassz frizurát, ruhát és cipőt. Minden szinttel új dolgokat kapsz, amiket felvehetsz.', 'Choisis ta coiffure, tes vêtements et tes chaussures. À chaque niveau, tu débloques de nouvelles choses à porter.')}</p>
+          <button class="primary sm" id="make-avatar">${T('Maak je avatar', '创建你的头像', 'Készítsd el az avatarodat', 'Crée ton avatar')}</button></div></section>`;
 function nextShiftsCard(mine, open) {
   return `<section class="card">
-          <div class="card-head"><h2>${T('Je volgende shiften', '你接下来的班次', 'A következő műszakjaid')}</h2>${seesShifts() ? `<button class="sm" data-go="shifts">${T('Alle shiften', '所有班次', 'Összes műszak')}</button>` : ''}</div>
+          <div class="card-head"><h2>${T('Je volgende shiften', '你接下来的班次', 'A következő műszakjaid', 'Tes prochains services')}</h2>${seesShifts() ? `<button class="sm" data-go="shifts">${T('Alle shiften', '所有班次', 'Összes műszak', 'Tous les services')}</button>` : ''}</div>
           ${mine.length ? `<div class="rows">${mine.map(s => `
             <div class="row"><div class="row-main"><span class="row-title">${fmt.dayLong(s.starts_at)}</span>
             <span class="row-sub"><span class="time">${fmt.range(s.starts_at, s.ends_at)}</span>${s.label ? ' · ' + esc(partName(s.label)) : ''}</span></div>
             <span class="pill">${fmt.dur(minutesBetween(s.starts_at, s.ends_at))}</span></div>`).join('')}</div>`
-            : `<p class="empty">${T('Nog niets gepland.', '还没有排班。', 'Még nincs semmi beosztva.')}</p>`}
-          ${open.length ? `<p class="hint info" style="margin-top:12px">${T(`${plural(open.length, 'open shift', 'open shiften')} de komende twee weken.`, `未来两周有 ${open.length} 个空班次。`, `${open.length} szabad műszak a következő két hétben.`)} <button class="link" data-go="shifts">${T('Neem er een op', '去选一个', 'Vállalj el egyet')}</button></p>` : ''}
+            : `<p class="empty">${T('Nog niets gepland.', '还没有排班。', 'Még nincs semmi beosztva.', 'Rien de prévu pour l’instant.')}</p>`}
+          ${open.length ? `<p class="hint info" style="margin-top:12px">${T(`${plural(open.length, 'open shift', 'open shiften')} de komende twee weken.`, `未来两周有 ${open.length} 个空班次。`, `${open.length} szabad műszak a következő két hétben.`, `${plural(open.length, 'service libre', 'services libres')} dans les deux prochaines semaines.`)} <button class="link" data-go="shifts">${T('Neem er een op', '去选一个', 'Vállalj el egyet', 'Prends-en un')}</button></p>` : ''}
         </section>`;
 }
 function bindHome(el) {
@@ -1637,20 +1679,20 @@ async function viewStart(el, current) {
   el.innerHTML = `${helloHead()}
     <div class="grid-2">
       <section class="card xp-card">
-        <div class="card-head"><h2>${T('Jouw level', '你的等级', 'A szinted')}</h2>${levelPill(xp)}</div>
+        <div class="card-head"><h2>${T('Jouw level', '你的等级', 'A szinted', 'Ton niveau')}</h2>${levelPill(xp)}</div>
         <p class="xp-title">${esc(levelTitle(xp.level))}</p>
         ${xpBar(xp)}
         ${per ? `<p class="hint good">${T(`Elke dag krijg je <strong>+${per} XP</strong>, gewoon omdat je bij het team bent. Kom morgen terug voor meer.`,
-          `每天你都会得到 <strong>+${per} XP</strong>，因为你是团队的一员。明天再来看看。`, `Minden nap <strong>+${per} XP</strong>-t kapsz, egyszerűen mert a csapat tagja vagy. Gyere vissza holnap is.`)}</p>` : ''}
-        <div class="form-actions"><button class="sm" data-go="ranking">${T('Ranglijst', '排行榜', 'Ranglista')}</button><button class="sm" data-go="profile">${T('Avatar aanpassen', '修改头像', 'Avatar szerkesztése')}</button></div>
+          `每天你都会得到 <strong>+${per} XP</strong>，因为你是团队的一员。明天再来看看。`, `Minden nap <strong>+${per} XP</strong>-t kapsz, egyszerűen mert a csapat tagja vagy. Gyere vissza holnap is.`, `Chaque jour, tu reçois <strong>+${per} XP</strong>, simplement parce que tu fais partie de l’équipe. Reviens demain pour en gagner plus.`)}</p>` : ''}
+        <div class="form-actions"><button class="sm" data-go="ranking">${T('Ranglijst', '排行榜', 'Ranglista', 'Classement')}</button><button class="sm" data-go="profile">${T('Avatar aanpassen', '修改头像', 'Avatar szerkesztése', 'Modifier l’avatar')}</button></div>
       </section>
       <div style="display:flex;flex-direction:column;gap:18px;min-width:0">
         ${quizCard(quiz)}
         ${rushButton()}
         ${avatarCta()}
         <div class="stats">
-          <div class="stat"><span class="v">${fmt.dur(planned)}</span><span class="k">${T('Ingepland deze week', '本周排班', 'Beosztva ezen a héten')}</span></div>
-          <div class="stat good"><span class="v">+${per}</span><span class="k">${T('XP per dag', '每天 XP', 'XP naponta')}</span></div>
+          <div class="stat"><span class="v">${fmt.dur(planned)}</span><span class="k">${T('Ingepland deze week', '本周排班', 'Beosztva ezen a héten', 'Prévu cette semaine')}</span></div>
+          <div class="stat good"><span class="v">+${per}</span><span class="k">${T('XP per dag', '每天 XP', 'XP naponta', 'XP par jour')}</span></div>
         </div>
         ${nextShiftsCard(S.nextShifts, open)}
       </div>
@@ -1684,9 +1726,9 @@ async function viewClock(el, current) {
         ${rushButton()}
         ${avatarCta()}
         <div class="stats stats-3">
-          <div class="stat"><span class="v">${fmt.dur(weekMins)}</span><span class="k">${T('Gewerkt deze week', '本周工时', 'Ledolgozva ezen a héten')}</span></div>
-          <div class="stat good"><span class="v">${fmt.dur(mins)}</span><span class="k">${T(`Gewerkt in ${monthName}`, `${monthName}工时`, `${monthName}: ledolgozva`)}</span></div>
-          <div class="stat"><span class="v">${rate != null ? fmt.money(mins / 60 * rate) : '—'}</span><span class="k">${rate != null ? T(`Verdiend in ${monthName}`, `${monthName}收入`, `${monthName}: kereset`) : T('Je verdiensten verschijnen zodra je uurloon is ingesteld', '设置时薪后会显示你的收入', 'A kereseted akkor jelenik meg, amikor beállították az órabéredet')}</span></div>
+          <div class="stat"><span class="v">${fmt.dur(weekMins)}</span><span class="k">${T('Gewerkt deze week', '本周工时', 'Ledolgozva ezen a héten', 'Travaillé cette semaine')}</span></div>
+          <div class="stat good"><span class="v">${fmt.dur(mins)}</span><span class="k">${T(`Gewerkt in ${monthName}`, `${monthName}工时`, `${monthName}: ledolgozva`, `Travaillé en ${monthName}`)}</span></div>
+          <div class="stat"><span class="v">${rate != null ? fmt.money(mins / 60 * rate) : '—'}</span><span class="k">${rate != null ? T(`Verdiend in ${monthName}`, `${monthName}收入`, `${monthName}: kereset`, `Gagné en ${monthName}`) : T('Je verdiensten verschijnen zodra je uurloon is ingesteld', '设置时薪后会显示你的收入', 'A kereseted akkor jelenik meg, amikor beállították az órabéredet', 'Tes gains apparaîtront dès que ton salaire horaire sera configuré')}</span></div>
         </div>
         ${nextShiftsCard(mine, open)}
       </div>
@@ -1709,24 +1751,24 @@ const quizWeek = w => { const a = new Date(w + 'T00:00'); return `${fmt.short(a)
 const quizAnswered = qz => qz.questions.filter(q => q.choice != null).length;
 const quizRight = qz => qz.questions.filter(q => q.choice != null && q.choice === q.correct).length;
 const quizDeadline = qz => sameDay(now(), addDays(new Date(qz.week_start + 'T00:00'), 6))
-  ? T('Vandaag is de laatste dag.', '今天是最后一天。', 'Ma van az utolsó nap.') : T('Je hebt tot zondag.', '周日截止。', 'Vasárnapig van időd.');
+  ? T('Vandaag is de laatste dag.', '今天是最后一天。', 'Ma van az utolsó nap.', 'C’est le dernier jour aujourd’hui.') : T('Je hebt tot zondag.', '周日截止。', 'Vasárnapig van időd.', 'Tu as jusqu’à dimanche.');
 
 // The card on the home page.
 function quizCard(r) {
   if (!r || !r.takes || (!r.current && !r.past.length)) return '';
   const qz = r.current;
   if (!qz) return `<section class="card quiz-card">
-      <div class="card-head"><h2 class="icon-head">${ICONS.quiz}${T('Quiz van de week', '每周测验', 'A hét kvíze')}</h2></div>
-      <p class="muted">${T('Deze week is er nog geen quiz.', '本周还没有测验。', 'Ezen a héten még nincs kvíz.')}</p>
-      <div class="form-actions"><button class="sm" data-go="quiz">${T('Vorige quizzen', '以前的测验', 'Korábbi kvízek')}</button></div></section>`;
+      <div class="card-head"><h2 class="icon-head">${ICONS.quiz}${T('Quiz van de week', '每周测验', 'A hét kvíze', 'Quiz de la semaine')}</h2></div>
+      <p class="muted">${T('Deze week is er nog geen quiz.', '本周还没有测验。', 'Ezen a héten még nincs kvíz.', 'Pas encore de quiz cette semaine.')}</p>
+      <div class="form-actions"><button class="sm" data-go="quiz">${T('Vorige quizzen', '以前的测验', 'Korábbi kvízek', 'Quiz précédents')}</button></div></section>`;
   const n = qz.questions.length, done = quizAnswered(qz), right = quizRight(qz);
   return `<section class="card quiz-card${done === n ? '' : ' is-open'}">
-      <div class="card-head"><h2 class="icon-head">${ICONS.quiz}${T('Quiz van de week', '每周测验', 'A hét kvíze')}</h2><span class="pill ${done === n ? 'on' : 'accent'}">${done}/${n}</span></div>
+      <div class="card-head"><h2 class="icon-head">${ICONS.quiz}${T('Quiz van de week', '每周测验', 'A hét kvíze', 'Quiz de la semaine')}</h2><span class="pill ${done === n ? 'on' : 'accent'}">${done}/${n}</span></div>
       ${qz.title ? `<p class="quiz-title">${esc(qz.title)}</p>` : ''}
-      <p>${done === n ? T(`Klaar: <strong>${right} van ${n}</strong> juist, <strong>+${right * qz.xp} XP</strong>.`, `完成了：答对 <strong>${right}/${n}</strong>，<strong>+${right * qz.xp} XP</strong>。`, `Kész: <strong>${right}/${n}</strong> helyes, <strong>+${right * qz.xp} XP</strong>.`)
-        : done ? T(`Je beantwoordde er al ${done} van ${n}. ${quizDeadline(qz)}`, `你已经答了 ${done}/${n} 题。${quizDeadline(qz)}`, `Már ${done}/${n} kérdésre válaszoltál. ${quizDeadline(qz)}`)
-        : T(`${plural(n, 'vraag', 'vragen')}, <strong>+${qz.xp} XP</strong> per juist antwoord. ${quizDeadline(qz)}`, `${n} 道题，每答对一题 <strong>+${qz.xp} XP</strong>。${quizDeadline(qz)}`, `${n} kérdés, <strong>+${qz.xp} XP</strong> minden helyes válaszért. ${quizDeadline(qz)}`)}</p>
-      <div class="form-actions"><button class="${done === n ? 'sm' : 'primary'}" data-go="quiz">${done === n ? T('Bekijk je antwoorden', '查看你的答案', 'Válaszaid megtekintése') : done ? T('Verder', '继续', 'Tovább') : T('Start de quiz', '开始测验', 'Kvíz indítása')}</button></div>
+      <p>${done === n ? T(`Klaar: <strong>${right} van ${n}</strong> juist, <strong>+${right * qz.xp} XP</strong>.`, `完成了：答对 <strong>${right}/${n}</strong>，<strong>+${right * qz.xp} XP</strong>。`, `Kész: <strong>${right}/${n}</strong> helyes, <strong>+${right * qz.xp} XP</strong>.`, `Terminé : <strong>${right} sur ${n}</strong> justes, <strong>+${right * qz.xp} XP</strong>.`)
+        : done ? T(`Je beantwoordde er al ${done} van ${n}. ${quizDeadline(qz)}`, `你已经答了 ${done}/${n} 题。${quizDeadline(qz)}`, `Már ${done}/${n} kérdésre válaszoltál. ${quizDeadline(qz)}`, `Tu as déjà répondu à ${done} sur ${n}. ${quizDeadline(qz)}`)
+        : T(`${plural(n, 'vraag', 'vragen')}, <strong>+${qz.xp} XP</strong> per juist antwoord. ${quizDeadline(qz)}`, `${n} 道题，每答对一题 <strong>+${qz.xp} XP</strong>。${quizDeadline(qz)}`, `${n} kérdés, <strong>+${qz.xp} XP</strong> minden helyes válaszért. ${quizDeadline(qz)}`, `${plural(n, 'question', 'questions')}, <strong>+${qz.xp} XP</strong> par bonne réponse. ${quizDeadline(qz)}`)}</p>
+      <div class="form-actions"><button class="${done === n ? 'sm' : 'primary'}" data-go="quiz">${done === n ? T('Bekijk je antwoorden', '查看你的答案', 'Válaszaid megtekintése', 'Voir tes réponses') : done ? T('Verder', '继续', 'Tovább', 'Continuer') : T('Start de quiz', '开始测验', 'Kvíz indítása', 'Commencer le quiz')}</button></div>
     </section>`;
 }
 
@@ -1744,12 +1786,12 @@ async function maybeQuizReminder() {
   const n = qz.questions.length, done = quizAnswered(qz);
   const d = modal.open(`
     <div class="remind-head"><span class="remind-icon" aria-hidden="true">${ICONS.quiz}</span>
-      <div><h2 id="modal-title">${done ? T('Maak je quiz af', '把测验做完', 'Fejezd be a kvízt') : T('De quiz van deze week staat klaar', '本周测验来了', 'Itt a hét kvíze')}</h2>
+      <div><h2 id="modal-title">${done ? T('Maak je quiz af', '把测验做完', 'Fejezd be a kvízt', 'Termine ton quiz') : T('De quiz van deze week staat klaar', '本周测验来了', 'Itt a hét kvíze', 'Le quiz de cette semaine est prêt')}</h2>
         <p class="muted small">${quizWeek(qz.week_start)}${qz.title ? ` · ${esc(qz.title)}` : ''}</p></div></div>
-    <p>${done ? T(`Je beantwoordde er al ${done} van ${n}.`, `你已经答了 ${done}/${n} 题。`, `Már ${done}/${n} kérdésre válaszoltál.`) : T(`${plural(n, 'vraag', 'vragen')} met meerkeuze.`, `${n} 道选择题。`, `${n} feleletválasztós kérdés.`)}
-      ${T(`Elk juist antwoord geeft je <strong>+${qz.xp} XP</strong>.`, `每答对一题 <strong>+${qz.xp} XP</strong>。`, `Minden helyes válasz <strong>+${qz.xp} XP</strong>.`)}</p>
-    <p class="muted small remind-tip">${quizDeadline(qz)} ${T('Elke vraag kan je maar één keer beantwoorden.', '每道题只能回答一次。', 'Minden kérdésre csak egyszer válaszolhatsz.')}</p>
-    <div class="form-actions"><button type="button" data-close>${T('Later', '以后再说', 'Később')}</button><button type="button" class="primary" id="qr-go">${done ? T('Verder', '继续', 'Tovább') : T('Start de quiz', '开始测验', 'Kvíz indítása')}</button></div>`, null, { sheet: true });
+    <p>${done ? T(`Je beantwoordde er al ${done} van ${n}.`, `你已经答了 ${done}/${n} 题。`, `Már ${done}/${n} kérdésre válaszoltál.`, `Tu as déjà répondu à ${done} sur ${n}.`) : T(`${plural(n, 'vraag', 'vragen')} met meerkeuze.`, `${n} 道选择题。`, `${n} feleletválasztós kérdés.`, `${plural(n, 'question', 'questions')} à choix multiple.`)}
+      ${T(`Elk juist antwoord geeft je <strong>+${qz.xp} XP</strong>.`, `每答对一题 <strong>+${qz.xp} XP</strong>。`, `Minden helyes válasz <strong>+${qz.xp} XP</strong>.`, `Chaque bonne réponse te rapporte <strong>+${qz.xp} XP</strong>.`)}</p>
+    <p class="muted small remind-tip">${quizDeadline(qz)} ${T('Elke vraag kan je maar één keer beantwoorden.', '每道题只能回答一次。', 'Minden kérdésre csak egyszer válaszolhatsz.', 'Tu ne peux répondre qu’une seule fois à chaque question.')}</p>
+    <div class="form-actions"><button type="button" data-close>${T('Later', '以后再说', 'Később', 'Plus tard')}</button><button type="button" class="primary" id="qr-go">${done ? T('Verder', '继续', 'Tovább', 'Continuer') : T('Start de quiz', '开始测验', 'Kvíz indítása', 'Commencer le quiz')}</button></div>`, null, { sheet: true });
   $('#qr-go', d).addEventListener('click', () => { modal.close(); location.hash = 'quiz'; });
 }
 
@@ -1758,14 +1800,14 @@ async function viewQuiz(el, current) {
   if (!current()) return;
   const qz = r.current;
   el.innerHTML = `
-    <div class="view-head"><div><h1>${T('Quiz van de week', '每周测验', 'A hét kvíze')}</h1>
-      <p>${T('Elke week een paar vragen met meerkeuze. Elk juist antwoord geeft je XP.', '每周几道选择题。每答对一题就得 XP。', 'Minden héten néhány feleletválasztós kérdés. Minden helyes válasz XP-t ér.')}</p></div></div>
+    <div class="view-head"><div><h1>${T('Quiz van de week', '每周测验', 'A hét kvíze', 'Quiz de la semaine')}</h1>
+      <p>${T('Elke week een paar vragen met meerkeuze. Elk juist antwoord geeft je XP.', '每周几道选择题。每答对一题就得 XP。', 'Minden héten néhány feleletválasztós kérdés. Minden helyes válasz XP-t ér.', 'Chaque semaine, quelques questions à choix multiple. Chaque bonne réponse te rapporte des XP.')}</p></div></div>
     <div class="stack">
-      <section class="card quiz-play" id="quiz-play">${qz ? '' : `<p class="empty"><strong>${T('Deze week is er nog geen quiz.', '本周还没有测验。', 'Ezen a héten még nincs kvíz.')}</strong>${T('Kijk later nog eens.', '晚点再来看看。', 'Nézz vissza később.')}</p>`}</section>
-      ${r.past.length ? `<section class="card"><h2>${T('Vorige quizzen', '以前的测验', 'Korábbi kvízek')}</h2>
+      <section class="card quiz-play" id="quiz-play">${qz ? '' : `<p class="empty"><strong>${T('Deze week is er nog geen quiz.', '本周还没有测验。', 'Ezen a héten még nincs kvíz.', 'Pas encore de quiz cette semaine.')}</strong>${T('Kijk later nog eens.', '晚点再来看看。', 'Nézz vissza később.', 'Reviens plus tard.')}</p>`}</section>
+      ${r.past.length ? `<section class="card"><h2>${T('Vorige quizzen', '以前的测验', 'Korábbi kvízek', 'Quiz précédents')}</h2>
         <div class="rows">${r.past.map(p => `<button type="button" class="row row-btn" data-past="${p.id}">
-          <span class="row-main"><span class="row-title">${p.title ? esc(p.title) : T('Quiz', '测验', 'Kvíz')}</span><span class="row-sub">${quizWeek(p.week_start)}</span></span>
-          <span class="pill${p.answered ? ' on' : ''}">${p.answered ? `${p.right}/${p.total} · +${p.xp} XP` : T('Gemist', '错过了', 'Kimaradt')}</span></button>`).join('')}</div></section>` : ''}
+          <span class="row-main"><span class="row-title">${p.title ? esc(p.title) : T('Quiz', '测验', 'Kvíz', 'Quiz')}</span><span class="row-sub">${quizWeek(p.week_start)}</span></span>
+          <span class="pill${p.answered ? ' on' : ''}">${p.answered ? `${p.right}/${p.total} · +${p.xp} XP` : T('Gemist', '错过了', 'Kimaradt', 'Manqué')}</span></button>`).join('')}</div></section>` : ''}
     </div>`;
   $$('[data-past]', el).forEach(b => b.addEventListener('click', () => { location.hash = `quiz/${b.dataset.past}`; }));
   if (qz) quizPlay($('#quiz-play', el), qz);
@@ -1781,12 +1823,12 @@ function quizPlay(box, qz) {
       box.innerHTML = `
         <div class="quiz-intro">
           <span class="remind-icon" aria-hidden="true">${ICONS.quiz}</span>
-          <p class="section-label">${T('Week van', '本周', 'Hét:')} ${quizWeek(qz.week_start)}</p>
-          <h2>${qz.title ? esc(qz.title) : T('De quiz van deze week', '本周测验', 'A hét kvíze')}</h2>
+          <p class="section-label">${T('Week van', '本周', 'Hét:', 'Semaine du')} ${quizWeek(qz.week_start)}</p>
+          <h2>${qz.title ? esc(qz.title) : T('De quiz van deze week', '本周测验', 'A hét kvíze', 'Le quiz de cette semaine')}</h2>
           <p>${T(`${plural(n, 'vraag', 'vragen')} met meerkeuze. Elk juist antwoord geeft je <strong>+${qz.xp} XP</strong>, samen tot <strong>${n * qz.xp} XP</strong>.`,
-            `${n} 道选择题。每答对一题 <strong>+${qz.xp} XP</strong>，最多 <strong>${n * qz.xp} XP</strong>。`, `${n} feleletválasztós kérdés. Minden helyes válasz <strong>+${qz.xp} XP</strong>, összesen akár <strong>${n * qz.xp} XP</strong>.`)}</p>
-          <p class="muted small">${T('Elke vraag kan je maar één keer beantwoorden.', '每道题只能回答一次。', 'Minden kérdésre csak egyszer válaszolhatsz.')} ${quizDeadline(qz)}</p>
-          <button type="button" class="primary big" id="qz-start">${T('Start de quiz', '开始测验', 'Kvíz indítása')}</button>
+            `${n} 道选择题。每答对一题 <strong>+${qz.xp} XP</strong>，最多 <strong>${n * qz.xp} XP</strong>。`, `${n} feleletválasztós kérdés. Minden helyes válasz <strong>+${qz.xp} XP</strong>, összesen akár <strong>${n * qz.xp} XP</strong>.`, `${plural(n, 'question', 'questions')} à choix multiple. Chaque bonne réponse te rapporte <strong>+${qz.xp} XP</strong>, jusqu’à <strong>${n * qz.xp} XP</strong> au total.`)}</p>
+          <p class="muted small">${T('Elke vraag kan je maar één keer beantwoorden.', '每道题只能回答一次。', 'Minden kérdésre csak egyszer válaszolhatsz.', 'Tu ne peux répondre qu’une seule fois à chaque question.')} ${quizDeadline(qz)}</p>
+          <button type="button" class="primary big" id="qz-start">${T('Start de quiz', '开始测验', 'Kvíz indítása', 'Commencer le quiz')}</button>
         </div>`;
       $('#qz-start', box).addEventListener('click', () => { start = false; draw(); });
       return;
@@ -1799,7 +1841,7 @@ function quizPlay(box, qz) {
     }
     const i = qz.questions.indexOf(q), picked = q.choice != null, right = picked && q.choice === q.correct;
     box.innerHTML = `
-      <div class="quiz-top"><span class="section-label">${T(`Vraag ${i + 1} van ${n}`, `第 ${i + 1} 题，共 ${n} 题`, `${i + 1}. kérdés / ${n}`)}</span><span class="pill on">+${quizRight(qz) * qz.xp} XP</span></div>
+      <div class="quiz-top"><span class="section-label">${T(`Vraag ${i + 1} van ${n}`, `第 ${i + 1} 题，共 ${n} 题`, `${i + 1}. kérdés / ${n}`, `Question ${i + 1} sur ${n}`)}</span><span class="pill on">+${quizRight(qz) * qz.xp} XP</span></div>
       <div class="quiz-steps" aria-hidden="true">${qz.questions.map((x, j) => `<span class="${x.choice == null ? (j === i ? 'is-now' : '') : x.choice === x.correct ? 'is-right' : 'is-wrong'}"></span>`).join('')}</div>
       <h2 class="quiz-q" id="quiz-q">${esc(q.question)}</h2>
       <div class="quiz-opts" role="group" aria-labelledby="quiz-q">
@@ -1810,10 +1852,10 @@ function quizPlay(box, qz) {
         }).join('')}
       </div>
       ${picked ? `<div class="quiz-feedback ${right ? 'is-right' : 'is-wrong'}" role="status">
-          <strong>${right ? T(`Juist! +${qz.xp} XP`, `答对了！+${qz.xp} XP`, `Helyes! +${qz.xp} XP`) : T(`Helaas. Het juiste antwoord is ${LETTERS[q.correct]}.`, `答错了。正确答案是 ${LETTERS[q.correct]}。`, `Sajnos nem. A helyes válasz: ${LETTERS[q.correct]}.`)}</strong>
+          <strong>${right ? T(`Juist! +${qz.xp} XP`, `答对了！+${qz.xp} XP`, `Helyes! +${qz.xp} XP`, `Juste ! +${qz.xp} XP`) : T(`Helaas. Het juiste antwoord is ${LETTERS[q.correct]}.`, `答错了。正确答案是 ${LETTERS[q.correct]}。`, `Sajnos nem. A helyes válasz: ${LETTERS[q.correct]}.`, `Dommage. La bonne réponse est ${LETTERS[q.correct]}.`)}</strong>
           ${q.explanation ? `<p>${esc(q.explanation)}</p>` : ''}</div>
-        <div class="form-actions"><button type="button" class="primary" id="qz-next">${answered === n ? T('Bekijk je resultaat', '查看结果', 'Eredmény megtekintése') : T('Volgende vraag', '下一题', 'Következő kérdés')}</button></div>`
-        : `<p class="muted small quiz-tip">${T('Tik op je antwoord. Daarna kan je het niet meer veranderen.', '点你的答案。选了就不能改。', 'Koppints a válaszodra. Utána már nem változtathatod meg.')}</p>`}`;
+        <div class="form-actions"><button type="button" class="primary" id="qz-next">${answered === n ? T('Bekijk je resultaat', '查看结果', 'Eredmény megtekintése', 'Voir ton résultat') : T('Volgende vraag', '下一题', 'Következő kérdés', 'Question suivante')}</button></div>`
+        : `<p class="muted small quiz-tip">${T('Tik op je antwoord. Daarna kan je het niet meer veranderen.', '点你的答案。选了就不能改。', 'Koppints a válaszodra. Utána már nem változtathatod meg.', 'Touche ta réponse. Ensuite, tu ne pourras plus la changer.')}</p>`}`;
     $$('[data-opt]', box).forEach(b => b.addEventListener('click', async () => {
       if (q.choice != null || box.dataset.busy) return;
       box.dataset.busy = '1';
@@ -1843,24 +1885,24 @@ function quizPlay(box, qz) {
 // The score and every question with the right answer.
 function quizResult(qz, { past = false } = {}) {
   const n = qz.questions.length, right = quizRight(qz), answered = quizAnswered(qz);
-  const msg = !answered ? T('Deze quiz heb je gemist.', '这个测验你错过了。', 'Ezt a kvízt kihagytad.')
-    : right === n ? T('Alles juist! Knap gedaan.', '全对！太棒了。', 'Minden helyes! Szép munka.') : right / n >= .6 ? T('Goed gedaan!', '做得好！', 'Ügyes vagy!') : T('Volgende keer beter!', '下次加油！', 'Legközelebb jobban megy!');
+  const msg = !answered ? T('Deze quiz heb je gemist.', '这个测验你错过了。', 'Ezt a kvízt kihagytad.', 'Tu as manqué ce quiz.')
+    : right === n ? T('Alles juist! Knap gedaan.', '全对！太棒了。', 'Minden helyes! Szép munka.', 'Tout juste ! Bien joué.') : right / n >= .6 ? T('Goed gedaan!', '做得好！', 'Ügyes vagy!', 'Bien joué !') : T('Volgende keer beter!', '下次加油！', 'Legközelebb jobban megy!', 'Ce sera mieux la prochaine fois !');
   return `
     <div class="quiz-result">
-      ${past ? '' : `<p class="section-label">${T('Week van', '本周', 'Hét:')} ${quizWeek(qz.week_start)}</p>`}
-      <div class="quiz-score"><span class="mono">${right}/${n}</span><span>${T('juist', '答对', 'helyes')}</span></div>
+      ${past ? '' : `<p class="section-label">${T('Week van', '本周', 'Hét:', 'Semaine du')} ${quizWeek(qz.week_start)}</p>`}
+      <div class="quiz-score"><span class="mono">${right}/${n}</span><span>${T('juist', '答对', 'helyes', 'juste')}</span></div>
       <p class="quiz-msg">${msg}</p>
       ${answered ? `<span class="pill on quiz-earned">+${right * qz.xp} XP</span>` : ''}
-      ${past || answered < n ? '' : `<p class="muted small">${T('Volgende week is er een nieuwe quiz.', '下周会有新的测验。', 'Jövő héten új kvíz jön.')}</p>`}
+      ${past || answered < n ? '' : `<p class="muted small">${T('Volgende week is er een nieuwe quiz.', '下周会有新的测验。', 'Jövő héten új kvíz jön.', 'Un nouveau quiz arrive la semaine prochaine.')}</p>`}
     </div>
-    <h3 class="quiz-sub">${T('De vragen', '题目', 'A kérdések')}</h3>
+    <h3 class="quiz-sub">${T('De vragen', '题目', 'A kérdések', 'Les questions')}</h3>
     <ol class="quiz-review">${qz.questions.map(q => {
       const st = q.choice == null ? 'is-skip' : q.choice === q.correct ? 'is-right' : 'is-wrong';
       return `<li class="${st}">
         <p class="quiz-review-q">${esc(q.question)}</p>
-        ${q.choice != null && q.choice !== q.correct ? `<p class="quiz-ans"><span class="pill bad">${T('Jij', '你', 'Te')}</span> ${LETTERS[q.choice]}. ${esc(q.options[q.choice])}</p>` : ''}
-        ${q.correct != null ? `<p class="quiz-ans"><span class="pill on">${q.choice === q.correct ? T('Jij, juist', '你答对了', 'Te, helyes') : T('Juist', '正确', 'Helyes')}</span> ${LETTERS[q.correct]}. ${esc(q.options[q.correct])}</p>` : ''}
-        ${q.choice == null ? `<p class="quiz-ans"><span class="pill">${T('Niet beantwoord', '未作答', 'Nincs válasz')}</span></p>` : ''}
+        ${q.choice != null && q.choice !== q.correct ? `<p class="quiz-ans"><span class="pill bad">${T('Jij', '你', 'Te', 'Toi')}</span> ${LETTERS[q.choice]}. ${esc(q.options[q.choice])}</p>` : ''}
+        ${q.correct != null ? `<p class="quiz-ans"><span class="pill on">${q.choice === q.correct ? T('Jij, juist', '你答对了', 'Te, helyes', 'Toi, juste') : T('Juist', '正确', 'Helyes', 'Juste')}</span> ${LETTERS[q.correct]}. ${esc(q.options[q.correct])}</p>` : ''}
+        ${q.choice == null ? `<p class="quiz-ans"><span class="pill">${T('Niet beantwoord', '未作答', 'Nincs válasz', 'Pas répondu')}</span></p>` : ''}
         ${q.explanation ? `<p class="muted small">${esc(q.explanation)}</p>` : ''}
       </li>`;
     }).join('')}</ol>`;
@@ -1870,8 +1912,8 @@ async function viewPastQuiz(el, current) {
   const qz = await rpc('my_past_quiz', { p_id: S.quizId });
   if (!current()) return;
   el.innerHTML = `
-    <div class="view-head"><div><p class="section-label"><a href="#quiz">${T('Quiz', '测验', 'Kvíz')}</a> · ${T('Week van', '那周', 'Hét:')} ${quizWeek(qz.week_start)}</p>
-      <h1>${qz.title ? esc(qz.title) : T('Quiz', '测验', 'Kvíz')}</h1></div></div>
+    <div class="view-head"><div><p class="section-label"><a href="#quiz">${T('Quiz', '测验', 'Kvíz', 'Quiz')}</a> · ${T('Week van', '那周', 'Hét:', 'Semaine du')} ${quizWeek(qz.week_start)}</p>
+      <h1>${qz.title ? esc(qz.title) : T('Quiz', '测验', 'Kvíz', 'Quiz')}</h1></div></div>
     <section class="card quiz-play">${quizResult(qz, { past: true })}</section>`;
 }
 
@@ -2093,9 +2135,9 @@ const metres = m => m >= 1000 ? `${num(m / 1000, 1)} km` : `${Math.round(m)} m`;
 const AWAKE_KEY = 'prikklok.awake';
 
 function geoError(e) {
-  if (e && e.code === 1) return 'Je locatie staat uit voor deze app. Sta locatie toe in de instellingen van je browser (voor deze website) en probeer opnieuw.';
-  if (e && e.code === 3) return 'Je locatie zoeken duurde te lang. Probeer opnieuw, liefst buiten.';
-  return 'Je locatie kon niet bepaald worden. Zet de locatie (gps) van je telefoon aan en probeer opnieuw.';
+  if (e && e.code === 1) return F('Je locatie staat uit voor deze app. Sta locatie toe in de instellingen van je browser (voor deze website) en probeer opnieuw.', 'La localisation est désactivée pour cette app. Autorise-la dans les réglages de ton navigateur (pour ce site) et réessaie.');
+  if (e && e.code === 3) return F('Je locatie zoeken duurde te lang. Probeer opnieuw, liefst buiten.', 'La recherche de ta position a pris trop de temps. Réessaie, de préférence dehors.');
+  return F('Je locatie kon niet bepaald worden. Zet de locatie (gps) van je telefoon aan en probeer opnieuw.', 'Impossible de trouver ta position. Active la localisation (GPS) de ton téléphone et réessaie.');
 }
 
 const fixOf = pos => ({ at: new Date(pos.timestamp + S.offset).toISOString(), lat: +pos.coords.latitude.toFixed(6),
@@ -2105,7 +2147,7 @@ const fixOf = pos => ({ at: new Date(pos.timestamp + S.offset).toISOString(), la
 // old, otherwise a new one.
 function getPosition({ timeout = 20000 } = {}) {
   if (Tracker.last && Date.now() - Tracker.lastAt < 15000 && Tracker.last.accuracy <= 200) return Promise.resolve({ ...Tracker.last, at: now().toISOString() });
-  if (!navigator.geolocation) return Promise.reject(new AppError('Deze telefoon of browser kan je locatie niet geven. Probeer een andere browser.'));
+  if (!navigator.geolocation) return Promise.reject(new AppError(F('Deze telefoon of browser kan je locatie niet geven. Probeer een andere browser.', 'Ce téléphone ou ce navigateur ne peut pas donner ta position. Essaie un autre navigateur.')));
   return new Promise((resolve, reject) => navigator.geolocation.getCurrentPosition(
     p => resolve(fixOf(p)), e => reject(new AppError(geoError(e))), { enableHighAccuracy: true, timeout, maximumAge: Tracker.entry == null ? 0 : 5000 }));
 }
@@ -2178,13 +2220,13 @@ const Tracker = {
   },
   release() { if (this.lock) { quiet(this.lock.release()); this.lock = null; } },
   status() {
-    if (this.error === 'unsupported') return '<span class="pill bad">Geen locatie</span> Deze telefoon of browser kan geen locatie geven. Je rit wordt niet bijgehouden.';
-    if (this.error === 'denied') return '<span class="pill bad">Locatie staat uit</span> Sta locatie toe voor deze website in je browser, anders wordt je rit niet bijgehouden.';
+    if (this.error === 'unsupported') return F('<span class="pill bad">Geen locatie</span> Deze telefoon of browser kan geen locatie geven. Je rit wordt niet bijgehouden.', '<span class="pill bad">Pas de position</span> Ce téléphone ou ce navigateur ne donne pas de position. Ton trajet n’est pas suivi.');
+    if (this.error === 'denied') return F('<span class="pill bad">Locatie staat uit</span> Sta locatie toe voor deze website in je browser, anders wordt je rit niet bijgehouden.', '<span class="pill bad">Localisation désactivée</span> Autorise la localisation pour ce site dans ton navigateur, sinon ton trajet n’est pas suivi.');
     const waiting = this.queue().length;
-    const wait = waiting > 3 ? ` · ${plural(waiting, 'plek wacht', 'plekken wachten')} op verbinding` : '';
-    if (!this.last) return `<span class="pill">Locatie zoeken…</span>${this.error === 'nofix' ? ' Zet de gps van je telefoon aan.' : ''}`;
-    if (Date.now() - this.lastAt > 3 * 60000) return `<span class="pill warn">Geen locatie sinds ${fmt.time(this.last.at)}</span> Laat de app open terwijl je rijdt.${wait}`;
-    return `<span class="pill on">Rit wordt bijgehouden</span> laatst ${fmt.time(this.last.at)} · tot op ${this.last.accuracy} m${wait}`;
+    const wait = waiting > 3 ? F(` · ${plural(waiting, 'plek wacht', 'plekken wachten')} op verbinding`, ` · ${plural(waiting, 'position attend', 'positions attendent')} la connexion`) : '';
+    if (!this.last) return `<span class="pill">${F('Locatie zoeken…', 'Recherche de la position…')}</span>${this.error === 'nofix' ? F(' Zet de gps van je telefoon aan.', ' Active le GPS de ton téléphone.') : ''}`;
+    if (Date.now() - this.lastAt > 3 * 60000) return F(`<span class="pill warn">Geen locatie sinds ${fmt.time(this.last.at)}</span> Laat de app open terwijl je rijdt.${wait}`, `<span class="pill warn">Pas de position depuis ${fmt.time(this.last.at)}</span> Laisse l’app ouverte pendant que tu roules.${wait}`);
+    return F(`<span class="pill on">Rit wordt bijgehouden</span> laatst ${fmt.time(this.last.at)} · tot op ${this.last.accuracy} m${wait}`, `<span class="pill on">Trajet suivi</span> dernière position ${fmt.time(this.last.at)} · à ${this.last.accuracy} m près${wait}`);
   },
   paint() { const el = $('#track-line'); if (el) el.innerHTML = this.status(); },
 };
@@ -2203,26 +2245,26 @@ setInterval(() => Tracker.paint(), 5000);
 
 function driverPunch(site) {
   const e = S.openEntry, t = now(), gps = !!S.settings.track_route;
-  const zone = site && site.lat != null ? `tot ${metres(site.radius_m)} ervan` : '';
+  const zone = site && site.lat != null ? F(`tot ${metres(site.radius_m)} ervan`, `jusqu’à ${metres(site.radius_m)} de celui-ci`) : '';
   const body = e ? `
-      <div class="punch-status"><span class="dot"></span>Ingeklokt sinds ${sameDay(e.clock_in, t) ? fmt.time(e.clock_in) : fmt.when(e.clock_in)}</div>
+      <div class="punch-status"><span class="dot"></span>${F('Ingeklokt sinds', 'Pointé depuis')} ${sameDay(e.clock_in, t) ? fmt.time(e.clock_in) : fmt.when(e.clock_in)}</div>
       <div class="punch-elapsed" data-live="since" data-since="${e.clock_in}">${fmt.dur(minutesBetween(e.clock_in, t))}</div>
       ${gps ? `<p class="track-line" id="track-line">${Tracker.status()}</p>
-      ${'wakeLock' in navigator ? `<label class="check small"><input type="checkbox" id="tr-awake" ${Tracker.awake() ? 'checked' : ''}> Scherm aan houden tijdens de rit</label>` : ''}` : ''}
+      ${'wakeLock' in navigator ? `<label class="check small"><input type="checkbox" id="tr-awake" ${Tracker.awake() ? 'checked' : ''}> ${F('Scherm aan houden tijdens de rit', 'Garder l’écran allumé pendant le trajet')}</label>` : ''}` : ''}
       <div class="field">
-        <label for="out-note">Opmerking voor je verantwoordelijke (optioneel)</label>
-        <input id="out-note" maxlength="300" placeholder="bv. automaat in de Markt was leeg">
+        <label for="out-note">${F('Opmerking voor je verantwoordelijke (optioneel)', 'Remarque pour ton responsable (facultatif)')}</label>
+        <input id="out-note" maxlength="300" placeholder="${F('bv. automaat in de Markt was leeg', 'p. ex. le distributeur du Markt était vide')}">
       </div>
-      <button class="big stop" data-act="drv-out">Uitklokken</button>
-      <p class="muted small">Uitklokken kan alleen aan het restaurant. Al weg en vergeten uit te klokken? <button class="link" data-act="drv-forgot">Vul in wanneer je stopte</button></p>`
+      <button class="big stop" data-act="drv-out">${F('Uitklokken', 'Pointer le départ')}</button>
+      <p class="muted small">${F('Uitklokken kan alleen aan het restaurant. Al weg en vergeten uit te klokken?', 'Le départ se pointe uniquement au restaurant. Déjà parti et oublié de pointer ?')} <button class="link" data-act="drv-forgot">${F('Vul in wanneer je stopte', 'Indique quand tu as arrêté')}</button></p>`
     : `
-      <div class="punch-status"><span class="dot"></span>Je bent niet ingeklokt</div>
-      <div class="punch-meta">Inklokken kan aan het restaurant${zone ? `, ${zone}` : ''}.</div>
-      <button class="big go" data-act="drv-in">Inklokken</button>
-      <p class="muted small">${gps ? 'De app vraagt daarvoor je locatie. Zolang je ingeklokt bent, houdt de app je rit bij; daarna niet meer. Laat de app open tijdens je ronde.'
-        : 'De app vraagt daarvoor je locatie, alleen bij het in- en uitklokken. Wat je bijvult, komt vanzelf uit MATO Info.'}</p>`;
+      <div class="punch-status"><span class="dot"></span>${F('Je bent niet ingeklokt', 'Tu n’as pas pointé')}</div>
+      <div class="punch-meta">${F('Inklokken kan aan het restaurant', 'Tu peux pointer au restaurant')}${zone ? `, ${zone}` : ''}.</div>
+      <button class="big go" data-act="drv-in">${F('Inklokken', 'Pointer l’arrivée')}</button>
+      <p class="muted small">${gps ? F('De app vraagt daarvoor je locatie. Zolang je ingeklokt bent, houdt de app je rit bij; daarna niet meer. Laat de app open tijdens je ronde.', 'L’app demande ta position pour cela. Tant que tu as pointé, l’app suit ton trajet ; ensuite plus. Laisse l’app ouverte pendant ta tournée.')
+        : F('De app vraagt daarvoor je locatie, alleen bij het in- en uitklokken. Wat je bijvult, komt vanzelf uit MATO Info.', 'L’app demande ta position pour cela, uniquement à l’arrivée et au départ. Ce que tu remplis arrive tout seul depuis MATO Info.')}</p>`;
   return `
-    <section class="punch ${e ? 'is-on' : ''}" aria-label="In- en uitklokken">
+    <section class="punch ${e ? 'is-on' : ''}" aria-label="${F('In- en uitklokken', 'Pointage')}">
       <div class="punch-top">
         <span class="punch-clock" data-live="clock">${fmt.clock(t)}</span>
         <span class="punch-date">${fmt.dayLong(t)}</span>
@@ -2234,23 +2276,23 @@ function driverPunch(site) {
 function bindDriverPunch(root, after) {
   const inBtn = $('[data-act=drv-in]', root);
   if (inBtn) inBtn.addEventListener('click', () => busy(inBtn, async () => {
-    inBtn.textContent = 'Locatie zoeken…';
+    inBtn.textContent = F('Locatie zoeken…', 'Recherche de la position…');
     const p = await getPosition();
-    inBtn.textContent = 'Bezig…';
+    inBtn.textContent = F('Bezig…', 'Un instant…');
     await rpc('driver_clock_in', { p_lat: p.lat, p_lng: p.lng, p_accuracy: p.accuracy });
     await refreshMe();
-    toast(`Ingeklokt om ${fmt.time(now())}. Goede rit!`);
+    toast(F(`Ingeklokt om ${fmt.time(now())}. Goede rit!`, `Arrivée pointée à ${fmt.time(now())}. Bonne route !`));
     after();
   }).catch(() => {}));
   const outBtn = $('[data-act=drv-out]', root);
   if (outBtn) outBtn.addEventListener('click', () => busy(outBtn, async () => {
-    outBtn.textContent = 'Locatie zoeken…';
+    outBtn.textContent = F('Locatie zoeken…', 'Recherche de la position…');
     const p = await getPosition();
-    outBtn.textContent = 'Bezig…';
+    outBtn.textContent = F('Bezig…', 'Un instant…');
     await Tracker.flush();
     await rpc('driver_clock_out', { p_lat: p.lat, p_lng: p.lng, p_accuracy: p.accuracy, p_note: ($('#out-note', root) || {}).value || '' });
     await refreshMe();
-    toast(`Uitgeklokt om ${fmt.time(now())}.`);
+    toast(F(`Uitgeklokt om ${fmt.time(now())}.`, `Départ pointé à ${fmt.time(now())}.`));
     after();
   }).catch(() => {}));
   const awake = $('#tr-awake', root);
@@ -2270,24 +2312,24 @@ function driverForgotModal(after) {
   const since = new Date(e.clock_in);
   const guess = now();
   modal.open(`
-    <h2 id="modal-title">Wanneer stopte je?</h2>
-    <p>Je klokte in ${fmt.when(since)}. We klokken je nu uit en sturen het uur waarop je stopte naar je verantwoordelijke om goed te keuren.</p>
+    <h2 id="modal-title">${F('Wanneer stopte je?', 'Quand as-tu arrêté ?')}</h2>
+    <p>${F(`Je klokte in ${fmt.when(since)}. We klokken je nu uit en sturen het uur waarop je stopte naar je verantwoordelijke om goed te keuren.`, `Tu as pointé ${fmt.when(since)}. On pointe ton départ maintenant et on envoie l’heure à laquelle tu as arrêté à ton responsable pour validation.`)}</p>
     <form id="dforgot-form" novalidate>
       <div class="form-grid">
-        <div class="field"><label for="df-day">Dag</label>${dateField('df-day', guess, since, now())}</div>
-        <div class="field"><label for="df-out">Ik stopte om</label>${timeField('df-out', toTimeInput(guess))}</div>
-        <div class="field wide"><label for="df-reason">Reden</label><input id="df-reason" maxlength="300" value="Vergeten uit te klokken aan het restaurant"></div>
+        <div class="field"><label for="df-day">${F('Dag', 'Jour')}</label>${dateField('df-day', guess, since, now())}</div>
+        <div class="field"><label for="df-out">${F('Ik stopte om', 'J’ai arrêté à')}</label>${timeField('df-out', toTimeInput(guess))}</div>
+        <div class="field wide"><label for="df-reason">${F('Reden', 'Raison')}</label><input id="df-reason" maxlength="300" value="${F('Vergeten uit te klokken aan het restaurant', 'Oublié de pointer le départ au restaurant')}"></div>
       </div>
       <p class="form-error" id="df-err"></p>
-      <div class="form-actions"><button type="button" data-close>Annuleren</button><button type="submit" class="primary">Uitklokken en versturen</button></div>
+      <div class="form-actions"><button type="button" data-close>${F('Annuleren', 'Annuler')}</button><button type="submit" class="primary">${F('Uitklokken en versturen', 'Pointer le départ et envoyer')}</button></div>
     </form>`, d => {
     $('#dforgot-form', d).addEventListener('submit', async ev => {
       ev.preventDefault();
       const hm = parseHM($('#df-out', d).value), reason = $('#df-reason', d).value.trim(), err = $('#df-err', d);
-      if (!hm) { err.textContent = 'Vul in hoe laat je stopte, bv. 13:30.'; return; }
+      if (!hm) { err.textContent = F('Vul in hoe laat je stopte, bv. 13:30.', 'Indique à quelle heure tu as arrêté, p. ex. 13:30.'); return; }
       const out = atTime(new Date($('#df-day', d).value + 'T00:00'), hm);
-      if (out <= since || out > now()) { err.textContent = 'Kies een uur tussen je inklokken en nu.'; return; }
-      if (reason.length < 3) { err.textContent = 'Geef een korte reden.'; return; }
+      if (out <= since || out > now()) { err.textContent = F('Kies een uur tussen je inklokken en nu.', 'Choisis une heure entre ton arrivée et maintenant.'); return; }
+      if (reason.length < 3) { err.textContent = F('Geef een korte reden.', 'Donne une courte raison.'); return; }
       const btn = $('button[type=submit]', d);
       btn.disabled = true;
       try {
@@ -2295,7 +2337,7 @@ function driverForgotModal(after) {
         await rpc('driver_forgot_out', { p_out: out.toISOString(), p_reason: reason });
         modal.close();
         await refreshMe();
-        toast('Uitgeklokt. Je verantwoordelijke keurt het uur goed.');
+        toast(F('Uitgeklokt. Je verantwoordelijke keurt het uur goed.', 'Départ pointé. Ton responsable va valider l’heure.'));
         after();
       } catch (x) { err.textContent = x.message; btn.disabled = false; }
     });
@@ -2320,42 +2362,42 @@ async function viewDriver(el, current) {
     checkpoints: today.checkpoints, site: today.site, now: now().getTime() });
   const gps = !!S.settings.track_route, visits = today.visits || [];
   const here = gps && S.openEntry && Tracker.last ? Route.placeOf({ ...Tracker.last, acc: Tracker.last.accuracy }, a.places) : null;
-  const hour = t.getHours(), hello = hour < 12 ? 'Goedemorgen' : hour < 18 ? 'Goedemiddag' : 'Goedenavond';
+  const hour = t.getHours(), hello = hour < 12 ? F('Goedemorgen', 'Bonjour') : hour < 18 ? F('Goedemiddag', 'Bonjour') : F('Goedenavond', 'Bonsoir');
   el.innerHTML = `
     <div class="view-head"><div class="hello">
-      <button class="hello-pic" data-go="profile" aria-label="Mijn profiel">${personPic(S.me, 'xl')}</button>
+      <button class="hello-pic" data-go="profile" aria-label="${F('Mijn profiel', 'Mon profil')}">${personPic(S.me, 'xl')}</button>
       <div><h1>${hello}, ${esc(S.me.name.split(' ')[0])}</h1><p class="muted">Chauffeur</p></div>
     </div></div>
     <div class="grid-2">
       ${driverPunch(today.site)}
       <div style="display:flex;flex-direction:column;gap:18px;min-width:0">
         <div class="stats stats-3">
-          <div class="stat good"><span class="v">${fmt.dur(worked(day))}</span><span class="k">Vandaag gewerkt</span></div>
-          <div class="stat"><span class="v">${fmt.dur(worked(wk))}</span><span class="k">Deze week</span></div>
-          <div class="stat"><span class="v">${fmt.dur(worked(monthStart))}</span><span class="k">In ${fmt.monthName(t)}</span></div>
+          <div class="stat good"><span class="v">${fmt.dur(worked(day))}</span><span class="k">${F('Vandaag gewerkt', 'Travaillé aujourd’hui')}</span></div>
+          <div class="stat"><span class="v">${fmt.dur(worked(wk))}</span><span class="k">${F('Deze week', 'Cette semaine')}</span></div>
+          <div class="stat"><span class="v">${fmt.dur(worked(monthStart))}</span><span class="k">${F('In', 'En')} ${fmt.monthName(t)}</span></div>
         </div>
         <section class="card">
-          <div class="card-head"><h2>Je ronde vandaag</h2>${gps && S.openEntry ? '<button class="sm primary" id="drv-here">Ik ben hier</button>' : ''}</div>
+          <div class="card-head"><h2>${F('Je ronde vandaag', 'Ta tournée aujourd’hui')}</h2>${gps && S.openEntry ? `<button class="sm primary" id="drv-here">${F('Ik ben hier', 'Je suis ici')}</button>` : ''}</div>
           ${visits.length ? `<div class="rows">${visits.map(v => `
             <div class="row"><div class="row-main"><span class="row-title">${esc(v.machine)}</span>
-              <span class="row-sub"><span class="time">${fmt.time(v.first_at)}</span> · ${esc(visitWhat(v))}</span></div>
+              <span class="row-sub">${esc(visitWhat(v))}</span></div>
               <span class="pill on">✓</span></div>`).join('')}</div>`
-            : `<p class="empty">${gps ? 'Nog niets bijgevuld in MATO Info.' : 'Nog niets bijgevuld vandaag. Wat je in MATO Info bijvult, verschijnt hier vanzelf, binnen 5 minuten.'}</p>`}
-          ${gps && today.checkpoints.length ? `<h3 style="margin-top:14px">Plaatsen</h3><div class="rows">${today.checkpoints.map(cp => {
+            : `<p class="empty">${gps ? F('Nog niets bijgevuld in MATO Info.', 'Rien encore rempli dans MATO Info.') : F('Nog niets bijgevuld vandaag. Wat je in MATO Info bijvult, verschijnt hier vanzelf, binnen 5 minuten.', 'Rien rempli aujourd’hui. Ce que tu remplis dans MATO Info apparaît ici tout seul, en moins de 5 minutes.')}</p>`}
+          ${gps && today.checkpoints.length ? `<h3 style="margin-top:14px">${F('Plaatsen', 'Lieux')}</h3><div class="rows">${today.checkpoints.map(cp => {
             const v = a.visited.get(cp.id) || [];
             return `<div class="row"><div class="row-main"><span class="row-title">${esc(cp.name)}</span>
-              ${here && here.id === cp.id ? '<span class="row-sub">Je bent hier</span>' : ''}</div>
-              ${v.length ? `<span class="pill on">✓ ${v.map(x => fmt.time(x.from)).join(', ')}</span>` : '<span class="pill">Nog niet</span>'}</div>`;
+              ${here && here.id === cp.id ? `<span class="row-sub">${F('Je bent hier', 'Tu es ici')}</span>` : ''}</div>
+              ${v.length ? '<span class="pill on">✓</span>' : `<span class="pill">${F('Nog niet', 'Pas encore')}</span>`}</div>`;
           }).join('')}</div>` : ''}
-          ${gps && S.openEntry ? '<p class="muted small" style="margin-top:10px">Aan een automaat? Tik op <strong>Ik ben hier</strong>: zo staat het zeker op je rit, ook als je telefoon even geen locatie had.</p>' : ''}
+          ${gps && S.openEntry ? `<p class="muted small" style="margin-top:10px">${F('Aan een automaat? Tik op <strong>Ik ben hier</strong>: zo staat het zeker op je rit, ook als je telefoon even geen locatie had.', 'À un distributeur ? Touche <strong>Je suis ici</strong> : comme ça, c’est sûr sur ton trajet, même si ton téléphone n’avait pas de position un moment.')}</p>` : ''}
         </section>
         <section class="card">
-          <div class="card-head"><h2>Je uren</h2><button class="sm" data-go="hours">Alle uren</button></div>
+          <div class="card-head"><h2>${F('Je uren', 'Tes heures')}</h2><button class="sm" data-go="hours">${F('Alle uren', 'Toutes les heures')}</button></div>
           ${hours.entries.length ? `<div class="rows">${hours.entries.slice(0, 7).map(x => `
             <div class="row"><div class="row-main"><span class="row-title">${fmt.dayLong(x.clock_in)}</span>
-              <span class="row-sub"><span class="time">${fmt.time(x.clock_in)} – ${x.clock_out ? fmt.time(x.clock_out) : 'nu'}</span></span></div>
+              <span class="row-sub"><span class="time">${fmt.time(x.clock_in)} – ${x.clock_out ? fmt.time(x.clock_out) : F('nu', 'maintenant')}</span></span></div>
               <span class="pill ${x.clock_out ? '' : 'on'}">${fmt.dur(minutesBetween(x.clock_in, x.clock_out || now()))}</span></div>`).join('')}</div>`
-            : '<p class="empty">Nog geen uren. Klok in aan het restaurant om te beginnen.</p>'}
+            : `<p class="empty">${F('Nog geen uren. Klok in aan het restaurant om te beginnen.', 'Pas encore d’heures. Pointe ton arrivée au restaurant pour commencer.')}</p>`}
         </section>
       </div>
     </div>`;
@@ -2367,7 +2409,7 @@ async function viewDriver(el, current) {
     Tracker.push({ ...p, kind: 'here' });
     await Tracker.flush();
     const at = Route.placeOf({ ...p, acc: p.accuracy }, a.places);
-    toast(at ? `Aangekomen bij ${at.name} om ${fmt.time(p.at)}.` : `Je plek is bewaard (${fmt.time(p.at)}). Dit is geen plaats van de ronde.`);
+    toast(at ? F(`Aangekomen bij ${at.name} om ${fmt.time(p.at)}.`, `Arrivé à ${at.name} à ${fmt.time(p.at)}.`) : F(`Je plek is bewaard (${fmt.time(p.at)}). Dit is geen plaats van de ronde.`, `Ta position est enregistrée (${fmt.time(p.at)}). Ce n’est pas un lieu de la tournée.`));
     renderView();
   }).catch(() => {}));
   if (S.openEntry) startPolling(60000);
@@ -2384,16 +2426,16 @@ const WEEK_ORDER = [1, 2, 3, 4, 5, 6, 0];
 
 function periodBar(label, hint, prevId, nextId) {
   return `<div class="periodbar">
-    <button class="icon" id="${prevId}" aria-label="${T('Vorige', '上一个', 'Előző')}">‹</button>
+    <button class="icon" id="${prevId}" aria-label="${T('Vorige', '上一个', 'Előző', 'Précédent')}">‹</button>
     <div class="label"><strong>${label}</strong><span>${hint}</span></div>
-    <button class="icon" id="${nextId}" aria-label="${T('Volgende', '下一个', 'Következő')}">›</button>
+    <button class="icon" id="${nextId}" aria-label="${T('Volgende', '下一个', 'Következő', 'Suivant')}">›</button>
   </div>`;
 }
 
 // Quick buttons for this month and the next two.
 function monthChips() {
   const first = startOfMonth(now());
-  return `<div class="chips" role="group" aria-label="${T('Kies een maand', '选择月份', 'Válassz hónapot')}">${[0, 1, 2].map(i => {
+  return `<div class="chips" role="group" aria-label="${T('Kies een maand', '选择月份', 'Válassz hónapot', 'Choisis un mois')}">${[0, 1, 2].map(i => {
     const m = addMonths(first, i), on = S.month && sameDay(m, S.month);
     return `<button type="button" class="chip${on ? ' is-on' : ''}" data-chip-month="${toDateInput(m)}" aria-pressed="${!!on}">${fmt.monthName(m)}</button>`;
   }).join('')}</div>`;
@@ -2407,7 +2449,7 @@ function bindMonthNav(el) {
 
 // Standard shifts are only created up to 3 months ahead.
 function horizonNote(m) {
-  return m > addDays(now(), 92) ? `<p class="hint info">${T('Vaste shiften verschijnen 3 maanden op voorhand in de kalender, dus deze maand kan nog leeg lijken.', '固定班次提前 3 个月出现在日历上，所以这个月可能看起来还是空的。', 'Az állandó műszakok 3 hónappal előre jelennek meg a naptárban, ezért ez a hónap még üresnek tűnhet.')}</p>` : '';
+  return m > addDays(now(), 92) ? `<p class="hint info">${T('Vaste shiften verschijnen 3 maanden op voorhand in de kalender, dus deze maand kan nog leeg lijken.', '固定班次提前 3 个月出现在日历上，所以这个月可能看起来还是空的。', 'Az állandó műszakok 3 hónappal előre jelennek meg a naptárban, ezért ez a hónap még üresnek tűnhet.', 'Les services fixes apparaissent dans le calendrier 3 mois à l’avance, ce mois-ci peut donc encore sembler vide.')}</p>` : '';
 }
 
 // One day's shifts, with identical open slots folded into one entry.
@@ -2455,12 +2497,12 @@ function calEntry(x, manager, t, day) {
     const title = esc(`${name}, ${time}: ${x.people.map(p => p.name).join(', ')}`);
     return `<button type="button" class="cal-shift is-group${past ? ' is-past' : ''}" data-group-day="${toDateInput(day)}" title="${title}">${inner}</button>`;
   }
-  const who = x.open ? `${T('Open', '空缺', 'Szabad')}${x.count > 1 ? ` ×${x.count}` : ''}` : esc(x.staff_name) + (x.mine && !manager ? T(' (jij)', '（你）', ' (te)') : '');
+  const who = x.open ? `${T('Open', '空缺', 'Szabad', 'Libre')}${x.count > 1 ? ` ×${x.count}` : ''}` : esc(x.staff_name) + (x.mine && !manager ? T(' (jij)', '（你）', ' (te)', ' (toi)') : '');
   const pic = x.open ? '' : x.staff_avatar ? `<span class="cal-pic">${Avatar.head(x.staff_avatar)}</span>` : `<span class="cal-pic cal-initials">${esc(initials(x.staff_name))}</span>`;
   const cls = `cal-shift${x.open ? ' is-open' : ''}${x.mine && !manager ? ' is-mine' : ''}${past ? ' is-past' : ''}`;
   const clickable = manager || (!past && (x.open || x.mine));
   const mate = !manager && !x.open && !x.mine && x.staff_id; // someone else's shift: their card
-  const title = esc(`${name}, ${time}${x.open ? (manager ? ' (open)' : T(' – tik om op te nemen', ' – 点击认领', ' – koppints az elvállaláshoz')) : ''}`);
+  const title = esc(`${name}, ${time}${x.open ? (manager ? ' (open)' : T(' – tik om op te nemen', ' – 点击认领', ' – koppints az elvállaláshoz', ' – touche pour prendre')) : ''}`);
   // phones show only the first letter of the part of the day, and the number of open places
   const inner = `<span class="cal-line"><span class="cal-tag${partClass(part)}"><span class="tag-full">${esc(name)}</span><span class="tag-short" aria-hidden="true">${esc(name.charAt(0))}</span></span><span class="t">${time}</span>${x.open && x.count > 1 ? `<span class="cal-count" aria-hidden="true">×${x.count}</span>` : ''}</span>
     <span class="cal-who">${pic}<b>${who}</b></span>`;
@@ -2495,9 +2537,9 @@ function calendarHTML(shifts, month, { manager = false } = {}) {
         ${cells.join('')}
       </div>
       <div class="cal-legend only-phone">
-        <span><span class="cal-tag is-day">${T('M', '午', 'D')}</span> ${T('Middag', '午班', 'Dél')}</span><span><span class="cal-tag is-eve">${T('A', '晚', 'E')}</span> ${T('Avond', '晚班', 'Este')}</span>
-        <span><span class="lg-box is-open"></span> ${T('Open', '空缺', 'Szabad')}</span>${manager ? '' : `<span><span class="lg-box is-mine"></span> ${T('Jouw shift', '你的班次', 'A te műszakod')}</span>`}
-        <span class="muted">${T('Tik op een dag.', '点一天查看。', 'Koppints egy napra.')}</span>
+        <span><span class="cal-tag is-day">${T('M', '午', 'D', 'M')}</span> ${T('Middag', '午班', 'Dél', 'Midi')}</span><span><span class="cal-tag is-eve">${T('A', '晚', 'E', 'S')}</span> ${T('Avond', '晚班', 'Este', 'Soir')}</span>
+        <span><span class="lg-box is-open"></span> ${T('Open', '空缺', 'Szabad', 'Libre')}</span>${manager ? '' : `<span><span class="lg-box is-mine"></span> ${T('Jouw shift', '你的班次', 'A te műszakod', 'Ton service')}</span>`}
+        <span class="muted">${T('Tik op een dag.', '点一天查看。', 'Koppints egy napra.', 'Touche un jour.')}</span>
       </div>
     </div>`;
 }
@@ -2513,11 +2555,11 @@ function daySheet(dateStr, shifts, manager) {
   const row = x => {
     const part = shiftPart(x), past = new Date(x.ends_at) <= t;
     const who = x.open
-      ? `<span class="day-open">${T('Open', '空缺', 'Szabad')}${x.count > 1 ? T(` · ${x.count} plaatsen`, ` · ${x.count} 个位置`, ` · ${x.count} hely`) : ''}</span>`
-      : `<button type="button" class="day-mate" data-mate="${x.staff_id}">${personPic({ name: x.staff_name, avatar: x.staff_avatar })}<span>${esc(x.staff_name)}${x.mine && !manager ? T(' (jij)', '（你）', ' (te)') : ''}</span></button>`;
+      ? `<span class="day-open">${T('Open', '空缺', 'Szabad', 'Libre')}${x.count > 1 ? T(` · ${x.count} plaatsen`, ` · ${x.count} 个位置`, ` · ${x.count} hely`, ` · ${x.count} places`) : ''}</span>`
+      : `<button type="button" class="day-mate" data-mate="${x.staff_id}">${personPic({ name: x.staff_name, avatar: x.staff_avatar })}<span>${esc(x.staff_name)}${x.mine && !manager ? T(' (jij)', '（你）', ' (te)', ' (toi)') : ''}</span></button>`;
     const action = manager ? `<button type="button" class="sm" data-day-edit="${x.id}">Wijzigen</button>`
-      : past ? '' : x.open ? `<button type="button" class="primary" data-day-claim="${x.id}">${T('Opnemen', '认领', 'Elvállalom')}</button>`
-      : x.mine ? `<button type="button" data-day-own="${x.id}">${T('Teruggeven', '退回', 'Visszaadás')}</button>` : '';
+      : past ? '' : x.open ? `<button type="button" class="primary" data-day-claim="${x.id}">${T('Opnemen', '认领', 'Elvállalom', 'Prendre')}</button>`
+      : x.mine ? `<button type="button" data-day-own="${x.id}">${T('Teruggeven', '退回', 'Visszaadás', 'Rendre')}</button>` : '';
     return `<div class="day-shift${x.open ? ' is-open' : ''}${x.mine && !manager ? ' is-mine' : ''}${past ? ' is-past' : ''}">
       <div class="day-main">
         <div class="day-when"><span class="cal-tag${partClass(part)}">${esc(partName(part))}</span><span class="time">${fmt.range(x.starts_at, x.ends_at)}</span></div>
@@ -2528,9 +2570,9 @@ function daySheet(dateStr, shifts, manager) {
     </div>`;
   };
   const d = modal.open(`
-    <h2 id="modal-title">${esc(fmt.dayLong(day))}${sameDay(day, t) ? T(' · vandaag', ' · 今天', ' · ma') : ''}</h2>
+    <h2 id="modal-title">${esc(fmt.dayLong(day))}${sameDay(day, t) ? T(' · vandaag', ' · 今天', ' · ma', ' · aujourd’hui') : ''}</h2>
     ${list.length ? `<div class="day-list">${list.map(row).join('')}</div>` : '<p class="empty">Nog geen shiften op deze dag.</p>'}
-    <div class="form-actions">${manager ? '<button type="button" class="primary" id="day-add">+ Shift toevoegen</button>' : ''}<button type="button" data-close>${T('Sluiten', '关闭', 'Bezárás')}</button></div>`, null, { sheet: true });
+    <div class="form-actions">${manager ? '<button type="button" class="primary" id="day-add">+ Shift toevoegen</button>' : ''}<button type="button" data-close>${T('Sluiten', '关闭', 'Bezárás', 'Fermer')}</button></div>`, null, { sheet: true });
   const find = id => shifts.find(s => s.id === id);
   $$('[data-day-claim]', d).forEach(b => b.addEventListener('click', () => claimShift(find(b.dataset.dayClaim))));
   $$('[data-day-own]', d).forEach(b => b.addEventListener('click', () => ownShift(find(b.dataset.dayOwn))));
@@ -2565,12 +2607,12 @@ function bindCalendar(el, shifts, manager) {
 const shiftWhen = s => `${esc(fmt.dayLong(s.starts_at))}, <strong>${fmt.range(s.starts_at, s.ends_at)}</strong>${s.label ? ` (${esc(partName(s.label))})` : ''}`;
 
 async function claimShift(s) {
-  const ok = await modal.confirm({ title: T('Deze shift opnemen?', '认领这个班次？', 'Elvállalod ezt a műszakot?'), body: `${shiftWhen(s)}${s.notes ? `<br>${esc(s.notes)}` : ''}`, ok: T('Shift opnemen', '认领班次', 'Műszak elvállalása') });
+  const ok = await modal.confirm({ title: T('Deze shift opnemen?', '认领这个班次？', 'Elvállalod ezt a műszakot?', 'Prendre ce service ?'), body: `${shiftWhen(s)}${s.notes ? `<br>${esc(s.notes)}` : ''}`, ok: T('Shift opnemen', '认领班次', 'Műszak elvállalása', 'Prendre le service') });
   if (!ok) return;
   busy(null, async () => {
     await rpc('claim_shift', { p_shift_id: s.id });
     await refreshMe();
-    toast(T('Shift opgenomen. Hij staat nu op jouw naam.', '已认领，这个班次现在是你的了。', 'Műszak elvállalva. Most már a te neveden van.'));
+    toast(T('Shift opgenomen. Hij staat nu op jouw naam.', '已认领，这个班次现在是你的了。', 'Műszak elvállalva. Most már a te neveden van.', 'Service pris. Il est maintenant à ton nom.'));
     renderView();
   }).catch(() => {});
 }
@@ -2588,31 +2630,31 @@ async function ownShift(s) {
   const canDrop = new Date(s.starts_at) - now() > cut * 3600000;
   // too late to give it back here: who to call (Team → Instellingen)
   const contact = canDrop ? null : await rpc('shift_contact').catch(() => ({}));
-  const who = contact && contact.name ? esc(contact.name) : T('je verantwoordelijke', '负责人', 'a vezetőd');
+  const who = contact && contact.name ? esc(contact.name) : T('je verantwoordelijke', '负责人', 'a vezetőd', 'ton responsable');
   const tooLate = !contact ? '' : `
-      <p class="hint info">${sameDay(s.starts_at, now()) ? T('Deze shift is vandaag.', '这个班次就在今天。', 'Ez a műszak ma van.') : T(`Deze shift begint binnen ${cut} uur.`, `这个班次 ${cut} 小时内就开始了。`, `Ez a műszak ${cut} órán belül kezdődik.`)}
-        ${T('Annuleren kan dan niet meer in de app.', '已经不能在 app 里取消了。', 'Az appban már nem mondhatod le.')}</p>
+      <p class="hint info">${sameDay(s.starts_at, now()) ? T('Deze shift is vandaag.', '这个班次就在今天。', 'Ez a műszak ma van.', 'Ce service est aujourd’hui.') : T(`Deze shift begint binnen ${cut} uur.`, `这个班次 ${cut} 小时内就开始了。`, `Ez a műszak ${cut} órán belül kezdődik.`, `Ce service commence dans moins de ${cut} h.`)}
+        ${T('Annuleren kan dan niet meer in de app.', '已经不能在 app 里取消了。', 'Az appban már nem mondhatod le.', 'L’annulation n’est alors plus possible dans l’app.')}</p>
       ${contact.phone ? `<div class="contact-card">
-        <p>${T(`Wil je hem annuleren? Neem contact op met <strong>${who}</strong> voor je aanvraag:`, `想取消？请联系 <strong>${who}</strong> 申请：`, `Le szeretnéd mondani? Ezzel a kéréssel fordulj hozzá: <strong>${who}</strong>`)}</p>
+        <p>${T(`Wil je hem annuleren? Neem contact op met <strong>${who}</strong> voor je aanvraag:`, `想取消？请联系 <strong>${who}</strong> 申请：`, `Le szeretnéd mondani? Ezzel a kéréssel fordulj hozzá: <strong>${who}</strong>`, `Tu veux l’annuler ? Contacte <strong>${who}</strong> pour ta demande :`)}</p>
         <p class="contact-phone">${PHONE_ICON}<span class="mono">${esc(fmtPhone(contact.phone))}</span></p>
         <div class="toolbar">
-          <a class="btn primary" href="tel:${esc(phoneDigits(contact.phone))}">${PHONE_ICON}<span>${T(`Bel ${who}`, `打给${who}`, `${who} hívása`)}</span></a>
+          <a class="btn primary" href="tel:${esc(phoneDigits(contact.phone))}">${PHONE_ICON}<span>${T(`Bel ${who}`, `打给${who}`, `${who} hívása`, `Appeler ${who}`)}</span></a>
           <a class="btn" href="https://wa.me/${esc(phoneDigits(contact.phone).replace('+', ''))}" target="_blank" rel="noopener">WhatsApp</a>
         </div>
-      </div>` : `<p>${T(`Vraag het aan ${who}.`, `请问${who}。`, `Kérdezd meg: ${who}.`)}</p>`}
-      <div class="form-actions"><button type="button" data-close>${T('Sluiten', '关闭', 'Bezárás')}</button></div>`;
+      </div>` : `<p>${T(`Vraag het aan ${who}.`, `请问${who}。`, `Kérdezd meg: ${who}.`, `Demande-le à ${who}.`)}</p>`}
+      <div class="form-actions"><button type="button" data-close>${T('Sluiten', '关闭', 'Bezárás', 'Fermer')}</button></div>`;
   modal.open(`
-    <h2 id="modal-title">${T('Jouw shift', '你的班次', 'A te műszakod')}</h2>
+    <h2 id="modal-title">${T('Jouw shift', '你的班次', 'A te műszakod', 'Ton service')}</h2>
     <p>${shiftWhen(s)}</p>
-    ${canDrop ? `<p class="muted small">${T('Kan je niet? Geef hem terug, dan staat hij weer open voor iemand anders. Je verantwoordelijke ziet waarom.', '来不了？把它退回，别人就可以认领。负责人会看到原因。', 'Nem tudsz jönni? Add vissza, és újra szabad lesz mások számára. A vezetőd látja az okát.')}</p>
+    ${canDrop ? `<p class="muted small">${T('Kan je niet? Geef hem terug, dan staat hij weer open voor iemand anders. Je verantwoordelijke ziet waarom.', '来不了？把它退回，别人就可以认领。负责人会看到原因。', 'Nem tudsz jönni? Add vissza, és újra szabad lesz mások számára. A vezetőd látja az okát.', 'Tu ne peux pas ? Rends-le, il sera de nouveau libre pour quelqu’un d’autre. Ton responsable verra pourquoi.')}</p>
       <form id="drop-form" novalidate>
-        <div class="field"><label for="drop-reason">${T('Waarom geef je hem terug?', '为什么退回？', 'Miért adod vissza?')}</label>
-          <div class="chips reason-chips" role="group" aria-label="${T('Snel kiezen', '快速选择', 'Gyors választás')}">${DROP_REASONS.map(r => T(...r)).map(r => `<button type="button" class="chip" data-reason="${esc(r)}">${esc(r)}</button>`).join('')}</div>
-          <textarea id="drop-reason" rows="2" maxlength="300" placeholder="${T('bv. Ik heb een examen die dag.', '例如：那天我有考试。', 'pl. Aznap vizsgám van.')}"></textarea></div>
+        <div class="field"><label for="drop-reason">${T('Waarom geef je hem terug?', '为什么退回？', 'Miért adod vissza?', 'Pourquoi le rends-tu ?')}</label>
+          <div class="chips reason-chips" role="group" aria-label="${T('Snel kiezen', '快速选择', 'Gyors választás', 'Choix rapide')}">${DROP_REASONS.map(r => T(...r)).map(r => `<button type="button" class="chip" data-reason="${esc(r)}">${esc(r)}</button>`).join('')}</div>
+          <textarea id="drop-reason" rows="2" maxlength="300" placeholder="${T('bv. Ik heb een examen die dag.', '例如：那天我有考试。', 'pl. Aznap vizsgám van.', 'ex. J’ai un examen ce jour-là.')}"></textarea></div>
         <p class="form-error" id="drop-err"></p>
         <div class="form-actions">
-          <button type="button" data-close>${T('Sluiten', '关闭', 'Bezárás')}</button>
-          <button type="submit" class="danger solid" id="drop-it">${T('Shift teruggeven', '退回班次', 'Műszak visszaadása')}</button>
+          <button type="button" data-close>${T('Sluiten', '关闭', 'Bezárás', 'Fermer')}</button>
+          <button type="submit" class="danger solid" id="drop-it">${T('Shift teruggeven', '退回班次', 'Műszak visszaadása', 'Rendre le service')}</button>
         </div>
       </form>`
       : tooLate}`, d => {
@@ -2627,12 +2669,12 @@ async function ownShift(s) {
     f.addEventListener('submit', ev => {
       ev.preventDefault();
       const reason = box.value.trim();
-      if (reason.length < 3) { err.textContent = T('Zeg kort waarom je deze shift teruggeeft.', '请简单说说为什么退回这个班次。', 'Írd le röviden, miért adod vissza ezt a műszakot.'); box.focus(); return; }
+      if (reason.length < 3) { err.textContent = T('Zeg kort waarom je deze shift teruggeeft.', '请简单说说为什么退回这个班次。', 'Írd le röviden, miért adod vissza ezt a műszakot.', 'Dis brièvement pourquoi tu rends ce service.'); box.focus(); return; }
       busy(b, async () => {
         await rpc('give_back_shift', { p_shift_id: s.id, p_reason: reason });
         modal.close();
         await refreshMe();
-        toast(T('Shift teruggegeven. Hij staat weer open voor anderen.', '已退回，别人现在可以认领。', 'Műszak visszaadva. Újra szabad mások számára.'));
+        toast(T('Shift teruggegeven. Hij staat weer open voor anderen.', '已退回，别人现在可以认领。', 'Műszak visszaadva. Újra szabad mások számára.', 'Service rendu. Il est de nouveau libre pour les autres.'));
         renderView();
       }).catch(() => {});
     });
@@ -2650,15 +2692,15 @@ async function viewShifts(el, current) {
   const mineMins = mine.reduce((a, s) => a + minutesBetween(s.starts_at, s.ends_at), 0);
   el.innerHTML = `
     <div class="view-head">
-      <div><h1>${T('Shiften', '班次', 'Műszakok')}</h1><p>${T(`<span class="only-wide">Tik op een <span class="key-open">open</span> shift om hem op te nemen. Tik op een van jouw shiften om hem terug te geven.</span><span class="only-phone">Tik op een dag om de shiften te zien. Bij een <span class="key-open">open</span> shift tik je op Opnemen.</span>`,
-        `<span class="only-wide">点一个<span class="key-open">空缺</span>班次来认领。点你自己的班次可以退回。</span><span class="only-phone">点一天查看班次。<span class="key-open">空缺</span>班次点“认领”。</span>`, `<span class="only-wide">Koppints egy <span class="key-open">szabad</span> műszakra, hogy elvállald. Koppints az egyik saját műszakodra, hogy visszaadd.</span><span class="only-phone">Koppints egy napra a műszakok megtekintéséhez. <span class="key-open">Szabad</span> műszaknál koppints az Elvállalom gombra.</span>`)}</p></div>
-      ${periodBar(fmt.month(m), sameDay(m, startOfMonth(t)) ? T('Deze maand', '本月', 'Ez a hónap') : '', 'mo-prev', 'mo-next')}
+      <div><h1>${T('Shiften', '班次', 'Műszakok', 'Services')}</h1><p>${T(`<span class="only-wide">Tik op een <span class="key-open">open</span> shift om hem op te nemen. Tik op een van jouw shiften om hem terug te geven.</span><span class="only-phone">Tik op een dag om de shiften te zien. Bij een <span class="key-open">open</span> shift tik je op Opnemen.</span>`,
+        `<span class="only-wide">点一个<span class="key-open">空缺</span>班次来认领。点你自己的班次可以退回。</span><span class="only-phone">点一天查看班次。<span class="key-open">空缺</span>班次点“认领”。</span>`, `<span class="only-wide">Koppints egy <span class="key-open">szabad</span> műszakra, hogy elvállald. Koppints az egyik saját műszakodra, hogy visszaadd.</span><span class="only-phone">Koppints egy napra a műszakok megtekintéséhez. <span class="key-open">Szabad</span> műszaknál koppints az Elvállalom gombra.</span>`, `<span class="only-wide">Touche un service <span class="key-open">libre</span> pour le prendre. Touche un de tes services pour le rendre.</span><span class="only-phone">Touche un jour pour voir les services. Pour un service <span class="key-open">libre</span>, touche Prendre.</span>`)}</p></div>
+      ${periodBar(fmt.month(m), sameDay(m, startOfMonth(t)) ? T('Deze maand', '本月', 'Ez a hónap', 'Ce mois-ci') : '', 'mo-prev', 'mo-next')}
     </div>
     ${monthChips()}
     <div class="stats stats-3">
-      <div class="stat ${open.length ? 'accent' : ''}"><span class="v">${open.length}</span><span class="k">${T('Open om op te nemen', '可认领的空缺', 'Elvállalható')}</span></div>
-      <div class="stat"><span class="v">${mine.length}</span><span class="k">${T('Jouw shiften', '你的班次', 'A te műszakjaid')}</span></div>
-      <div class="stat"><span class="v">${fmt.dur(mineMins)}</span><span class="k">${T('Gepland voor jou', '你的排班时长', 'Neked beosztva')}</span></div>
+      <div class="stat ${open.length ? 'accent' : ''}"><span class="v">${open.length}</span><span class="k">${T('Open om op te nemen', '可认领的空缺', 'Elvállalható', 'Libres à prendre')}</span></div>
+      <div class="stat"><span class="v">${mine.length}</span><span class="k">${T('Jouw shiften', '你的班次', 'A te műszakjaid', 'Tes services')}</span></div>
+      <div class="stat"><span class="v">${fmt.dur(mineMins)}</span><span class="k">${T('Gepland voor jou', '你的排班时长', 'Neked beosztva', 'Prévu pour toi')}</span></div>
     </div>
     <section class="card cal-card">${calendarHTML(shifts, m)}</section>
     ${horizonNote(m)}`;
@@ -3558,7 +3600,7 @@ const downloadPayslip = (id, btn) => downloadFile('get_payslip', id, btn);
 const downloadContract = (id, btn) => downloadFile('get_contract', id, btn);
 
 // Hours as on a payslip: 56 u, 32,5 u.
-const uren = h => `${Number(h).toLocaleString(loc(), { maximumFractionDigits: 2 })} ${T('u', '小时', 'ó')}`;
+const uren = h => `${Number(h).toLocaleString(loc(), { maximumFractionDigits: 2 })} ${T('u', '小时', 'ó', 'h')}`;
 const hasFigures = p => p && (p.hours_worked != null || p.gross_pay != null || p.net_pay != null);
 
 // The month's documents: its payslip, and a recalculation, a correction or
@@ -3566,9 +3608,9 @@ const hasFigures = p => p && (p.hours_worked != null || p.gross_pay != null || p
 function payDocs(pm) {
   const docs = pm.documents.length ? pm.documents : pm.payslip ? [{ id: pm.payslip.id, kind: 'Bezoldiging', payslip: true }] : [];
   if (pm.payslip && !docs.some(d => d.payslip)) docs.unshift({ id: pm.payslip.id, kind: 'Bezoldiging', payslip: true });
-  const label = d => d.kind === 'Ecocheque' ? T('Ecocheques', '环保券', 'Ökocsekkek')
-    : docs.length > 1 && d.calculated_at ? `${T('Loonbrief', '工资单', 'Bérjegyzék')} ${fmt.short(d.calculated_at)}` : T('Loonbrief', '工资单', 'Bérjegyzék');
-  return docs.map(d => `<button class="sm" data-payslip="${d.id}" title="${T('Downloaden', '下载', 'Letöltés')}">${esc(label(d))}</button>`).join('');
+  const label = d => d.kind === 'Ecocheque' ? T('Ecocheques', '环保券', 'Ökocsekkek', 'Écochèques')
+    : docs.length > 1 && d.calculated_at ? `${T('Loonbrief', '工资单', 'Bérjegyzék', 'Fiche de paie')} ${fmt.short(d.calculated_at)}` : T('Loonbrief', '工资单', 'Bérjegyzék', 'Fiche de paie');
+  return docs.map(d => `<button class="sm" data-payslip="${d.id}" title="${T('Downloaden', '下载', 'Letöltés', 'Télécharger')}">${esc(label(d))}</button>`).join('');
 }
 
 // What the month's payslip says, for the person themself on Mijn uren.
@@ -3577,20 +3619,20 @@ function payslipCard(pm) {
   const p = pm.payslip, name = fmt.monthName(new Date(pm.month + 'T00:00'));
   if (!hasFigures(p)) return `
     <section class="card pay-card">
-      <div class="card-head"><h2>${T(`Je loonbrief van ${name}`, `你${name}的工资单`, `${name} havi bérjegyzéked`)}</h2><div class="toolbar">${payDocs(pm)}</div></div>
+      <div class="card-head"><h2>${T(`Je loonbrief van ${name}`, `你${name}的工资单`, `${name} havi bérjegyzéked`, `Ta fiche de paie de ${name}`)}</h2><div class="toolbar">${payDocs(pm)}</div></div>
     </section>`;
   const leave = Number(p.hours_leave);
   return `
     <section class="card pay-card">
-      <div class="card-head"><h2>${T(`Volgens je loonbrief van ${name}`, `根据你${name}的工资单`, `A ${name} havi bérjegyzéked szerint`)}</h2><div class="toolbar">${payDocs(pm)}</div></div>
+      <div class="card-head"><h2>${T(`Volgens je loonbrief van ${name}`, `根据你${name}的工资单`, `A ${name} havi bérjegyzéked szerint`, `Selon ta fiche de paie de ${name}`)}</h2><div class="toolbar">${payDocs(pm)}</div></div>
       <div class="stats">
-        ${p.hours_worked != null ? `<div class="stat good"><span class="v">${uren(p.hours_worked)}</span><span class="k">${T('Gewerkt', '工作', 'Ledolgozva')}${Number(p.days_worked) ? ` · ${T(plural(Number(p.days_worked), 'dag', 'dagen'), `${Number(p.days_worked)} 天`, `${Number(p.days_worked)} nap`)}` : ''}</span></div>` : ''}
-        <div class="stat"><span class="v">${fmt.money(p.gross_pay || 0)}</span><span class="k">${T('Bruto verdiend', '税前收入', 'Bruttó kereset')}</span></div>
-        <div class="stat"><span class="v">${fmt.money(p.net_pay || 0)}</span><span class="k">${T('Netto uitbetaald', '实发工资', 'Nettó kifizetve')}</span></div>
-        ${leave ? `<div class="stat"><span class="v">${uren(leave)}</span><span class="k">${T('Betaald, niet gewerkt: feestdag of ziekte', '带薪未工作：节假日或病假', 'Fizetett, de nem ledolgozott: ünnepnap vagy betegség')}</span></div>` : ''}
-        ${p.ecocheques != null ? `<div class="stat"><span class="v">${fmt.money(p.ecocheques)}</span><span class="k">${T('Ecocheques', '环保券', 'Ökocsekkek')}</span></div>` : ''}
+        ${p.hours_worked != null ? `<div class="stat good"><span class="v">${uren(p.hours_worked)}</span><span class="k">${T('Gewerkt', '工作', 'Ledolgozva', 'Travaillé')}${Number(p.days_worked) ? ` · ${T(plural(Number(p.days_worked), 'dag', 'dagen'), `${Number(p.days_worked)} 天`, `${Number(p.days_worked)} nap`, plural(Number(p.days_worked), 'jour', 'jours'))}` : ''}</span></div>` : ''}
+        <div class="stat"><span class="v">${fmt.money(p.gross_pay || 0)}</span><span class="k">${T('Bruto verdiend', '税前收入', 'Bruttó kereset', 'Brut gagné')}</span></div>
+        <div class="stat"><span class="v">${fmt.money(p.net_pay || 0)}</span><span class="k">${T('Netto uitbetaald', '实发工资', 'Nettó kifizetve', 'Net versé')}</span></div>
+        ${leave ? `<div class="stat"><span class="v">${uren(leave)}</span><span class="k">${T('Betaald, niet gewerkt: feestdag of ziekte', '带薪未工作：节假日或病假', 'Fizetett, de nem ledolgozott: ünnepnap vagy betegség', 'Payé, non travaillé : jour férié ou maladie')}</span></div>` : ''}
+        ${p.ecocheques != null ? `<div class="stat"><span class="v">${fmt.money(p.ecocheques)}</span><span class="k">${T('Ecocheques', '环保券', 'Ökocsekkek', 'Écochèques')}</span></div>` : ''}
       </div>
-      ${pm.documents.length > 1 ? `<p class="muted small" style="margin-top:10px">${T('Deze maand werd meer dan eens berekend. De cijfers tellen alles samen: wat eerder al betaald werd, staat bij het netto.', '这个月的工资算了不止一次。数字是合计：之前已付的部分也算在实发里。', 'Ezt a hónapot többször is kiszámolták. A számok mindent összeadnak: ami korábban már ki lett fizetve, az a nettónál szerepel.')}</p>` : ''}
+      ${pm.documents.length > 1 ? `<p class="muted small" style="margin-top:10px">${T('Deze maand werd meer dan eens berekend. De cijfers tellen alles samen: wat eerder al betaald werd, staat bij het netto.', '这个月的工资算了不止一次。数字是合计：之前已付的部分也算在实发里。', 'Ezt a hónapot többször is kiszámolták. A számok mindent összeadnak: ami korábban már ki lett fizetve, az a nettónál szerepel.', 'Ce mois a été calculé plus d’une fois. Les chiffres additionnent tout : ce qui a déjà été payé avant figure dans le net.')}</p>` : ''}
     </section>`;
 }
 
@@ -3620,8 +3662,8 @@ function payMonthsTable(months, { open = null, clickable = false, clocked: showC
           <td class="num">${v.hours || dash}</td><td class="num">${v.gross || dash}</td>
           <td class="num">${v.net || dash}</td>${showClocked ? `<td class="num">${v.clocked || dash}</td>` : ''}
         </tr>`);
-      const sub = [v.hours && T(`${v.hours} gewerkt`, `工作 ${v.hours}`, `${v.hours} ledolgozva`), v.gross && T(`bruto ${v.gross}`, `税前 ${v.gross}`, `bruttó ${v.gross}`),
-        showClocked && v.clocked && T(`geklokt ${v.clocked}`, `打卡 ${v.clocked}`, `csekkolva ${v.clocked}`)].filter(Boolean);
+      const sub = [v.hours && T(`${v.hours} gewerkt`, `工作 ${v.hours}`, `${v.hours} ledolgozva`, `${v.hours} travaillées`), v.gross && T(`bruto ${v.gross}`, `税前 ${v.gross}`, `bruttó ${v.gross}`, `brut ${v.gross}`),
+        showClocked && v.clocked && T(`geklokt ${v.clocked}`, `打卡 ${v.clocked}`, `csekkolva ${v.clocked}`, `pointé ${v.clocked}`)].filter(Boolean);
       items.push(`
         <div ${attrs.replace('class="', 'class="pay-item ')}>
           <div class="pay-item-head"><strong>${v.name}</strong>${v.net ? `<span class="pay-net">${v.net}</span>` : ''}</div>
@@ -3630,7 +3672,7 @@ function payMonthsTable(months, { open = null, clickable = false, clocked: showC
     }
     const sum = k => ms.reduce((a, x) => a + (hasFigures(x.payslip) ? Number(x.payslip[k] || 0) : 0), 0);
     const clocked = ms.reduce((a, x) => a + Number(x.clocked_minutes || 0), 0);
-    const total = T(`Totaal ${year}`, `${year} 年合计`, `Összesen ${year}`);
+    const total = T(`Totaal ${year}`, `${year} 年合计`, `Összesen ${year}`, `Total ${year}`);
     rows.push(`
         <tr class="pay-total"><td>${total}</td><td class="num">${uren(sum('hours_worked'))}</td>
           <td class="num">${fmt.money(sum('gross_pay'))}</td><td class="num">${fmt.money(sum('net_pay'))}</td>
@@ -3638,12 +3680,12 @@ function payMonthsTable(months, { open = null, clickable = false, clocked: showC
     items.push(`
         <div class="pay-item pay-total">
           <div class="pay-item-head"><strong>${total}</strong><span class="pay-net">${fmt.money(sum('net_pay'))}</span></div>
-          <div class="pay-item-sub">${T(`${uren(sum('hours_worked'))} gewerkt · bruto ${fmt.money(sum('gross_pay'))}`, `工作 ${uren(sum('hours_worked'))} · 税前 ${fmt.money(sum('gross_pay'))}`, `${uren(sum('hours_worked'))} ledolgozva · bruttó ${fmt.money(sum('gross_pay'))}`)}${showClocked && clocked ? T(` · geklokt ${clockedH(clocked)}`, ` · 打卡 ${clockedH(clocked)}`, ` · csekkolva ${clockedH(clocked)}`) : ''}</div>
+          <div class="pay-item-sub">${T(`${uren(sum('hours_worked'))} gewerkt · bruto ${fmt.money(sum('gross_pay'))}`, `工作 ${uren(sum('hours_worked'))} · 税前 ${fmt.money(sum('gross_pay'))}`, `${uren(sum('hours_worked'))} ledolgozva · bruttó ${fmt.money(sum('gross_pay'))}`, `${uren(sum('hours_worked'))} travaillées · brut ${fmt.money(sum('gross_pay'))}`)}${showClocked && clocked ? T(` · geklokt ${clockedH(clocked)}`, ` · 打卡 ${clockedH(clocked)}`, ` · csekkolva ${clockedH(clocked)}`, ` · pointé ${clockedH(clocked)}`) : ''}</div>
         </div>`);
   }
   return `
     <div class="table-wrap only-wide-block"><table class="pay-table">
-      <thead><tr><th>${T('Maand', '月份', 'Hónap')}</th><th class="num">${T('Gewerkt', '工作', 'Ledolgozva')}</th><th class="num">${T('Bruto', '税前', 'Bruttó')}</th><th class="num">${T('Netto', '实发', 'Nettó')}</th>${showClocked ? `<th class="num">${T('Geklokt', '打卡', 'Csekkolva')}</th>` : ''}</tr></thead>
+      <thead><tr><th>${T('Maand', '月份', 'Hónap', 'Mois')}</th><th class="num">${T('Gewerkt', '工作', 'Ledolgozva', 'Travaillé')}</th><th class="num">${T('Bruto', '税前', 'Bruttó', 'Brut')}</th><th class="num">${T('Netto', '实发', 'Nettó', 'Net')}</th>${showClocked ? `<th class="num">${T('Geklokt', '打卡', 'Csekkolva', 'Pointé')}</th>` : ''}</tr></thead>
       <tbody>${rows.join('')}</tbody>
     </table></div>
     <div class="pay-list only-phone-block">${items.join('')}</div>`;
@@ -3677,20 +3719,20 @@ function readAsBase64(file) {
 function entryFlags(x, grace) {
   const f = [];
   const g = grace * 60000;
-  if (!x.clock_out) f.push(`<span class="pill warn">${T('Nog ingeklokt', '还在上班', 'Még becsekkolva')}</span>`);
+  if (!x.clock_out) f.push(`<span class="pill warn">${T('Nog ingeklokt', '还在上班', 'Még becsekkolva', 'Toujours pointé')}</span>`);
   const sStart = x.shift ? x.shift.starts_at : x.shift_start;
   const sEnd = x.shift ? x.shift.ends_at : x.shift_end;
-  if (sStart && new Date(x.clock_in) - new Date(sStart) > g) f.push(`<span class="pill bad">${T('Te laat', '迟到', 'Késés')}</span>`);
-  if (sEnd && x.clock_out && new Date(sEnd) - new Date(x.clock_out) > g) f.push(`<span class="pill warn">${T('Vroeger vertrokken', '提前离开', 'Korán távozott')}</span>`);
-  if (x.pending) f.push(`<span class="pill accent">${T('Aanpassing wacht op goedkeuring', '修改等待审核', 'A módosítás jóváhagyásra vár')}</span>`);
-  else if (x.edited) f.push(`<span class="pill">${T('Aangepast', '已修改', 'Módosítva')}</span>`);
+  if (sStart && new Date(x.clock_in) - new Date(sStart) > g) f.push(`<span class="pill bad">${T('Te laat', '迟到', 'Késés', 'En retard')}</span>`);
+  if (sEnd && x.clock_out && new Date(sEnd) - new Date(x.clock_out) > g) f.push(`<span class="pill warn">${T('Vroeger vertrokken', '提前离开', 'Korán távozott', 'Parti plus tôt')}</span>`);
+  if (x.pending) f.push(`<span class="pill accent">${T('Aanpassing wacht op goedkeuring', '修改等待审核', 'A módosítás jóváhagyásra vár', 'Modification en attente d’approbation')}</span>`);
+  else if (x.edited) f.push(`<span class="pill">${T('Aangepast', '已修改', 'Módosítva', 'Modifié')}</span>`);
   return f.join('');
 }
 
 function stamps(x) {
-  return `<span class="stamp in"><b>${T('IN', '上', 'BE')}</b>${fmt.time(x.clock_in)}</span>${x.clock_out
-    ? `<span class="stamp out"><b>${T('UIT', '下', 'KI')}</b>${fmt.time(x.clock_out)}${sameDay(x.clock_in, x.clock_out) ? '' : ' +1'}</span>`
-    : `<span class="stamp open"><b>${T('UIT', '下', 'KI')}</b>—</span>`}`;
+  return `<span class="stamp in"><b>${T('IN', '上', 'BE', 'ARRIVÉE')}</b>${fmt.time(x.clock_in)}</span>${x.clock_out
+    ? `<span class="stamp out"><b>${T('UIT', '下', 'KI', 'DÉPART')}</b>${fmt.time(x.clock_out)}${sameDay(x.clock_in, x.clock_out) ? '' : ' +1'}</span>`
+    : `<span class="stamp open"><b>${T('UIT', '下', 'KI', 'DÉPART')}</b>—</span>`}`;
 }
 
 async function viewHours(el, current) {
@@ -3712,19 +3754,19 @@ async function viewHours(el, current) {
   const clocks = canClock() || data.entries.length > 0;
   el.innerHTML = `
     <div class="view-head">
-      <div><h1>${T('Mijn uren', '我的工时', 'Óráim')}</h1><p>${clocks ? T('Je urenkaart. Klopt er iets niet? Tik op <strong>Uren aanpassen</strong> en je verantwoordelijke keurt het goed.', '你的工时表。有不对的地方？点<strong>修改工时</strong>，负责人会审核。', 'A munkaidő-kártyád. Valami nem stimmel? Koppints az <strong>Órák módosítása</strong> gombra, és a vezetőd jóváhagyja.')
-        : T('Wat je loonbrieven zeggen: de uren die je betaald kreeg, bruto en netto.', '你的工资单：发了工资的工时、税前和实发金额。', 'Amit a bérjegyzékeid mutatnak: a kifizetett órák, bruttó és nettó.')}</p></div>
-      ${periodBar(fmt.month(m), sameDay(m, startOfMonth(now())) ? T('Deze maand', '本月', 'Ez a hónap') : '', 'mo-prev', 'mo-next')}
+      <div><h1>${T('Mijn uren', '我的工时', 'Óráim', 'Mes heures')}</h1><p>${clocks ? T('Je urenkaart. Klopt er iets niet? Tik op <strong>Uren aanpassen</strong> en je verantwoordelijke keurt het goed.', '你的工时表。有不对的地方？点<strong>修改工时</strong>，负责人会审核。', 'A munkaidő-kártyád. Valami nem stimmel? Koppints az <strong>Órák módosítása</strong> gombra, és a vezetőd jóváhagyja.', 'Ta feuille d’heures. Quelque chose ne va pas ? Touche <strong>Modifier les heures</strong> et ton responsable l’approuvera.')
+        : T('Wat je loonbrieven zeggen: de uren die je betaald kreeg, bruto en netto.', '你的工资单：发了工资的工时、税前和实发金额。', 'Amit a bérjegyzékeid mutatnak: a kifizetett órák, bruttó és nettó.', 'Ce que disent tes fiches de paie : les heures payées, en brut et en net.')}</p></div>
+      ${periodBar(fmt.month(m), sameDay(m, startOfMonth(now())) ? T('Deze maand', '本月', 'Ez a hónap', 'Ce mois-ci') : '', 'mo-prev', 'mo-next')}
     </div>
     ${!clocks || (!data.entries.length && hasFigures(pm && pm.payslip)) ? '' : `<div class="stats">
-      <div class="stat good"><span class="v">${fmt.dur(mins)}</span><span class="k">${T(`Geklokt · ${fmt.hours(mins)} uur`, `打卡 · ${fmt.hours(mins)} 小时`, `Csekkolva · ${fmt.hours(mins)} óra`)}</span></div>
-      <div class="stat"><span class="v">${rate != null ? fmt.money(mins / 60 * rate) : '—'}</span><span class="k">${rate != null ? T(`Verdiend (bruto) · ${fmt.money(rate)}/u`, `收入（税前）· ${fmt.money(rate)}/小时`, `Kereset (bruttó) · ${fmt.money(rate)}/ó`) : T('Je verdiensten verschijnen zodra je verantwoordelijke je uurloon instelt', '负责人设置时薪后会显示你的收入', 'A kereseted akkor jelenik meg, amikor a vezetőd beállítja az órabéredet')}</span></div>
-      <div class="stat"><span class="v">${done.length}</span><span class="k">${isDriver() ? 'Keer gewerkt' : T('Gewerkte shiften', '上过的班次', 'Ledolgozott műszakok')}</span></div>
-      <div class="stat ${pendingReqs.length ? 'alert' : ''}"><span class="v">${pendingReqs.length}</span><span class="k">${T('Aanpassingen in behandeling', '待审核的修改', 'Folyamatban lévő módosítások')}</span></div>
+      <div class="stat good"><span class="v">${fmt.dur(mins)}</span><span class="k">${T(`Geklokt · ${fmt.hours(mins)} uur`, `打卡 · ${fmt.hours(mins)} 小时`, `Csekkolva · ${fmt.hours(mins)} óra`, `Pointé · ${fmt.hours(mins)} h`)}</span></div>
+      <div class="stat"><span class="v">${rate != null ? fmt.money(mins / 60 * rate) : '—'}</span><span class="k">${rate != null ? T(`Verdiend (bruto) · ${fmt.money(rate)}/u`, `收入（税前）· ${fmt.money(rate)}/小时`, `Kereset (bruttó) · ${fmt.money(rate)}/ó`, `Gagné (brut) · ${fmt.money(rate)}/h`) : T('Je verdiensten verschijnen zodra je verantwoordelijke je uurloon instelt', '负责人设置时薪后会显示你的收入', 'A kereseted akkor jelenik meg, amikor a vezetőd beállítja az órabéredet', 'Tes gains apparaîtront dès que ton responsable aura configuré ton salaire horaire')}</span></div>
+      <div class="stat"><span class="v">${done.length}</span><span class="k">${isDriver() ? F('Keer gewerkt', 'Fois travaillé') : T('Gewerkte shiften', '上过的班次', 'Ledolgozott műszakok', 'Services travaillés')}</span></div>
+      <div class="stat ${pendingReqs.length ? 'alert' : ''}"><span class="v">${pendingReqs.length}</span><span class="k">${T('Aanpassingen in behandeling', '待审核的修改', 'Folyamatban lévő módosítások', 'Modifications en cours')}</span></div>
     </div>`}
     ${payslipCard(pm)}
     ${clocks ? `<section class="card">
-      <div class="card-head"><h2>${T('Urenkaart', '工时表', 'Munkaidő-kártya')}</h2>${canClock() ? `<button class="sm" id="add-missing">${T('+ Vergeten uren toevoegen', '+ 补登工时', '+ Elfelejtett órák hozzáadása')}</button>` : ''}</div>
+      <div class="card-head"><h2>${T('Urenkaart', '工时表', 'Munkaidő-kártya', 'Feuille d’heures')}</h2>${canClock() ? `<button class="sm" id="add-missing">${T('+ Vergeten uren toevoegen', '+ 补登工时', '+ Elfelejtett órák hozzáadása', '+ Ajouter des heures oubliées')}</button>` : ''}</div>
       ${data.entries.length ? `<div class="rows">${data.entries.map(x => `
         <div class="entry">
           <div class="row-main">
@@ -3734,31 +3776,31 @@ async function viewHours(el, current) {
           </div>
           <div class="row-actions" style="flex-direction:column;align-items:flex-end">
             <span class="entry-dur">${x.clock_out ? fmt.dur(minutesBetween(x.clock_in, x.clock_out)) : '—'}</span>
-            <button class="sm" data-fix="${x.id}">${T('Uren aanpassen', '修改工时', 'Órák módosítása')}</button>
+            <button class="sm" data-fix="${x.id}">${T('Uren aanpassen', '修改工时', 'Órák módosítása', 'Modifier les heures')}</button>
           </div>
           ${x.note ? `<p class="entry-note">${esc(x.note)}</p>` : ''}
-          ${x.pending ? `<p class="entry-note">${T('Gevraagd om aan te passen naar', '申请改为', 'Kért módosítás:')} ${fmt.time(x.pending.proposed_in)} – ${x.pending.proposed_out ? fmt.time(x.pending.proposed_out) : T('nog bezig', '进行中', 'még tart')}: “${esc(x.pending.reason)}”</p>` : ''}
+          ${x.pending ? `<p class="entry-note">${T('Gevraagd om aan te passen naar', '申请改为', 'Kért módosítás:', 'Demande de modification vers')} ${fmt.time(x.pending.proposed_in)} – ${x.pending.proposed_out ? fmt.time(x.pending.proposed_out) : T('nog bezig', '进行中', 'még tart', 'en cours')}: “${esc(x.pending.reason)}”</p>` : ''}
         </div>`).join('')}</div>`
-        : `<div class="empty"><strong>${T(`Geen uren in ${fmt.month(m)}.`, `${fmt.month(m)}没有工时。`, `${fmt.month(m)}: nincsenek órák.`)}</strong>${T('Als je inklokt bij Klok, verschijnt het hier.', '在“打卡”页打卡后会显示在这里。', 'Ha az Óra fülön becsekkolsz, itt jelenik meg.')}</div>`}
+        : `<div class="empty"><strong>${T(`Geen uren in ${fmt.month(m)}.`, `${fmt.month(m)}没有工时。`, `${fmt.month(m)}: nincsenek órák.`, `Aucune heure en ${fmt.month(m)}.`)}</strong>${T('Als je inklokt bij Klok, verschijnt het hier.', '在“打卡”页打卡后会显示在这里。', 'Ha az Óra fülön becsekkolsz, itt jelenik meg.', 'Quand tu pointes dans Pointage, ça apparaît ici.')}</div>`}
     </section>` : ''}
     <section class="card">
-      <h2>${T('Per maand', '每月', 'Havonta')}</h2>
-      <p class="muted small" style="margin-top:6px">${clocks ? T('Wat je loonbrieven zeggen: de uren die je betaald kreeg, bruto en netto. Daarnaast de uren die je in de app klokte. Tik op een maand om ze te openen.', '工资单上的数字：发了工资的工时、税前和实发。旁边是你在 app 里打卡的工时。点一个月份查看。', 'Amit a bérjegyzékeid mutatnak: a kifizetett órák, bruttó és nettó. Mellettük az appban csekkolt órák. Koppints egy hónapra a megnyitáshoz.')
-        : T('Tik op een maand om ze te openen.', '点一个月份查看。', 'Koppints egy hónapra a megnyitáshoz.')}</p>
-      ${payMonthsTable(months, { open: toDateInput(m), clickable: true, clocked: clocks }) || `<p class="empty">${T('Je loonbrieven verschijnen hier zodra ze er zijn.', '工资单出来后会显示在这里。', 'A bérjegyzékeid itt jelennek meg, amint elkészülnek.')}</p>`}
-      ${clocks ? `<p class="muted small" style="margin-top:10px">${T('Het verdiende bedrag bovenaan is een schatting uit je geklokte uren. Je loonbrief toont wat je echt betaald krijgt.', '上面的收入是根据打卡工时估算的。实际工资以工资单为准。', 'A fenti kereset a csekkolt óráid alapján becsült összeg. A bérjegyzéked mutatja, mennyit kapsz valójában.')}</p>` : ''}
+      <h2>${T('Per maand', '每月', 'Havonta', 'Par mois')}</h2>
+      <p class="muted small" style="margin-top:6px">${clocks ? T('Wat je loonbrieven zeggen: de uren die je betaald kreeg, bruto en netto. Daarnaast de uren die je in de app klokte. Tik op een maand om ze te openen.', '工资单上的数字：发了工资的工时、税前和实发。旁边是你在 app 里打卡的工时。点一个月份查看。', 'Amit a bérjegyzékeid mutatnak: a kifizetett órák, bruttó és nettó. Mellettük az appban csekkolt órák. Koppints egy hónapra a megnyitáshoz.', 'Ce que disent tes fiches de paie : les heures payées, en brut et en net. À côté, les heures pointées dans l’app. Touche un mois pour l’ouvrir.')
+        : T('Tik op een maand om ze te openen.', '点一个月份查看。', 'Koppints egy hónapra a megnyitáshoz.', 'Touche un mois pour l’ouvrir.')}</p>
+      ${payMonthsTable(months, { open: toDateInput(m), clickable: true, clocked: clocks }) || `<p class="empty">${T('Je loonbrieven verschijnen hier zodra ze er zijn.', '工资单出来后会显示在这里。', 'A bérjegyzékeid itt jelennek meg, amint elkészülnek.', 'Tes fiches de paie apparaîtront ici dès qu’elles seront disponibles.')}</p>`}
+      ${clocks ? `<p class="muted small" style="margin-top:10px">${T('Het verdiende bedrag bovenaan is een schatting uit je geklokte uren. Je loonbrief toont wat je echt betaald krijgt.', '上面的收入是根据打卡工时估算的。实际工资以工资单为准。', 'A fenti kereset a csekkolt óráid alapján becsült összeg. A bérjegyzéked mutatja, mennyit kapsz valójában.', 'Le montant gagné en haut est une estimation basée sur tes heures pointées. Ta fiche de paie indique ce que tu reçois vraiment.')}</p>` : ''}
     </section>
     ${pendingReqs.length || decided.length ? `<section class="card">
-      <h2>${T('Je aanvragen', '你的申请', 'A kérelmeid')}</h2>
+      <h2>${T('Je aanvragen', '你的申请', 'A kérelmeid', 'Tes demandes')}</h2>
       <div class="rows">${[...pendingReqs, ...decided].map(r => `
         <div class="row">
           <div class="row-main">
-            <span class="row-title">${r.entry_id ? T('Aanpassen', '修改', 'Módosítás') : T('Toevoegen', '补登', 'Hozzáadás')} ${fmt.day(r.proposed_in)}: <span class="time">${fmt.time(r.proposed_in)} – ${r.proposed_out ? fmt.time(r.proposed_out) : T('nog bezig', '进行中', 'még tart')}</span></span>
+            <span class="row-title">${r.entry_id ? T('Aanpassen', '修改', 'Módosítás', 'Modifier') : T('Toevoegen', '补登', 'Hozzáadás', 'Ajouter')} ${fmt.day(r.proposed_in)}: <span class="time">${fmt.time(r.proposed_in)} – ${r.proposed_out ? fmt.time(r.proposed_out) : T('nog bezig', '进行中', 'még tart', 'en cours')}</span></span>
             <span class="row-sub">“${esc(r.reason)}”</span>
           </div>
           <div class="row-actions">
-            ${r.status === 'pending' ? `<span class="pill accent">${T('In behandeling', '审核中', 'Folyamatban')}</span><button class="sm" data-cancel="${r.id}">${T('Annuleren', '取消', 'Mégse')}</button>`
-              : r.status === 'approved' ? `<span class="pill on">${T('Goedgekeurd', '已通过', 'Jóváhagyva')}</span>` : `<span class="pill bad">${T('Niet goedgekeurd', '未通过', 'Nincs jóváhagyva')}</span>`}
+            ${r.status === 'pending' ? `<span class="pill accent">${T('In behandeling', '审核中', 'Folyamatban', 'En attente')}</span><button class="sm" data-cancel="${r.id}">${T('Annuleren', '取消', 'Mégse', 'Annuler')}</button>`
+              : r.status === 'approved' ? `<span class="pill on">${T('Goedgekeurd', '已通过', 'Jóváhagyva', 'Approuvée')}</span>` : `<span class="pill bad">${T('Niet goedgekeurd', '未通过', 'Nincs jóváhagyva', 'Refusée')}</span>`}
           </div>
         </div>`).join('')}</div>
     </section>` : ''}`;
@@ -3770,7 +3812,7 @@ async function viewHours(el, current) {
   $$('[data-fix]', el).forEach(b => b.addEventListener('click', () => timeFixModal(data.entries.find(x => x.id === b.dataset.fix))));
   $$('[data-cancel]', el).forEach(b => b.addEventListener('click', () => busy(b, async () => {
     await rpc('cancel_time_edit', { p_edit_id: b.dataset.cancel });
-    toast(T('Aanvraag geannuleerd.', '申请已取消。', 'Kérelem visszavonva.'));
+    toast(T('Aanvraag geannuleerd.', '申请已取消。', 'Kérelem visszavonva.', 'Demande annulée.'));
     renderView();
   }).catch(() => {})));
 }
@@ -3781,19 +3823,19 @@ function timeFixModal(entry) {
   const outV = entry ? (entry.clock_out ? new Date(entry.clock_out) : null) : atTime(addDays(t, -1), '22:30');
   const stillIn = entry && !entry.clock_out;
   modal.open(`
-    <h2 id="modal-title">${entry ? T('Uren aanpassen', '修改工时', 'Órák módosítása') : T('Vergeten uren toevoegen', '补登工时', 'Elfelejtett órák hozzáadása')}</h2>
-    <p>${entry ? T(`Nu: ${fmt.day(entry.clock_in)}, ${fmt.time(entry.clock_in)} – ${entry.clock_out ? fmt.time(entry.clock_out) : 'nog ingeklokt'}. `, `现在：${fmt.day(entry.clock_in)}，${fmt.time(entry.clock_in)} – ${entry.clock_out ? fmt.time(entry.clock_out) : '还在上班'}。`, `Most: ${fmt.day(entry.clock_in)}, ${fmt.time(entry.clock_in)} – ${entry.clock_out ? fmt.time(entry.clock_out) : 'még becsekkolva'}. `)
-      : T('Voor een shift die je gewerkt hebt maar waarvoor je niet inklokte. ', '用于你上了班却没有打卡的班次。', 'Olyan műszakhoz, amelyet ledolgoztál, de nem csekkoltál be. ')}${T('Je verantwoordelijke keurt de wijziging goed voor ze meetelt.', '负责人审核通过后才会计入。', 'A vezetőd jóváhagyja a módosítást, mielőtt beszámít.')}</p>
+    <h2 id="modal-title">${entry ? T('Uren aanpassen', '修改工时', 'Órák módosítása', 'Modifier les heures') : T('Vergeten uren toevoegen', '补登工时', 'Elfelejtett órák hozzáadása', 'Ajouter des heures oubliées')}</h2>
+    <p>${entry ? T(`Nu: ${fmt.day(entry.clock_in)}, ${fmt.time(entry.clock_in)} – ${entry.clock_out ? fmt.time(entry.clock_out) : 'nog ingeklokt'}. `, `现在：${fmt.day(entry.clock_in)}，${fmt.time(entry.clock_in)} – ${entry.clock_out ? fmt.time(entry.clock_out) : '还在上班'}。`, `Most: ${fmt.day(entry.clock_in)}, ${fmt.time(entry.clock_in)} – ${entry.clock_out ? fmt.time(entry.clock_out) : 'még becsekkolva'}. `, `Actuellement : ${fmt.day(entry.clock_in)}, ${fmt.time(entry.clock_in)} – ${entry.clock_out ? fmt.time(entry.clock_out) : 'toujours pointé'}. `)
+      : T('Voor een shift die je gewerkt hebt maar waarvoor je niet inklokte. ', '用于你上了班却没有打卡的班次。', 'Olyan műszakhoz, amelyet ledolgoztál, de nem csekkoltál be. ', 'Pour un service que tu as travaillé sans pointer ton arrivée. ')}${T('Je verantwoordelijke keurt de wijziging goed voor ze meetelt.', '负责人审核通过后才会计入。', 'A vezetőd jóváhagyja a módosítást, mielőtt beszámít.', 'Ton responsable doit approuver la modification avant qu’elle compte.')}</p>
     <form id="fix-form" novalidate>
       <div class="form-grid">
-        <div class="field wide"><label for="fx-day">${T('Dag', '日期', 'Nap')}</label>${dateField('fx-day', inV, addDays(t, -45), t)}</div>
-        <div class="field"><label for="fx-in">${T('Ingeklokt', '上班时间', 'Becsekkolva')}</label>${timeField('fx-in', toTimeInput(inV))}</div>
-        <div class="field"><label for="fx-out">${T('Uitgeklokt', '下班时间', 'Kicsekkolva')}</label>${timeField('fx-out', outV ? toTimeInput(outV) : '', { required: !stillIn })}
-          <span class="help">${stillIn ? T('Laat leeg als je nog aan het werken bent.', '如果还在上班就留空。', 'Hagyd üresen, ha még dolgozol.') : T('Vroeger dan het inklokken betekent de volgende dag.', '早于上班时间表示第二天。', 'Ha korábbi, mint a becsekkolás, az a következő napot jelenti.')}</span></div>
-        <div class="field wide"><label for="fx-reason">${T('Wat is er gebeurd?', '发生了什么？', 'Mi történt?')}</label><input id="fx-reason" maxlength="300" placeholder="${T('bv. vergeten uit te klokken, vertrokken om 15:30', '例如：忘记下班打卡，15:30 离开', 'pl. elfelejtettem kicsekkolni, 15:30-kor mentem el')}" required></div>
+        <div class="field wide"><label for="fx-day">${T('Dag', '日期', 'Nap', 'Jour')}</label>${dateField('fx-day', inV, addDays(t, -45), t)}</div>
+        <div class="field"><label for="fx-in">${T('Ingeklokt', '上班时间', 'Becsekkolva', 'Arrivée')}</label>${timeField('fx-in', toTimeInput(inV))}</div>
+        <div class="field"><label for="fx-out">${T('Uitgeklokt', '下班时间', 'Kicsekkolva', 'Départ')}</label>${timeField('fx-out', outV ? toTimeInput(outV) : '', { required: !stillIn })}
+          <span class="help">${stillIn ? T('Laat leeg als je nog aan het werken bent.', '如果还在上班就留空。', 'Hagyd üresen, ha még dolgozol.', 'Laisse vide si tu travailles encore.') : T('Vroeger dan het inklokken betekent de volgende dag.', '早于上班时间表示第二天。', 'Ha korábbi, mint a becsekkolás, az a következő napot jelenti.', 'Plus tôt que l’arrivée signifie le lendemain.')}</span></div>
+        <div class="field wide"><label for="fx-reason">${T('Wat is er gebeurd?', '发生了什么？', 'Mi történt?', 'Que s’est-il passé ?')}</label><input id="fx-reason" maxlength="300" placeholder="${T('bv. vergeten uit te klokken, vertrokken om 15:30', '例如：忘记下班打卡，15:30 离开', 'pl. elfelejtettem kicsekkolni, 15:30-kor mentem el', 'p. ex. oublié de pointer le départ, parti à 15:30')}" required></div>
       </div>
       <p class="form-error" id="fx-err"></p>
-      <div class="form-actions"><button type="button" data-close>${T('Annuleren', '取消', 'Mégse')}</button><button type="submit" class="primary">${T('Naar verantwoordelijke sturen', '发给负责人', 'Küldés a vezetőnek')}</button></div>
+      <div class="form-actions"><button type="button" data-close>${T('Annuleren', '取消', 'Mégse', 'Annuler')}</button><button type="submit" class="primary">${T('Naar verantwoordelijke sturen', '发给负责人', 'Küldés a vezetőnek', 'Envoyer au responsable')}</button></div>
     </form>`, d => {
     $('#fx-reason', d).focus();
     $('#fix-form', d).addEventListener('submit', async ev => {
@@ -3801,18 +3843,18 @@ function timeFixModal(entry) {
       const err = $('#fx-err', d);
       const inHM = parseHM($('#fx-in', d).value), outRaw = $('#fx-out', d).value.trim(), outHM = parseHM(outRaw);
       const reason = $('#fx-reason', d).value.trim();
-      if (!inHM) { err.textContent = T('Vul in wanneer je inklokte, bv. 17:30.', '请填写上班时间，例如 17:30。', 'Add meg, mikor csekkoltál be, pl. 17:30.'); return; }
-      if (outRaw && !outHM) { err.textContent = T('Vul in wanneer je uitklokte, bv. 22:30.', '请填写下班时间，例如 22:30。', 'Add meg, mikor csekkoltál ki, pl. 22:30.'); return; }
-      if (!outHM && !stillIn) { err.textContent = T('Vul in wanneer je uitklokte.', '请填写下班时间。', 'Add meg, mikor csekkoltál ki.'); return; }
+      if (!inHM) { err.textContent = T('Vul in wanneer je inklokte, bv. 17:30.', '请填写上班时间，例如 17:30。', 'Add meg, mikor csekkoltál be, pl. 17:30.', 'Indique l’heure de ton arrivée, p. ex. 17:30.'); return; }
+      if (outRaw && !outHM) { err.textContent = T('Vul in wanneer je uitklokte, bv. 22:30.', '请填写下班时间，例如 22:30。', 'Add meg, mikor csekkoltál ki, pl. 22:30.', 'Indique l’heure de ton départ, p. ex. 22:30.'); return; }
+      if (!outHM && !stillIn) { err.textContent = T('Vul in wanneer je uitklokte.', '请填写下班时间。', 'Add meg, mikor csekkoltál ki.', 'Indique l’heure de ton départ.'); return; }
       const { a, b } = spanFor($('#fx-day', d).value, inHM, outHM);
-      if (a > now() || (b && b > now())) { err.textContent = T('Uren kunnen niet in de toekomst liggen.', '时间不能在将来。', 'Az időpont nem lehet a jövőben.'); return; }
-      if (reason.length < 3) { err.textContent = T('Zeg kort wat er gebeurd is.', '请简单说说发生了什么。', 'Írd le röviden, mi történt.'); return; }
+      if (a > now() || (b && b > now())) { err.textContent = T('Uren kunnen niet in de toekomst liggen.', '时间不能在将来。', 'Az időpont nem lehet a jövőben.', 'Les heures ne peuvent pas être dans le futur.'); return; }
+      if (reason.length < 3) { err.textContent = T('Zeg kort wat er gebeurd is.', '请简单说说发生了什么。', 'Írd le röviden, mi történt.', 'Explique brièvement ce qui s’est passé.'); return; }
       const btn = $('button[type=submit]', d);
       btn.disabled = true;
       try {
         await rpc('request_time_edit', { p_entry_id: entry ? entry.id : null, p_in: a.toISOString(), p_out: b ? b.toISOString() : null, p_reason: reason });
         modal.close();
-        toast(T('Verstuurd. Je verantwoordelijke bekijkt het.', '已发送，负责人会查看。', 'Elküldve. A vezetőd megnézi.'));
+        toast(T('Verstuurd. Je verantwoordelijke bekijkt het.', '已发送，负责人会查看。', 'Elküldve. A vezetőd megnézi.', 'Envoyé. Ton responsable va vérifier.'));
         renderView();
       } catch (e) { err.textContent = e.message; btn.disabled = false; }
     });
@@ -3881,7 +3923,7 @@ const COLOR_NAMES_HU = {
   blue: 'kék', light: 'világos', indigo: 'indigókék', chestnut: 'gesztenyebarna', dark: 'sötétbarna', brown: 'barna',
   blonde: 'szőke', platinum: 'platinaszőke', auburn: 'vörösesbarna', ginger: 'vörös', hazel: 'mogyoróbarna', ruby: 'rubinvörös',
 };
-const colorName = (k, v) => k === 'skin' ? T(`huidskleur ${v.slice(1)}`, `肤色 ${v.slice(1)}`, `bőrszín ${v.slice(1)}`) : ({ zh: COLOR_NAMES_ZH, hu: COLOR_NAMES_HU }[ui()] || COLOR_NAMES)[v] || v;
+const colorName = (k, v) => k === 'skin' ? T(`huidskleur ${v.slice(1)}`, `肤色 ${v.slice(1)}`, `bőrszín ${v.slice(1)}`, `couleur de peau ${v.slice(1)}`) : ({ zh: COLOR_NAMES_ZH, hu: COLOR_NAMES_HU }[ui()] || COLOR_NAMES)[v] || v;
 const avLabel = (k, v) => Avatar.label(k, v, ui());
 const avShown = (k, c) => !((k === 'topColor' && ['chef', 'garden', 'clown', 'tang', 'qipao'].includes(c.top)) || (k === 'outerColor' && c.outer === 'none') ||
   (k === 'neckColor' && !['scarf', 'bowtie'].includes(c.neck)) ||
@@ -3893,14 +3935,14 @@ function openAvatarEditor() {
   let c = saved ? { ...saved } : { ...Avatar.DEFAULT }, tab = 'face';
   const need = (k, v) => Avatar.levelOf(k, v);
   const locked = (k, v) => need(k, v) > level && !(saved && saved[k] === v);
-  const lockNote = (k, v) => locked(k, v) ? `<span class="av-lock">${LOCK_ICON}${T('Level', '等级', 'Szint')} ${need(k, v)}</span>` : '';
-  const from = (k, v) => T(`vanaf level ${need(k, v)}`, `${need(k, v)} 级解锁`, `${need(k, v)}. szinttől`);
+  const lockNote = (k, v) => locked(k, v) ? `<span class="av-lock">${LOCK_ICON}${T('Level', '等级', 'Szint', 'Niveau')} ${need(k, v)}</span>` : '';
+  const from = (k, v) => T(`vanaf level ${need(k, v)}`, `${need(k, v)} 级解锁`, `${need(k, v)}. szinttől`, `dès le niveau ${need(k, v)}`);
 
   function group(k) {
     if (!avShown(k, c)) return '';
     let body;
     if (k === 'extra') {
-      body = `<div class="av-tiles">${[['freckles', T('Sproeten', '雀斑', 'Szeplők')], ['blush', T('Blos', '腮红', 'Pír')]].map(([t, l]) => `
+      body = `<div class="av-tiles">${[['freckles', T('Sproeten', '雀斑', 'Szeplők', 'Taches de rousseur')], ['blush', T('Blos', '腮红', 'Pír', 'Joues roses')]].map(([t, l]) => `
         <button type="button" class="av-tile" data-toggle="${t}" aria-pressed="${!!c[t]}">
           <span class="av-tile-pic">${Avatar.render({ ...c, [t]: true }, { view: '56 70 88 88' })}</span><span class="av-tile-label">${l}</span></button>`).join('')}</div>`;
     } else if (Avatar.COLORS[k]) {
@@ -3922,23 +3964,23 @@ function openAvatarEditor() {
   }
 
   const d = modal.open(`
-    <h2 id="modal-title">${saved ? T('Je avatar aanpassen', '修改你的头像', 'Avatar szerkesztése') : T('Maak je avatar', '创建你的头像', 'Készítsd el az avatarodat')}</h2>
-    <p>${T(`Je bent level ${level}. Dingen met een slotje krijg je op een hoger level.`, `你现在是 ${level} 级。带锁的东西升级后才能用。`, `${level}. szintű vagy. A lakattal jelölt dolgokat magasabb szinten kapod meg.`)}</p>
+    <h2 id="modal-title">${saved ? T('Je avatar aanpassen', '修改你的头像', 'Avatar szerkesztése', 'Modifier ton avatar') : T('Maak je avatar', '创建你的头像', 'Készítsd el az avatarodat', 'Crée ton avatar')}</h2>
+    <p>${T(`Je bent level ${level}. Dingen met een slotje krijg je op een hoger level.`, `你现在是 ${level} 级。带锁的东西升级后才能用。`, `${level}. szintű vagy. A lakattal jelölt dolgokat magasabb szinten kapod meg.`, `Tu es niveau ${level}. Les éléments avec un cadenas se débloquent à un niveau supérieur.`)}</p>
     <div class="av-editor">
       <div class="av-preview" id="av-preview"></div>
       <div class="av-side">
-        <div class="chips av-tabs" role="tablist" aria-label="${T('Onderdelen', '部分', 'Menü')}">${AV_TABS.map(([k, nl, zh]) => `<button type="button" class="chip" role="tab" data-av-tab="${k}">${T(nl, zh, AV_TAB_HU[k])}</button>`).join('')}</div>
+        <div class="chips av-tabs" role="tablist" aria-label="${T('Onderdelen', '部分', 'Menü', 'Éléments')}">${AV_TABS.map(([k, nl, zh]) => `<button type="button" class="chip" role="tab" data-av-tab="${k}">${T(nl, zh, AV_TAB_HU[k])}</button>`).join('')}</div>
         <div class="av-groups" id="av-groups"></div>
       </div>
     </div>
     <p class="form-error" id="av-err"></p>
     <div class="form-actions av-actions">
-      <button type="button" id="av-random">${T('Willekeurig', '随机', 'Véletlenszerű')}</button>
-      <span class="toolbar"><button type="button" data-close>${T('Annuleren', '取消', 'Mégse')}</button><button type="button" class="primary" id="av-save">${T('Opslaan', '保存', 'Mentés')}</button></span>
+      <button type="button" id="av-random">${T('Willekeurig', '随机', 'Véletlenszerű', 'Aléatoire')}</button>
+      <span class="toolbar"><button type="button" data-close>${T('Annuleren', '取消', 'Mégse', 'Annuler')}</button><button type="button" class="primary" id="av-save">${T('Opslaan', '保存', 'Mentés', 'Enregistrer')}</button></span>
     </div>`, d => {
     const groups = $('#av-groups', d);
     const draw = () => {
-      $('#av-preview', d).innerHTML = Avatar.render(c, { title: T('Je avatar', '你的头像', 'Az avatarod') });
+      $('#av-preview', d).innerHTML = Avatar.render(c, { title: T('Je avatar', '你的头像', 'Az avatarod', 'Ton avatar') });
       const keep = groups.scrollTop;
       groups.innerHTML = AV_TABS.find(t => t[0] === tab)[3].map(group).join('');
       groups.scrollTop = keep;
@@ -3958,7 +4000,7 @@ function openAvatarEditor() {
       await rpc('save_my_avatar', { p_avatar: c });
       await refreshMe();
       modal.close();
-      toast(T('Je avatar is opgeslagen.', '头像已保存。', 'Az avatarod elmentve.'));
+      toast(T('Je avatar is opgeslagen.', '头像已保存。', 'Az avatarod elmentve.', 'Ton avatar est enregistré.'));
       renderShell();
     }).catch(e => { $('#av-err', d).textContent = e.message; }));
     draw();
@@ -3972,7 +4014,7 @@ function rewardTiles(avatar, level) {
   for (const [k, items] of Object.entries(Avatar.UNLOCKS)) {
     for (const [v, l] of Object.entries(items)) {
       if (k === 'hairColor') { if (seen.has(k)) continue; seen.add(k); }
-      const label = k === 'hairColor' ? T('Fantasiekleuren voor je haar', '彩色头发', 'Színes haj') : avLabel(k, v);
+      const label = k === 'hairColor' ? T('Fantasiekleuren voor je haar', '彩色头发', 'Színes haj', 'Couleurs fantaisie pour tes cheveux') : avLabel(k, v);
       out.push({ k, v, l, label });
     }
   }
@@ -3983,30 +4025,30 @@ function rewardTiles(avatar, level) {
     const on = level >= r.l;
     return `<div class="reward ${on ? 'is-on' : 'is-locked'}">
       <span class="reward-pic">${Avatar.render(look, { view: AV_CROP[r.k] })}</span>
-      <span class="reward-lvl">${on ? '✓ ' : LOCK_ICON}${T('Level', '等级', 'Szint')} ${r.l}</span><span class="reward-name">${hyph(r.label)}</span></div>`;
+      <span class="reward-lvl">${on ? '✓ ' : LOCK_ICON}${T('Level', '等级', 'Szint', 'Niveau')} ${r.l}</span><span class="reward-name">${hyph(r.label)}</span></div>`;
   }).join('');
 }
 
 const fmtDate = iso => new Date(iso + 'T00:00').toLocaleDateString(loc(), { day: 'numeric', month: 'long', year: 'numeric' });
-const contractPeriod = c => c.starts_on ? (c.ends_on ? `${isoToDMY(c.starts_on)} – ${isoToDMY(c.ends_on)}` : T(`vanaf ${isoToDMY(c.starts_on)}`, `${isoToDMY(c.starts_on)} 起`, `ettől: ${isoToDMY(c.starts_on)}`)) : T('zonder datum', '无日期', 'dátum nélkül');
+const contractPeriod = c => c.starts_on ? (c.ends_on ? `${isoToDMY(c.starts_on)} – ${isoToDMY(c.ends_on)}` : T(`vanaf ${isoToDMY(c.starts_on)}`, `${isoToDMY(c.starts_on)} 起`, `ettől: ${isoToDMY(c.starts_on)}`, `à partir du ${isoToDMY(c.starts_on)}`)) : T('zonder datum', '无日期', 'dátum nélkül', 'sans date');
 function contractRows(list, manager) {
-  if (!list.length) return `<p class="empty">${manager ? 'Nog geen contracten.' : T('Je verantwoordelijke heeft nog geen contract toegevoegd.', '负责人还没有上传合同。', 'A vezetőd még nem adott hozzá szerződést.')}</p>`;
+  if (!list.length) return `<p class="empty">${manager ? 'Nog geen contracten.' : T('Je verantwoordelijke heeft nog geen contract toegevoegd.', '负责人还没有上传合同。', 'A vezetőd még nem adott hozzá szerződést.', 'Ton responsable n’a pas encore ajouté de contrat.')}</p>`;
   const today = toDateInput(now());
   return `<div class="rows">${list.map(c => {
-    const state = c.ends_on && c.ends_on < today ? `<span class="pill">${T('Afgelopen', '已结束', 'Lejárt')}</span>` : (!c.starts_on || c.starts_on <= today) ? `<span class="pill on">${T('Loopt', '有效', 'Érvényes')}</span>` : `<span class="pill accent">${T('Begint later', '尚未开始', 'Később kezdődik')}</span>`;
+    const state = c.ends_on && c.ends_on < today ? `<span class="pill">${T('Afgelopen', '已结束', 'Lejárt', 'Terminé')}</span>` : (!c.starts_on || c.starts_on <= today) ? `<span class="pill on">${T('Loopt', '有效', 'Érvényes', 'En cours')}</span>` : `<span class="pill accent">${T('Begint later', '尚未开始', 'Később kezdődik', 'Commence plus tard')}</span>`;
     return `<div class="row">
       <div class="row-main"><span class="row-title">${esc(c.title)} ${state}</span><span class="row-sub">${contractPeriod(c)} · ${esc(c.file_name)} · ${fmtSize(c.size_bytes)}</span></div>
-      <div class="row-actions"><button class="sm${manager ? '' : ' primary'}" data-contract="${c.id}">${T('Downloaden', '下载', 'Letöltés')}</button>${manager ? `<button class="sm danger" data-contract-rm="${c.id}" data-title="${esc(c.title)}">Verwijderen</button>` : ''}</div>
+      <div class="row-actions"><button class="sm${manager ? '' : ' primary'}" data-contract="${c.id}">${T('Downloaden', '下载', 'Letöltés', 'Télécharger')}</button>${manager ? `<button class="sm danger" data-contract-rm="${c.id}" data-title="${esc(c.title)}">Verwijderen</button>` : ''}</div>
     </div>`;
   }).join('')}</div>`;
 }
 
 // The language picker for staff (Profiel); it is kept on the server, so the
 // app opens in that language on every phone.
-const LANGS = [['nl', 'Nederlands', 'nl-BE'], ['zh', '中文', 'zh-Hans'], ['hu', 'Magyar', 'hu']];
+const LANGS = [['nl', 'Nederlands', 'nl-BE'], ['zh', '中文', 'zh-Hans'], ['hu', 'Magyar', 'hu'], ['fr', 'Français', 'fr-BE']];
 function langCard() {
-  return `<section class="card"><h2>${T('Taal', '语言', 'Nyelv')} <span class="muted small">· ${T('语言', 'Taal', 'Taal')}</span></h2>
-    <p class="muted small" style="margin-top:6px">${T('De taal van de app op al je toestellen. Je verantwoordelijke ziet alles in het Nederlands.', 'app 在你所有设备上的语言。负责人看到的是荷兰语。', 'Az app nyelve az összes eszközödön. A vezetőd mindent hollandul lát.')}</p>
+  return `<section class="card"><h2>${T('Taal', '语言', 'Nyelv', 'Langue')} <span class="muted small">· ${T('语言', 'Taal', 'Taal', '语言')}</span></h2>
+    <p class="muted small" style="margin-top:6px">${T('De taal van de app op al je toestellen. Je verantwoordelijke ziet alles in het Nederlands.', 'app 在你所有设备上的语言。负责人看到的是荷兰语。', 'Az app nyelve az összes eszközödön. A vezetőd mindent hollandul lát.', 'La langue de l’app sur tous tes appareils. Ton responsable voit tout en néerlandais.')}</p>
     <div class="chips" role="group" aria-label="Taal · 语言 · Nyelv" style="margin-top:12px">${LANGS.map(([k, l, a]) =>
       `<button type="button" class="chip${lang() === k ? ' is-on' : ''}" data-my-lang="${k}" lang="${a}" aria-pressed="${lang() === k}">${l}</button>`).join('')}</div>
   </section>`;
@@ -4023,14 +4065,14 @@ function bindLangCard(el) {
 // How XP comes in, in words: by working for who clocks in, by the day for the rest.
 function xpHow(xp) {
   const per = S.settings.daily_xp || 0;
-  const bonus = T('Je verantwoordelijke kan je ook bonus-XP geven.', '负责人也可以给你奖励 XP。', 'A vezetőd bónusz XP-t is adhat neked.');
-  const quiz = takesQuiz() ? `<li>${T('<strong>XP</strong> voor elk juist antwoord in de <a href="#quiz">quiz van de week</a>', '<a href="#quiz">每周测验</a>每答对一题得 <strong>XP</strong>', '<strong>XP</strong> minden helyes válaszért <a href="#quiz">a hét kvízében</a>')}</li>` : '';
-  const quizSoFar = xp && xp.quiz ? ` ${T(`Tot nu toe ${xp.quiz} XP uit de quiz.`, `目前测验 XP 共 ${xp.quiz}。`, `Eddig ${xp.quiz} XP a kvízből.`)}` : '';
+  const bonus = T('Je verantwoordelijke kan je ook bonus-XP geven.', '负责人也可以给你奖励 XP。', 'A vezetőd bónusz XP-t is adhat neked.', 'Ton responsable peut aussi te donner des XP bonus.');
+  const quiz = takesQuiz() ? `<li>${T('<strong>XP</strong> voor elk juist antwoord in de <a href="#quiz">quiz van de week</a>', '<a href="#quiz">每周测验</a>每答对一题得 <strong>XP</strong>', '<strong>XP</strong> minden helyes válaszért <a href="#quiz">a hét kvízében</a>', '<strong>XP</strong> pour chaque bonne réponse au <a href="#quiz">quiz de la semaine</a>')}</li>` : '';
+  const quizSoFar = xp && xp.quiz ? ` ${T(`Tot nu toe ${xp.quiz} XP uit de quiz.`, `目前测验 XP 共 ${xp.quiz}。`, `Eddig ${xp.quiz} XP a kvízből.`, `Jusqu’ici ${xp.quiz} XP grâce au quiz.`)}` : '';
   return canClock()
-    ? `<ul><li>${T('<strong>10 XP</strong> per uur dat je werkt', '每工作一小时 <strong>10 XP</strong>', '<strong>10 XP</strong> minden ledolgozott óráért')}</li><li>${T('<strong>+5 XP</strong> als je op tijd begint aan je shift', '准时开始班次 <strong>+5 XP</strong>', '<strong>+5 XP</strong>, ha időben kezded a műszakot')}</li><li>${T('<strong>+5 XP</strong> als je blijft tot je shift gedaan is', '待到班次结束 <strong>+5 XP</strong>', '<strong>+5 XP</strong>, ha a műszak végéig maradsz')}</li>${quiz}</ul>
-      <p class="muted small">${T('XP komt uit je urenkaart. Een aanpassing telt mee zodra je verantwoordelijke ze goedkeurt.', 'XP 来自你的工时表。修改经负责人审核通过后才计入。', 'Az XP a munkaidő-kártyádból jön. A módosítás akkor számít, amikor a vezetőd jóváhagyja.')} ${bonus}${quizSoFar}</p>`
-    : `<ul><li>${T(`<strong>+${per} XP</strong> elke dag, gewoon omdat je bij het team bent`, `每天 <strong>+${per} XP</strong>，因为你是团队的一员`, `<strong>+${per} XP</strong> minden nap, egyszerűen mert a csapat tagja vagy`)}</li>${quiz}</ul>
-      <p class="muted small">${bonus}${xp && xp.daily ? ` ${T(`Tot nu toe ${xp.daily} XP van de dagen.`, `目前每日 XP 共 ${xp.daily}。`, `Eddig ${xp.daily} XP a napokból.`)}` : ''}${quizSoFar}</p>`;
+    ? `<ul><li>${T('<strong>10 XP</strong> per uur dat je werkt', '每工作一小时 <strong>10 XP</strong>', '<strong>10 XP</strong> minden ledolgozott óráért', '<strong>10 XP</strong> par heure de travail')}</li><li>${T('<strong>+5 XP</strong> als je op tijd begint aan je shift', '准时开始班次 <strong>+5 XP</strong>', '<strong>+5 XP</strong>, ha időben kezded a műszakot', '<strong>+5 XP</strong> si tu commences ton service à l’heure')}</li><li>${T('<strong>+5 XP</strong> als je blijft tot je shift gedaan is', '待到班次结束 <strong>+5 XP</strong>', '<strong>+5 XP</strong>, ha a műszak végéig maradsz', '<strong>+5 XP</strong> si tu restes jusqu’à la fin de ton service')}</li>${quiz}</ul>
+      <p class="muted small">${T('XP komt uit je urenkaart. Een aanpassing telt mee zodra je verantwoordelijke ze goedkeurt.', 'XP 来自你的工时表。修改经负责人审核通过后才计入。', 'Az XP a munkaidő-kártyádból jön. A módosítás akkor számít, amikor a vezetőd jóváhagyja.', 'Les XP viennent de ta feuille d’heures. Une modification compte dès que ton responsable l’approuve.')} ${bonus}${quizSoFar}</p>`
+    : `<ul><li>${T(`<strong>+${per} XP</strong> elke dag, gewoon omdat je bij het team bent`, `每天 <strong>+${per} XP</strong>，因为你是团队的一员`, `<strong>+${per} XP</strong> minden nap, egyszerűen mert a csapat tagja vagy`, `<strong>+${per} XP</strong> chaque jour, simplement parce que tu fais partie de l’équipe`)}</li>${quiz}</ul>
+      <p class="muted small">${bonus}${xp && xp.daily ? ` ${T(`Tot nu toe ${xp.daily} XP van de dagen.`, `目前每日 XP 共 ${xp.daily}。`, `Eddig ${xp.daily} XP a napokból.`, `Jusqu’ici ${xp.daily} XP grâce aux jours.`)}` : ''}${quizSoFar}</p>`;
 }
 
 async function viewProfile(el, current) {
@@ -4042,72 +4084,72 @@ async function viewProfile(el, current) {
   const per = S.settings.daily_xp || 0;
   const staffLang = !isManager() && !isDriver();
   const stats = canClock() || isManager() ? `
-          <div class="stat"><span class="v">${fmt.hours(xp.minutes)}</span><span class="k">${T('Uren gewerkt', '工作小时', 'Ledolgozott órák')}</span></div>
-          <div class="stat"><span class="v">${xp.entries}</span><span class="k">${T('Keer gewerkt', '上班次数', 'Ennyiszer dolgoztál')}</span></div>
-          <div class="stat"><span class="v">${xp.entries ? Math.round(xp.on_time / xp.entries * 100) + '%' : '—'}</span><span class="k">${T('Op tijd begonnen', '准时开始', 'Időben kezdtél')}</span></div>` : `
-          <div class="stat good"><span class="v">+${per}</span><span class="k">${T('XP per dag', '每天 XP', 'XP naponta')}</span></div>
-          <div class="stat"><span class="v">${num(xp.daily || 0, 0)}</span><span class="k">${T('XP van de dagen', '每日 XP 合计', 'Napi XP összesen')}</span></div>
-          <div class="stat"><span class="v">${num(xp.bonus || 0, 0)}</span><span class="k">${T('Bonus-XP', '奖励 XP', 'Bónusz XP')}</span></div>`;
+          <div class="stat"><span class="v">${fmt.hours(xp.minutes)}</span><span class="k">${T('Uren gewerkt', '工作小时', 'Ledolgozott órák', 'Heures travaillées')}</span></div>
+          <div class="stat"><span class="v">${xp.entries}</span><span class="k">${T('Keer gewerkt', '上班次数', 'Ennyiszer dolgoztál', 'Fois travaillé')}</span></div>
+          <div class="stat"><span class="v">${xp.entries ? Math.round(xp.on_time / xp.entries * 100) + '%' : '—'}</span><span class="k">${T('Op tijd begonnen', '准时开始', 'Időben kezdtél', 'Commencé à l’heure')}</span></div>` : `
+          <div class="stat good"><span class="v">+${per}</span><span class="k">${T('XP per dag', '每天 XP', 'XP naponta', 'XP par jour')}</span></div>
+          <div class="stat"><span class="v">${num(xp.daily || 0, 0)}</span><span class="k">${T('XP van de dagen', '每日 XP 合计', 'Napi XP összesen', 'XP des jours')}</span></div>
+          <div class="stat"><span class="v">${num(xp.bonus || 0, 0)}</span><span class="k">${T('Bonus-XP', '奖励 XP', 'Bónusz XP', 'XP bonus')}</span></div>`;
   el.innerHTML = `
-    <div class="view-head"><div><h1>${T('Mijn profiel', '我的资料', 'Profilom')}</h1><p>${T('Je avatar, je level, je gegevens en je contracten.', '你的头像、等级、个人信息和合同。', 'Az avatarod, a szinted, az adataid és a szerződéseid.')}</p></div></div>
+    <div class="view-head"><div><h1>${T('Mijn profiel', '我的资料', 'Profilom', 'Mon profil')}</h1><p>${T('Je avatar, je level, je gegevens en je contracten.', '你的头像、等级、个人信息和合同。', 'Az avatarod, a szinted, az adataid és a szerződéseid.', 'Ton avatar, ton niveau, tes données et tes contrats.')}</p></div></div>
     <section class="card profile-hero">
-      <button type="button" class="hero-pic" id="edit-avatar-pic" aria-label="${r.avatar ? T('Avatar aanpassen', '修改头像', 'Avatar szerkesztése') : T('Maak je avatar', '创建你的头像', 'Készítsd el az avatarodat')}">
-        ${r.avatar ? Avatar.render(r.avatar, { title: T('Je avatar', '你的头像', 'Az avatarod') }) : `<span class="hero-empty">${Avatar.render(Avatar.DEFAULT)}</span><span class="hero-make">${T('Maak je avatar', '创建你的头像', 'Készítsd el az avatarodat')}</span>`}</button>
+      <button type="button" class="hero-pic" id="edit-avatar-pic" aria-label="${r.avatar ? T('Avatar aanpassen', '修改头像', 'Avatar szerkesztése', 'Modifier l’avatar') : T('Maak je avatar', '创建你的头像', 'Készítsd el az avatarodat', 'Crée ton avatar')}">
+        ${r.avatar ? Avatar.render(r.avatar, { title: T('Je avatar', '你的头像', 'Az avatarod', 'Ton avatar') }) : `<span class="hero-empty">${Avatar.render(Avatar.DEFAULT)}</span><span class="hero-make">${T('Maak je avatar', '创建你的头像', 'Készítsd el az avatarodat', 'Crée ton avatar')}</span>`}</button>
       <div class="hero-main">
         <p class="section-label">${esc(S.me.name)}</p>
-        <h2 class="hero-level">${T('Level', '等级', 'Szint')} ${lvl} <span>· ${esc(levelTitle(lvl))}</span></h2>
-        <p class="mate-title">“${esc(funTitle({ id: S.me.id, title: r.title }))}”${r.title ? '' : ` <span class="muted small">${T('(gekozen door de app)', '（app 选的）', '(az app választotta)')}</span>`}</p>
+        <h2 class="hero-level">${T('Level', '等级', 'Szint', 'Niveau')} ${lvl} <span>· ${esc(levelTitle(lvl))}</span></h2>
+        <p class="mate-title">“${esc(funTitle({ id: S.me.id, title: r.title }))}”${r.title ? '' : ` <span class="muted small">${T('(gekozen door de app)', '（app 选的）', '(az app választotta)', '(choisi par l’app)')}</span>`}</p>
         ${xpBar(xp)}
-        ${xp.bonus && (canClock() || isManager()) ? `<p class="muted small">${T(`Waarvan ${num(xp.bonus, 0)} bonus-XP van je verantwoordelijke.`, `其中 ${num(xp.bonus, 0)} 是负责人给的奖励 XP。`, `Ebből ${num(xp.bonus, 0)} bónusz XP a vezetődtől.`)}</p>` : ''}
-        ${next.length ? `<p class="small">${T(`Op level ${lvl + 1} krijg je:`, `升到 ${lvl + 1} 级可以得到：`, `${lvl + 1}. szinten ezt kapod:`)} <strong>${next.map(esc).join(T(', ', '、', ', '))}</strong></p>` : ''}
+        ${xp.bonus && (canClock() || isManager()) ? `<p class="muted small">${T(`Waarvan ${num(xp.bonus, 0)} bonus-XP van je verantwoordelijke.`, `其中 ${num(xp.bonus, 0)} 是负责人给的奖励 XP。`, `Ebből ${num(xp.bonus, 0)} bónusz XP a vezetődtől.`, `Dont ${num(xp.bonus, 0)} XP bonus de ton responsable.`)}</p>` : ''}
+        ${next.length ? `<p class="small">${T(`Op level ${lvl + 1} krijg je:`, `升到 ${lvl + 1} 级可以得到：`, `${lvl + 1}. szinten ezt kapod:`, `Au niveau ${lvl + 1}, tu reçois :`)} <strong>${next.map(esc).join(T(', ', '、', ', ', ', '))}</strong></p>` : ''}
         <div class="stats stats-3">${stats}
         </div>
-        <div class="toolbar"><button class="primary" id="edit-avatar">${r.avatar ? T('Avatar aanpassen', '修改头像', 'Avatar szerkesztése') : T('Maak je avatar', '创建你的头像', 'Készítsd el az avatarodat')}</button>
-          <button id="pf-title">${T('Titel kiezen', '选择称号', 'Titulus választása')}</button><button id="pf-card">${T('Zo zien collega\'s je', '同事看到的你', 'Így látnak a kollégák')}</button></div>
-        <details class="xp-how"><summary>${T('Hoe verdien je XP?', '怎么获得 XP？', 'Hogyan szerzel XP-t?')}</summary>${xpHow(xp)}</details>
+        <div class="toolbar"><button class="primary" id="edit-avatar">${r.avatar ? T('Avatar aanpassen', '修改头像', 'Avatar szerkesztése', 'Modifier l’avatar') : T('Maak je avatar', '创建你的头像', 'Készítsd el az avatarodat', 'Crée ton avatar')}</button>
+          <button id="pf-title">${T('Titel kiezen', '选择称号', 'Titulus választása', 'Choisir un titre')}</button><button id="pf-card">${T('Zo zien collega\'s je', '同事看到的你', 'Így látnak a kollégák', 'Ce que tes collègues voient')}</button></div>
+        <details class="xp-how"><summary>${T('Hoe verdien je XP?', '怎么获得 XP？', 'Hogyan szerzel XP-t?', 'Comment gagner des XP ?')}</summary>${xpHow(xp)}</details>
       </div>
     </section>
-    <section class="card"><div class="card-head"><h2>${T('Beloningen', '奖励', 'Jutalmak')}</h2><span class="muted small">${T('Nieuwe dingen voor je avatar, per level', '每升一级，头像就有新东西', 'Új dolgok az avatarodhoz, szintenként')}</span></div>
+    <section class="card"><div class="card-head"><h2>${T('Beloningen', '奖励', 'Jutalmak', 'Récompenses')}</h2><span class="muted small">${T('Nieuwe dingen voor je avatar, per level', '每升一级，头像就有新东西', 'Új dolgok az avatarodhoz, szintenként', 'Nouveautés pour ton avatar, par niveau')}</span></div>
       <div class="rewards">${rewardTiles(r.avatar, lvl)}</div></section>
     <div class="grid-2">
-      <section class="card"><h2>${T('Mijn gegevens', '我的信息', 'Adataim')}</h2>
-        <p class="muted small" style="margin-top:6px">${T('Alleen jij en je verantwoordelijke zien dit. Ze zijn nodig voor je contract en je loonfiche.', '只有你和负责人能看到。合同和工资单需要这些信息。', 'Csak te és a vezetőd látjátok. A szerződésedhez és a bérjegyzékedhez kellenek.')}</p>
+      <section class="card"><h2>${T('Mijn gegevens', '我的信息', 'Adataim', 'Mes données')}</h2>
+        <p class="muted small" style="margin-top:6px">${T('Alleen jij en je verantwoordelijke zien dit. Ze zijn nodig voor je contract en je loonfiche.', '只有你和负责人能看到。合同和工资单需要这些信息。', 'Csak te és a vezetőd látjátok. A szerződésedhez és a bérjegyzékedhez kellenek.', 'Seuls toi et ton responsable voyez ceci. Elles sont nécessaires pour ton contrat et ta fiche de paie.')}</p>
         <form id="pf-form" novalidate><div class="form-grid" style="margin-top:12px">${profileFields('pf', r.profile)}</div>
-          <p class="form-error" id="pf-err"></p><div class="form-actions"><button type="submit" class="primary">${T('Gegevens opslaan', '保存信息', 'Adatok mentése')}</button></div></form>
+          <p class="form-error" id="pf-err"></p><div class="form-actions"><button type="submit" class="primary">${T('Gegevens opslaan', '保存信息', 'Adatok mentése', 'Enregistrer les données')}</button></div></form>
       </section>
       <div class="stack">
         ${staffLang ? langCard() : ''}
-        <section class="card"><h2>${T('Werk', '工作', 'Munka')}</h2>
+        <section class="card"><h2>${T('Werk', '工作', 'Munka', 'Travail')}</h2>
           <dl class="kv">
-            <dt>${T('Rol', '角色', 'Szerep')}</dt><dd>${w.role === 'manager' ? 'Verantwoordelijke' : w.role === 'driver' ? 'Chauffeur' : T('Medewerker', '员工', 'Munkatárs')}</dd>
-            <dt>${T('Statuut', '身份', 'Jogviszony')}</dt><dd>${w.contract_type ? T(CONTRACTS[w.contract_type], CONTRACTS_ZH[w.contract_type], CONTRACTS_HU[w.contract_type]) : '—'}</dd>
-            <dt>${T('Uurloon', '时薪', 'Órabér')}</dt><dd>${w.hourly_rate != null ? fmt.money(w.hourly_rate) : '—'}</dd>
-            <dt>${T('In dienst sinds', '入职日期', 'Belépés dátuma')}</dt><dd>${w.start_date ? fmtDate(w.start_date) : '—'}</dd>
-            <dt>${T('Werknemersnummer', '员工编号', 'Munkavállalói szám')}</dt><dd>${w.payroll_id ? esc(w.payroll_id) : '—'}</dd>
-            ${w.role === 'staff' ? `<dt>${T('Inklokken', '打卡', 'Becsekkolás')}</dt><dd>${w.can_clock ? T('Ja, bij Klok', '是，在“打卡”页', 'Igen, az Óra fülön') : T('Nee, je krijgt XP per dag', '不用，每天自动得 XP', 'Nem, naponta kapsz XP-t')}</dd>` : ''}
+            <dt>${T('Rol', '角色', 'Szerep', 'Rôle')}</dt><dd>${w.role === 'manager' ? 'Verantwoordelijke' : w.role === 'driver' ? 'Chauffeur' : T('Medewerker', '员工', 'Munkatárs', 'Employé')}</dd>
+            <dt>${T('Statuut', '身份', 'Jogviszony', 'Statut')}</dt><dd>${w.contract_type ? T(CONTRACTS[w.contract_type], CONTRACTS_ZH[w.contract_type], CONTRACTS_HU[w.contract_type], CONTRACTS[w.contract_type]) : '—'}</dd>
+            <dt>${T('Uurloon', '时薪', 'Órabér', 'Salaire horaire')}</dt><dd>${w.hourly_rate != null ? fmt.money(w.hourly_rate) : '—'}</dd>
+            <dt>${T('In dienst sinds', '入职日期', 'Belépés dátuma', 'En service depuis')}</dt><dd>${w.start_date ? fmtDate(w.start_date) : '—'}</dd>
+            <dt>${T('Werknemersnummer', '员工编号', 'Munkavállalói szám', 'Numéro d’employé')}</dt><dd>${w.payroll_id ? esc(w.payroll_id) : '—'}</dd>
+            ${w.role === 'staff' ? `<dt>${T('Inklokken', '打卡', 'Becsekkolás', 'Pointage')}</dt><dd>${w.can_clock ? T('Ja, bij Klok', '是，在“打卡”页', 'Igen, az Óra fülön', 'Oui, via Pointage') : T('Nee, je krijgt XP per dag', '不用，每天自动得 XP', 'Nem, naponta kapsz XP-t', 'Non, tu reçois des XP par jour')}</dd>` : ''}
           </dl>
-          <p class="muted small" style="margin-top:10px">${T('Klopt hier iets niet? Vraag het aan je verantwoordelijke.', '有不对的地方？请问负责人。', 'Valami nem stimmel? Kérdezd meg a vezetődet.')}</p></section>
-        <section class="card"><h2>${T('Contracten', '合同', 'Szerződések')}</h2>${contractRows(r.contracts, false)}</section>
-        <section class="card"><h2>${T('Pincode wijzigen', '修改密码', 'PIN-kód módosítása')}</h2>
+          <p class="muted small" style="margin-top:10px">${T('Klopt hier iets niet? Vraag het aan je verantwoordelijke.', '有不对的地方？请问负责人。', 'Valami nem stimmel? Kérdezd meg a vezetődet.', 'Quelque chose ne va pas ? Demande à ton responsable.')}</p></section>
+        <section class="card"><h2>${T('Contracten', '合同', 'Szerződések', 'Contrats')}</h2>${contractRows(r.contracts, false)}</section>
+        <section class="card"><h2>${T('Pincode wijzigen', '修改密码', 'PIN-kód módosítása', 'Changer le code PIN')}</h2>
           <form id="pin-form" novalidate><div class="form-grid" style="margin-top:12px">
-            <div class="field"><label for="pin-old">${T('Huidige pincode', '当前密码', 'Jelenlegi PIN-kód')}</label><input id="pin-old" class="pin-input" type="password" inputmode="numeric" pattern="[0-9]*" maxlength="8" autocomplete="current-password"></div>
-            <div class="field"><label for="pin-new">${T('Nieuwe pincode', '新密码', 'Új PIN-kód')}</label><input id="pin-new" class="pin-input" type="password" inputmode="numeric" pattern="[0-9]*" maxlength="8" autocomplete="new-password"></div>
-            <div class="field"><label for="pin-new2">${T('Herhaal de nieuwe', '再输一次新密码', 'Új PIN-kód még egyszer')}</label><input id="pin-new2" class="pin-input" type="password" inputmode="numeric" pattern="[0-9]*" maxlength="8" autocomplete="new-password"></div>
-          </div><p class="form-error" id="pin-err"></p><div class="form-actions"><button type="submit" class="primary">${T('Pincode wijzigen', '修改密码', 'PIN-kód módosítása')}</button></div></form>
+            <div class="field"><label for="pin-old">${T('Huidige pincode', '当前密码', 'Jelenlegi PIN-kód', 'Code PIN actuel')}</label><input id="pin-old" class="pin-input" type="password" inputmode="numeric" pattern="[0-9]*" maxlength="8" autocomplete="current-password"></div>
+            <div class="field"><label for="pin-new">${T('Nieuwe pincode', '新密码', 'Új PIN-kód', 'Nouveau code PIN')}</label><input id="pin-new" class="pin-input" type="password" inputmode="numeric" pattern="[0-9]*" maxlength="8" autocomplete="new-password"></div>
+            <div class="field"><label for="pin-new2">${T('Herhaal de nieuwe', '再输一次新密码', 'Új PIN-kód még egyszer', 'Répète le nouveau')}</label><input id="pin-new2" class="pin-input" type="password" inputmode="numeric" pattern="[0-9]*" maxlength="8" autocomplete="new-password"></div>
+          </div><p class="form-error" id="pin-err"></p><div class="form-actions"><button type="submit" class="primary">${T('Pincode wijzigen', '修改密码', 'PIN-kód módosítása', 'Changer le code PIN')}</button></div></form>
         </section>
-        ${S.me.picks || takesQuiz() ? `<section class="card"><h2>${T('Herinneringen', '提醒', 'Emlékeztetők')}</h2>
-          ${S.me.picks ? `<label class="check" style="margin-top:12px"><input type="checkbox" id="pf-remind" ${store.get(REMIND_OFF) ? '' : 'checked'}> ${T('Herinner me aan open shiften', '提醒我还有空班次', 'Emlékeztess a szabad műszakokra')}</label>
-          <p class="muted small" style="margin-top:6px">${T('Als je de app opent: meteen als iemand een shift teruggeeft, en één keer per dag als er nog shiften open staan.', '打开 app 时：有人退回班次时马上提醒；还有空班次时每天提醒一次。', 'Amikor megnyitod az appot: azonnal, ha valaki visszaad egy műszakot, és naponta egyszer, ha még vannak szabad műszakok.')}</p>` : ''}
-          ${takesQuiz() ? `<label class="check" style="margin-top:12px"><input type="checkbox" id="pf-qremind" ${store.get(QUIZ_REMIND_OFF) ? '' : 'checked'}> ${T('Herinner me aan de quiz van de week', '提醒我做每周测验', 'Emlékeztess a hét kvízére')}</label>
-          <p class="muted small" style="margin-top:6px">${T('Eén keer per dag als je de app opent, tot je de quiz gedaan hebt.', '打开 app 时每天提醒一次，直到你做完测验。', 'Naponta egyszer, amikor megnyitod az appot, amíg ki nem töltöd a kvízt.')}</p>` : ''}
-          <p class="muted small" style="margin-top:10px">${T('Alleen op dit toestel.', '只在这台设备上。', 'Csak ezen az eszközön.')}</p>
+        ${S.me.picks || takesQuiz() ? `<section class="card"><h2>${T('Herinneringen', '提醒', 'Emlékeztetők', 'Rappels')}</h2>
+          ${S.me.picks ? `<label class="check" style="margin-top:12px"><input type="checkbox" id="pf-remind" ${store.get(REMIND_OFF) ? '' : 'checked'}> ${T('Herinner me aan open shiften', '提醒我还有空班次', 'Emlékeztess a szabad műszakokra', 'Me rappeler les services libres')}</label>
+          <p class="muted small" style="margin-top:6px">${T('Als je de app opent: meteen als iemand een shift teruggeeft, en één keer per dag als er nog shiften open staan.', '打开 app 时：有人退回班次时马上提醒；还有空班次时每天提醒一次。', 'Amikor megnyitod az appot: azonnal, ha valaki visszaad egy műszakot, és naponta egyszer, ha még vannak szabad műszakok.', 'Quand tu ouvres l’app : dès que quelqu’un rend un service, et une fois par jour s’il reste des services libres.')}</p>` : ''}
+          ${takesQuiz() ? `<label class="check" style="margin-top:12px"><input type="checkbox" id="pf-qremind" ${store.get(QUIZ_REMIND_OFF) ? '' : 'checked'}> ${T('Herinner me aan de quiz van de week', '提醒我做每周测验', 'Emlékeztess a hét kvízére', 'Me rappeler le quiz de la semaine')}</label>
+          <p class="muted small" style="margin-top:6px">${T('Eén keer per dag als je de app opent, tot je de quiz gedaan hebt.', '打开 app 时每天提醒一次，直到你做完测验。', 'Naponta egyszer, amikor megnyitod az appot, amíg ki nem töltöd a kvízt.', 'Une fois par jour quand tu ouvres l’app, jusqu’à ce que tu aies fait le quiz.')}</p>` : ''}
+          <p class="muted small" style="margin-top:10px">${T('Alleen op dit toestel.', '只在这台设备上。', 'Csak ezen az eszközön.', 'Uniquement sur cet appareil.')}</p>
         </section>` : ''}
-        <section class="card"><h2>${T('Weergave', '显示', 'Megjelenés')}</h2>
-          <p class="muted small" style="margin-top:6px">${T('Alleen op dit toestel.', '只在这台设备上。', 'Csak ezen az eszközön.')}</p>
-          <div class="chips" role="group" aria-label="${T('Thema', '主题', 'Téma')}" style="margin-top:12px">${THEMES.map(([k, nl, zh, hu]) => `<button type="button" class="chip" data-theme-pick="${k}">${T(nl, zh, hu)}</button>`).join('')}</div>
+        <section class="card"><h2>${T('Weergave', '显示', 'Megjelenés', 'Affichage')}</h2>
+          <p class="muted small" style="margin-top:6px">${T('Alleen op dit toestel.', '只在这台设备上。', 'Csak ezen az eszközön.', 'Uniquement sur cet appareil.')}</p>
+          <div class="chips" role="group" aria-label="${T('Thema', '主题', 'Téma', 'Thème')}" style="margin-top:12px">${THEMES.map(([k, nl, zh, hu]) => `<button type="button" class="chip" data-theme-pick="${k}">${T(nl, zh, hu)}</button>`).join('')}</div>
         </section>
         ${installButton('pf-install', 'signout-wide install-wide')}
-        <button type="button" class="signout-wide" id="pf-signout">${ICONS.signout}<span>${T('Afmelden', '退出登录', 'Kilépés')}</span></button>
+        <button type="button" class="signout-wide" id="pf-signout">${ICONS.signout}<span>${T('Afmelden', '退出登录', 'Kilépés', 'Se déconnecter')}</span></button>
       </div>
     </div>`;
   $('#edit-avatar', el).addEventListener('click', () => openAvatarEditor());
@@ -4120,12 +4162,12 @@ async function viewProfile(el, current) {
   const rem = $('#pf-remind', el);
   if (rem) rem.addEventListener('change', () => {
     store.set(REMIND_OFF, rem.checked ? null : '1');
-    toast(rem.checked ? T('Je krijgt weer herinneringen voor open shiften.', '会再提醒你空班次。', 'Újra kapsz emlékeztetőt a szabad műszakokról.') : T('Geen herinneringen meer op dit toestel.', '这台设备不再提醒。', 'Nincs több emlékeztető ezen az eszközön.'));
+    toast(rem.checked ? T('Je krijgt weer herinneringen voor open shiften.', '会再提醒你空班次。', 'Újra kapsz emlékeztetőt a szabad műszakokról.', 'Tu recevras à nouveau des rappels pour les services libres.') : T('Geen herinneringen meer op dit toestel.', '这台设备不再提醒。', 'Nincs több emlékeztető ezen az eszközön.', 'Plus de rappels sur cet appareil.'));
   });
   const qrem = $('#pf-qremind', el);
   if (qrem) qrem.addEventListener('change', () => {
     store.set(QUIZ_REMIND_OFF, qrem.checked ? null : '1');
-    toast(qrem.checked ? T('Je krijgt weer een herinnering voor de quiz.', '会再提醒你做测验。', 'Újra kapsz emlékeztetőt a kvízről.') : T('Geen quizherinneringen meer op dit toestel.', '这台设备不再提醒测验。', 'Nincs több kvíz-emlékeztető ezen az eszközön.'));
+    toast(qrem.checked ? T('Je krijgt weer een herinnering voor de quiz.', '会再提醒你做测验。', 'Újra kapsz emlékeztetőt a kvízről.', 'Tu recevras à nouveau un rappel pour le quiz.') : T('Geen quizherinneringen meer op dit toestel.', '这台设备不再提醒测验。', 'Nincs több kvíz-emlékeztető ezen az eszközön.', 'Plus de rappels de quiz sur cet appareil.'));
   });
   $$('[data-theme-pick]', el).forEach(b => b.addEventListener('click', () => setTheme(b.dataset.themePick)));
   applyTheme();
@@ -4139,7 +4181,7 @@ async function viewProfile(el, current) {
     if (r2.error) { err.textContent = r2.error; r2.field.focus(); return; }
     await busy($('button[type=submit]', pf), async () => {
       await rpc('save_my_profile', { p_profile: r2.values });
-      toast(T('Je gegevens zijn opgeslagen.', '信息已保存。', 'Az adataid elmentve.'));
+      toast(T('Je gegevens zijn opgeslagen.', '信息已保存。', 'Az adataid elmentve.', 'Tes données sont enregistrées.'));
       renderView();
     }).catch(e => { err.textContent = e.message; });
   });
@@ -4148,13 +4190,13 @@ async function viewProfile(el, current) {
     ev.preventDefault();
     const err = $('#pin-err', el); err.textContent = '';
     const old = $('#pin-old', pin).value.trim(), nw = $('#pin-new', pin).value.trim();
-    if (!old) { err.textContent = T('Vul je huidige pincode in.', '请输入当前密码。', 'Add meg a jelenlegi PIN-kódodat.'); return; }
-    if (!/^\d{4,8}$/.test(nw)) { err.textContent = T('De nieuwe pincode moet 4 tot 8 cijfers hebben.', '新密码必须是 4 到 8 位数字。', 'Az új PIN-kód 4–8 számjegyből álljon.'); return; }
-    if (nw !== $('#pin-new2', pin).value.trim()) { err.textContent = T('De twee nieuwe pincodes zijn niet gelijk.', '两次输入的新密码不一样。', 'A két új PIN-kód nem egyezik.'); return; }
+    if (!old) { err.textContent = T('Vul je huidige pincode in.', '请输入当前密码。', 'Add meg a jelenlegi PIN-kódodat.', 'Entre ton code PIN actuel.'); return; }
+    if (!/^\d{4,8}$/.test(nw)) { err.textContent = T('De nieuwe pincode moet 4 tot 8 cijfers hebben.', '新密码必须是 4 到 8 位数字。', 'Az új PIN-kód 4–8 számjegyből álljon.', 'Le nouveau code PIN doit avoir 4 à 8 chiffres.'); return; }
+    if (nw !== $('#pin-new2', pin).value.trim()) { err.textContent = T('De twee nieuwe pincodes zijn niet gelijk.', '两次输入的新密码不一样。', 'A két új PIN-kód nem egyezik.', 'Les deux nouveaux codes PIN ne correspondent pas.'); return; }
     await busy($('button[type=submit]', pin), async () => {
       await rpc('change_my_pin', { p_old: old, p_new: nw });
       pin.reset();
-      toast(T('Je pincode is gewijzigd. Andere toestellen zijn afgemeld.', '密码已修改。其他设备已退出登录。', 'A PIN-kódod megváltozott. A többi eszközön kijelentkeztél.'));
+      toast(T('Je pincode is gewijzigd. Andere toestellen zijn afgemeld.', '密码已修改。其他设备已退出登录。', 'A PIN-kódod megváltozott. A többi eszközön kijelentkeztél.', 'Ton code PIN a été changé. Les autres appareils ont été déconnectés.'));
     }).catch(e => { err.textContent = e.message; });
   });
 }
@@ -4174,9 +4216,9 @@ function rushButton() {
   return `<button type="button" class="rank-game" data-go="rush">
       <span class="remind-icon" aria-hidden="true">${ICONS.rush}</span>
       <span class="rank-quiz-text"><strong>Chen's Garden Rush</strong><span>${best
-        ? T(`Jouw beste score: ${best.toLocaleString(loc())}. Kan het beter?`, `你的最高分：${best.toLocaleString(loc())}。还能更高吗？`, `A legjobb pontszámod: ${best.toLocaleString(loc())}. Megy ez jobban is?`)
-        : T('Ren door het restaurant, weg van de chef!', '在餐厅里奔跑，别被大厨抓住！', 'Fuss végig az éttermen, el a séf elől!')}</span></span>
-      <span class="pill accent">${T('Spelen', '开始', 'Játék')}</span></button>`;
+        ? T(`Jouw beste score: ${best.toLocaleString(loc())}. Kan het beter?`, `你的最高分：${best.toLocaleString(loc())}。还能更高吗？`, `A legjobb pontszámod: ${best.toLocaleString(loc())}. Megy ez jobban is?`, `Ton meilleur score : ${best.toLocaleString(loc())}. Tu peux faire mieux ?`)
+        : T('Ren door het restaurant, weg van de chef!', '在餐厅里奔跑，别被大厨抓住！', 'Fuss végig az éttermen, el a séf elől!', 'Cours à travers le restaurant, loin du chef !')}</span></span>
+      <span class="pill accent">${T('Spelen', '开始', 'Játék', 'Jouer')}</span></button>`;
 }
 async function openRush() {
   if (Rush.game || Rush.opening) return;
@@ -4207,7 +4249,7 @@ async function openRush() {
       onExit: done,
     });
   } catch (e) {
-    toast(T('Het spel kon niet starten. Probeer het later opnieuw.', '游戏无法启动，请稍后再试。', 'A játék nem tudott elindulni. Próbáld újra később.'), 'error');
+    toast(T('Het spel kon niet starten. Probeer het later opnieuw.', '游戏无法启动，请稍后再试。', 'A játék nem tudott elindulni. Próbáld újra később.', 'Le jeu n’a pas pu démarrer. Réessaie plus tard.'), 'error');
     done();
   } finally {
     Rush.opening = false;
@@ -4227,18 +4269,18 @@ function rankQuizButton(q) {
     sub = cur ? `${cur.people} van ${q.takers} deden mee` : 'Nog geen quiz voor deze week. Maak er een.';
   } else {
     const qz = q.current;
-    if (!qz) sub = T('Deze week is er nog geen quiz.', '本周还没有测验。', 'Ezen a héten még nincs kvíz.');
+    if (!qz) sub = T('Deze week is er nog geen quiz.', '本周还没有测验。', 'Ezen a héten még nincs kvíz.', 'Pas encore de quiz cette semaine.');
     else {
       const n = qz.questions.length, done = quizAnswered(qz), right = quizRight(qz);
       todo = done < n;
-      sub = done === n ? T(`${right} van ${n} juist · +${right * qz.xp} XP`, `答对 ${right}/${n} · +${right * qz.xp} XP`, `${right}/${n} helyes · +${right * qz.xp} XP`)
-        : done ? T(`${done} van ${n} beantwoord`, `已答 ${done}/${n} 题`, `${done}/${n} megválaszolva`) : T(`${plural(n, 'vraag', 'vragen')} · verdien tot ${n * qz.xp} XP`, `${n} 道题 · 最多 ${n * qz.xp} XP`, `${n} kérdés · akár ${n * qz.xp} XP`);
-      pill = done === n ? `<span class="pill on">✓</span>` : `<span class="pill accent">${done ? T('Verder', '继续', 'Tovább') : T('Start', '开始', 'Kezdőlap')}</span>`;
+      sub = done === n ? T(`${right} van ${n} juist · +${right * qz.xp} XP`, `答对 ${right}/${n} · +${right * qz.xp} XP`, `${right}/${n} helyes · +${right * qz.xp} XP`, `${right} sur ${n} correctes · +${right * qz.xp} XP`)
+        : done ? T(`${done} van ${n} beantwoord`, `已答 ${done}/${n} 题`, `${done}/${n} megválaszolva`, `${done} sur ${n} répondues`) : T(`${plural(n, 'vraag', 'vragen')} · verdien tot ${n * qz.xp} XP`, `${n} 道题 · 最多 ${n * qz.xp} XP`, `${n} kérdés · akár ${n * qz.xp} XP`, `${plural(n, 'question', 'questions')} · gagne jusqu’à ${n * qz.xp} XP`);
+      pill = done === n ? `<span class="pill on">✓</span>` : `<span class="pill accent">${done ? T('Verder', '继续', 'Tovább', 'Continuer') : T('Start', '开始', 'Kezdőlap', 'Commencer')}</span>`;
     }
   }
   return `<button type="button" class="rank-quiz${todo ? ' is-todo' : ''}" data-go="${go}">
       <span class="remind-icon" aria-hidden="true">${ICONS.quiz}</span>
-      <span class="rank-quiz-text"><strong>${T('Quiz van deze week', '本周测验', 'A hét kvíze')}</strong><span>${sub}</span></span>${pill}</button>`;
+      <span class="rank-quiz-text"><strong>${T('Quiz van deze week', '本周测验', 'A hét kvíze', 'Quiz de la semaine')}</strong><span>${sub}</span></span>${pill}</button>`;
 }
 
 async function viewRanking(el, current) {
@@ -4250,7 +4292,7 @@ async function viewRanking(el, current) {
   const quizMax = cur ? (isManager() ? cur.questions : cur.questions.length) * cur.xp : null;
   const mode = S.rankMode || 'all', key = mode === 'month' ? 'month_xp' : 'xp';
   const ranked = [...list].sort((a, b) => b[key] - a[key] || b.xp - a.xp || a.name.localeCompare(b.name, 'nl'));
-  const you = T('jij', '你', 'te');
+  const you = T('jij', '你', 'te', 'toi');
   let rank = 0, prev = null;
   ranked.forEach((p, i) => { if (p[key] !== prev) { rank = i + 1; prev = p[key]; } p.rank = rank; });
   const me = ranked.find(p => p.me), month = fmt.monthName(now());
@@ -4266,24 +4308,24 @@ async function viewRanking(el, current) {
     </div>` : '<div class="podium-spot is-empty"></div>';
   el.innerHTML = `
     <div class="view-head">
-      <div><h1>${T('Ranglijst', '排行榜', 'Ranglista')}</h1><p>${T(`Wie van het team heeft het hoogste level? XP verdien je met werken: 10 per uur, +5 als je op tijd begint en +5 als je blijft tot het einde. Elke week kan je ook een quiz doen voor ${quizMax ? `${quizMax} XP` : 'extra XP'}. Tik op iemand om de kaart te zien.`,
-        `团队里谁的等级最高？工作就能得 XP：每小时 10，准时开始 +5，待到结束 +5。每周还可以做一次测验，${quizMax ? `最多得 ${quizMax} XP` : '多得 XP'}。点一个人可以看名片。`, `Ki a legmagasabb szintű a csapatban? XP-t munkával szerzel: óránként 10-et, +5-öt, ha időben kezdesz, és +5-öt, ha a végéig maradsz. Minden héten kitölthetsz egy kvízt is ${quizMax ? `${quizMax} XP-ért` : 'extra XP-ért'}. Koppints valakire, hogy lásd a kártyáját.`)}</p></div>
-      <div class="chips" role="group" aria-label="${T('Periode', '时间', 'Időszak')}">
-        <button type="button" class="chip${mode === 'all' ? ' is-on' : ''}" data-rank-mode="all" aria-pressed="${mode === 'all'}">${T('Altijd', '全部', 'Összesen')}</button>
-        <button type="button" class="chip${mode === 'month' ? ' is-on' : ''}" data-rank-mode="month" aria-pressed="${mode === 'month'}">${T('Deze maand', '本月', 'Ez a hónap')}</button>
+      <div><h1>${T('Ranglijst', '排行榜', 'Ranglista', 'Classement')}</h1><p>${T(`Wie van het team heeft het hoogste level? XP verdien je met werken: 10 per uur, +5 als je op tijd begint en +5 als je blijft tot het einde. Elke week kan je ook een quiz doen voor ${quizMax ? `${quizMax} XP` : 'extra XP'}. Tik op iemand om de kaart te zien.`,
+        `团队里谁的等级最高？工作就能得 XP：每小时 10，准时开始 +5，待到结束 +5。每周还可以做一次测验，${quizMax ? `最多得 ${quizMax} XP` : '多得 XP'}。点一个人可以看名片。`, `Ki a legmagasabb szintű a csapatban? XP-t munkával szerzel: óránként 10-et, +5-öt, ha időben kezdesz, és +5-öt, ha a végéig maradsz. Minden héten kitölthetsz egy kvízt is ${quizMax ? `${quizMax} XP-ért` : 'extra XP-ért'}. Koppints valakire, hogy lásd a kártyáját.`, `Qui dans l’équipe a le niveau le plus élevé ? Tu gagnes des XP en travaillant : 10 par heure, +5 si tu commences à l’heure et +5 si tu restes jusqu’à la fin. Chaque semaine, tu peux aussi faire un quiz pour ${quizMax ? `${quizMax} XP` : 'des XP en plus'}. Touche quelqu’un pour voir sa carte.`)}</p></div>
+      <div class="chips" role="group" aria-label="${T('Periode', '时间', 'Időszak', 'Période')}">
+        <button type="button" class="chip${mode === 'all' ? ' is-on' : ''}" data-rank-mode="all" aria-pressed="${mode === 'all'}">${T('Altijd', '全部', 'Összesen', 'Toujours')}</button>
+        <button type="button" class="chip${mode === 'month' ? ' is-on' : ''}" data-rank-mode="month" aria-pressed="${mode === 'month'}">${T('Deze maand', '本月', 'Ez a hónap', 'Ce mois-ci')}</button>
       </div>
     </div>
     ${rankQuizButton(quiz)}
     ${rushButton()}
-    ${me ? `<p class="hint info">${T(`Jij staat <strong>${me.rank}e</strong> van ${ranked.length}${mode === 'month' ? ` in ${month}` : ''}, met ${me[key]} XP.`, `你${mode === 'month' ? `在${month}` : ''}排第 <strong>${me.rank}</strong>（共 ${ranked.length} 人），有 ${me[key]} XP。`, `${ranked.length} ember közül <strong>${me.rank}.</strong> vagy${mode === 'month' ? ` ${month} hónapban` : ''}, ${me[key]} XP-vel.`)}${above && above[key] > me[key] ? T(` Nog ${above[key] - me[key] + 1} XP om ${esc(above.name)} in te halen.`, `再得 ${above[key] - me[key] + 1} XP 就能超过 ${esc(above.name)}。`, ` Még ${above[key] - me[key] + 1} XP kell, hogy megelőzd őt: ${esc(above.name)}.`) : ''}</p>` : ''}
-    ${anyXp ? `<section class="card podium" aria-label="${T('Top drie', '前三名', 'Első három')}">${spot(ranked[1], 2)}${spot(ranked[0], 1)}${spot(ranked[2], 3)}</section>`
-      : `<p class="empty">${mode === 'month' ? T(`Nog niemand heeft XP in ${month}. Wie als eerste werkt, staat bovenaan.`, `${month}还没有人有 XP。先上班的人排第一。`, `${month} hónapban még senkinek nincs XP-je. Aki elsőként dolgozik, az lesz az élen.`) : T('Nog niemand heeft XP. Wie als eerste werkt, staat bovenaan.', '还没有人有 XP。先上班的人排第一。', 'Még senkinek nincs XP-je. Aki elsőként dolgozik, az lesz az élen.')}</p>`}
+    ${me ? `<p class="hint info">${T(`Jij staat <strong>${me.rank}e</strong> van ${ranked.length}${mode === 'month' ? ` in ${month}` : ''}, met ${me[key]} XP.`, `你${mode === 'month' ? `在${month}` : ''}排第 <strong>${me.rank}</strong>（共 ${ranked.length} 人），有 ${me[key]} XP。`, `${ranked.length} ember közül <strong>${me.rank}.</strong> vagy${mode === 'month' ? ` ${month} hónapban` : ''}, ${me[key]} XP-vel.`, `Tu es <strong>${me.rank}e</strong> sur ${ranked.length}${mode === 'month' ? ` en ${month}` : ''}, avec ${me[key]} XP.`)}${above && above[key] > me[key] ? T(` Nog ${above[key] - me[key] + 1} XP om ${esc(above.name)} in te halen.`, `再得 ${above[key] - me[key] + 1} XP 就能超过 ${esc(above.name)}。`, ` Még ${above[key] - me[key] + 1} XP kell, hogy megelőzd őt: ${esc(above.name)}.`, ` Encore ${above[key] - me[key] + 1} XP pour dépasser ${esc(above.name)}.`) : ''}</p>` : ''}
+    ${anyXp ? `<section class="card podium" aria-label="${T('Top drie', '前三名', 'Első három', 'Top trois')}">${spot(ranked[1], 2)}${spot(ranked[0], 1)}${spot(ranked[2], 3)}</section>`
+      : `<p class="empty">${mode === 'month' ? T(`Nog niemand heeft XP in ${month}. Wie als eerste werkt, staat bovenaan.`, `${month}还没有人有 XP。先上班的人排第一。`, `${month} hónapban még senkinek nincs XP-je. Aki elsőként dolgozik, az lesz az élen.`, `Personne n’a encore d’XP en ${month}. Le premier à travailler sera en tête.`) : T('Nog niemand heeft XP. Wie als eerste werkt, staat bovenaan.', '还没有人有 XP。先上班的人排第一。', 'Még senkinek nincs XP-je. Aki elsőként dolgozik, az lesz az élen.', 'Personne n’a encore d’XP. Le premier à travailler sera en tête.')}</p>`}
     <section class="card">
-      <div class="card-head"><h2>${mode === 'month' ? T(`XP in ${month}`, `${month}的 XP`, `XP (${month})`) : T('Iedereen', '所有人', 'Mindenki')}</h2><span class="muted small">${T(plural(ranked.length, 'persoon', 'personen'), `${ranked.length} 人`, `${ranked.length} fő`)}</span></div>
+      <div class="card-head"><h2>${mode === 'month' ? T(`XP in ${month}`, `${month}的 XP`, `XP (${month})`, `XP en ${month}`) : T('Iedereen', '所有人', 'Mindenki', 'Tout le monde')}</h2><span class="muted small">${T(plural(ranked.length, 'persoon', 'personen'), `${ranked.length} 人`, `${ranked.length} fő`, plural(ranked.length, 'personne', 'personnes'))}</span></div>
       <div class="rows rank-rows">${ranked.map(p => `
         <div class="row rank-row${p.me ? ' mine' : ''}" data-mate="${p.id}" role="button" tabindex="0">
           <div class="person"><span class="rank-num">${p.rank}</span>${personPic(p, 'lg')}
-            <div class="row-main"><span class="row-title">${esc(p.name)}${p.me ? ` <span class="pill accent">${you}</span>` : ''}${p.family ? ` <span class="pill">${T('Familie', '家人', 'Család')}</span>` : ''}</span>
+            <div class="row-main"><span class="row-title">${esc(p.name)}${p.me ? ` <span class="pill accent">${you}</span>` : ''}${p.family ? ` <span class="pill">${T('Familie', '家人', 'Család', 'Famille')}</span>` : ''}</span>
               <span class="row-sub">${levelPill(p)} <span class="rank-fun">“${esc(funTitle(p))}”</span></span></div></div>
           <span class="rank-xp mono">${p[key]} XP</span>
         </div>`).join('')}</div>
@@ -4532,9 +4574,9 @@ function routeTimeline(a) {
 // A machine visit from MATO Info: what went in and out, and how.
 function visitWhat(v) {
   const parts = [];
-  if (v.added) parts.push(`${v.added} ${v.added === 1 ? 'stuk' : 'stuks'} erin`);
-  if (v.removed) parts.push(`${v.removed} eruit`);
-  return parts.join(' · ') || 'nagekeken';
+  if (v.added) parts.push(F(`${v.added} ${v.added === 1 ? 'stuk' : 'stuks'} erin`, `${v.added} ${v.added === 1 ? 'pièce ajoutée' : 'pièces ajoutées'}`));
+  if (v.removed) parts.push(F(`${v.removed} eruit`, `${v.removed} retirée${v.removed === 1 ? '' : 's'}`));
+  return parts.join(' · ') || F('nagekeken', 'contrôlé');
 }
 const visitHow = v => v.round_no != null ? `ronde ${v.round_no}${v.round_done ? '' : ', nog bezig'}` : v.via_adjust ? 'via Voorraad aanpassen' : 'bijgevuld';
 const visitSpan = v => new Date(v.last_at) - new Date(v.first_at) >= 120000 ? ` · ${fmt.time(v.first_at)} – ${fmt.time(v.last_at)}` : '';
@@ -5382,7 +5424,7 @@ async function viewMember(el, current) {
               value="${esc(p.fun_title ? (TITLE_BY[p.fun_title] ? TITLE_BY[p.fun_title][1] : p.fun_title) : '')}" placeholder="${esc(funTitle({ id: p.id }))} (gekozen door de app)">
               <datalist id="pm-titles">${TITLES.map(t => `<option value="${esc(t[1])}">`).join('')}</datalist>
               <span class="help">Kies er een of typ je eigen titel. Collega's zien hem op ${esc(first)}'s kaart.</span></div>`}
-            <div class="field"><label for="pm-lang">Taal van de app</label><select id="pm-lang">${[['', 'Zoals de telefoon'], ['nl', 'Nederlands'], ['zh', '中文 (Chinees)'], ['hu', 'Magyar (Hongaars)']].map(([k, l]) =>
+            <div class="field"><label for="pm-lang">Taal van de app</label><select id="pm-lang">${[['', 'Zoals de telefoon'], ['nl', 'Nederlands'], ['zh', '中文 (Chinees)'], ['hu', 'Magyar (Hongaars)'], ['fr', 'Français (Frans)']].map(([k, l]) =>
               `<option value="${k}" ${(p.lang || '') === k ? 'selected' : ''}>${l}</option>`).join('')}</select>
               <span class="help">Wat ${esc(first)} ziet: klok, shiften, uren, profiel. Jouw schermen blijven Nederlands.</span></div>
             <div class="field"><label for="pm-bonus">Bonus-XP</label><input id="pm-bonus" type="number" min="0" max="100000" step="1" inputmode="numeric" value="${p.xp_bonus || 0}">
@@ -5474,7 +5516,7 @@ async function viewMember(el, current) {
       <h2 id="modal-title">Uitleg tonen aan ${esc(first)}?</h2>
       <p>De volgende keer dat ${esc(first)} Prikklok op de gsm opent, krijgt ${esc(first)} uitleg hoe je de app op het beginscherm zet, zoals een gewone app. Staat de app er al op, dan gebeurt er niets.</p>
       <div class="field"><label for="si-lang">Taal van de uitleg</label><select id="si-lang">
-        <option value="">Taal van de app (${esc(({ nl: 'Nederlands', zh: '中文', hu: 'Magyar' })[p.lang] || 'Nederlands')})</option>
+        <option value="">Taal van de app (${esc(({ nl: 'Nederlands', zh: '中文', hu: 'Magyar', fr: 'Français' })[p.lang] || 'Nederlands')})</option>
         <option value="fr" ${p.install_lang === 'fr' ? 'selected' : ''}>Français</option></select></div>
       <p class="form-error" id="si-err"></p>
       <div class="form-actions"><button type="button" data-close>Annuleren</button><button type="button" class="primary" id="si-go">Tonen</button></div>`, d => {

@@ -92,7 +92,7 @@ create table public.staff (
   -- a family account shown in the ranking too, with its avatar and level
   in_ranking      boolean not null default false,
   -- the app's language for this person: Dutch, Chinese or Hungarian; empty = what the phone chose
-  language        text check (language in ('nl', 'zh', 'hu'))
+  language        text check (language in ('nl', 'zh', 'hu', 'fr'))
 );
 create unique index staff_name_key on public.staff (lower(name));
 
@@ -487,7 +487,7 @@ $$;
 
 -- "Zet Prikklok op je telefoon" for one person: the guide opens the next time
 -- they open the app on a phone (staff.show_install), until it is seen there.
-create function public.mgr_show_install(p_token text, p_staff_id uuid, p_on boolean, p_lang text default null) returns json
+create function public.mgr_show_install(p_token text, p_staff_id uuid, p_on boolean, p_lang text) returns json
 language plpgsql security definer set search_path = public, extensions as $$
 declare v public.staff;
 begin
@@ -2141,7 +2141,7 @@ language plpgsql security definer set search_path = public, extensions as $$
 declare v public.staff;
 begin
   v := app_private.current_account(p_token);
-  if p_lang is not null and p_lang not in ('nl', 'zh', 'hu') then
+  if p_lang is not null and p_lang not in ('nl', 'zh', 'hu', 'fr') then
     raise exception using message = 'Pick a language.', errcode = 'P0001';
   end if;
   update public.staff set language = p_lang where id = v.id;
@@ -2153,7 +2153,7 @@ language plpgsql security definer set search_path = public, extensions as $$
 declare v public.staff;
 begin
   v := app_private.current_manager(p_token);
-  if p_lang is not null and p_lang not in ('nl', 'zh', 'hu') then
+  if p_lang is not null and p_lang not in ('nl', 'zh', 'hu', 'fr') then
     raise exception using message = 'Pick a language.', errcode = 'P0001';
   end if;
   update public.staff set language = p_lang where id = p_id;

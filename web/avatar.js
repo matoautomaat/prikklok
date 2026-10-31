@@ -104,13 +104,37 @@ const Avatar = (() => {
     earrings: { none: 'Nincs', studs: 'Fülbevaló', hoops: 'Karika', stack: 'Több fülbevaló' },
     piercing: { none: 'Nincs', nose: 'Orr', septum: 'Szeptum', clownnose: 'Bohócorr' },
   };
+  const FR = {
+    body: { female: 'Femme', male: 'Homme' },
+    hair: { long: 'Longs', bangs: 'Longs, avec frange', wavy: 'Ondulés', longcurly: 'Longs bouclés', lob: 'Mi-longs', shag: 'Dégradés',
+      bob: 'Carré', pixie: 'Pixie', halfup: 'Demi-attachés', bun: 'Chignon', spacebuns: 'Deux chignons', ponytail: 'Queue de cheval', highpony: 'Queue de cheval haute',
+      pigtails: 'Couettes', braids: 'Tresses', sidebraid: 'Tresse sur le côté', locs: 'Locks', cornrows: 'Nattes collées', curly: 'Bouclés', afro: 'Afro',
+      short: 'Courts', sidepart: 'Raie sur le côté', slickback: 'Plaqués en arrière', quiff: 'Banane', spiky: 'En pointes', curtains: 'Raie au milieu',
+      curlytop: 'Bouclés sur le dessus', mullet: 'Mulet', mohawk: 'Crête', fade: 'Dégradé', manbun: 'Chignon homme', buzz: 'Très courts', none: 'Chauve' },
+    eyes: { round: 'Ronds', almond: 'En amande', side: 'Regard de côté', happy: 'Rieurs' },
+    brows: { soft: 'Doux', arched: 'Arqués', straight: 'Droits' },
+    mouth: { smile: 'Sourire', grin: 'Rire', neutral: 'Neutre', pout: 'Moue', smirk: 'Sourire en coin' },
+    beard: { none: 'Aucune', stubble: 'Barbe de trois jours', mustache: 'Moustache', beard: 'Barbe' },
+    top: { tee: 'T-shirt', vneck: 'Col en V', tank: 'Débardeur', longsleeve: 'Manches longues', shirt: 'Chemise', sweater: 'Pull', hoodie: 'Sweat à capuche',
+      chef: 'Veste de chef', garden: "T-shirt Chen's Garden", clown: 'Costume de clown', tang: 'Costume Tang', qipao: 'Qipao' },
+    outer: { none: 'Aucune', jacket: 'Veste', cardigan: 'Cardigan', puffer: 'Doudoune sans manches', apron: 'Tablier', leather: 'Veste en cuir' },
+    bottom: { baggy: 'Jean large', straight: 'Jean droit', joggers: 'Jogging', skirt: 'Jupe', shorts: 'Short' },
+    shoes: { sneakers: 'Baskets', boots: 'Bottines', bunny: 'Pantoufles lapin', monster: 'Pantoufles monstre', dragon: 'Pantoufles dragon', gold: 'Baskets dorées' },
+    hat: { none: 'Aucun', beanie: 'Bonnet', headband: 'Bandeau', hijab: 'Foulard', cap: 'Casquette', bandana: 'Bandana', chef: 'Toque',
+      crown: 'Couronne', bucket: 'Bob', clown: 'Chapeau de clown', guapi: 'Calotte mandarin', hairpin: 'Épingle à fleur' },
+    glasses: { none: 'Aucune', round: 'Rondes', square: 'Carrées', sun: 'Lunettes de soleil', heart: 'Lunettes cœur' },
+    neck: { none: 'Rien', scarf: 'Écharpe', bowtie: 'Nœud papillon', headphones: 'Casque audio', chain: 'Chaîne en or' },
+    aura: { none: 'Aucune', gold: 'Aura dorée' },
+    earrings: { none: 'Aucune', studs: 'Puces', hoops: 'Créoles', stack: 'Plusieurs boucles' },
+    piercing: { none: 'Aucun', nose: 'Nez', septum: 'Septum', clownnose: 'Nez de clown' },
+  };
   // An item's name: label('top', 'clown', 'zh') -> '小丑服'.
   const label = (key, value, lang = 'nl') => {
     const nl = ((STYLES[key] || []).find(s => s[0] === value) || [])[1];
-    const own = { zh: ZH, hu: HU }[lang];
+    const own = { zh: ZH, hu: HU, fr: FR }[lang];
     return own ? (own[key] || {})[value] || nl : nl;
   };
-  const FANCY_HAIR = { nl: 'Fantasiekleuren voor je haar', zh: '彩色头发', hu: 'Színes haj' };
+  const FANCY_HAIR = { nl: 'Fantasiekleuren voor je haar', zh: '彩色头发', hu: 'Színes haj', fr: 'Couleurs fantaisie pour tes cheveux' };
   const COLORS = {
     skin: SKIN, hairColor: HAIR_COLORS, eyeColor: EYE_COLORS, topColor: CLOTH, outerColor: CLOTH,
     bottomColor: BOTTOM_COLORS, shoeColor: SHOE_COLORS, hatColor: CLOTH, neckColor: CLOTH,
