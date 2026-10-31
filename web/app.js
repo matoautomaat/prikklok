@@ -1045,7 +1045,16 @@ function installGuide({ auto = false } = {}) {
 }
 
 // After a page is drawn: the guide, once, on a phone that doesn't have the app yet.
+// A manager can ask for it again for someone (Team → person), whatever they said before.
 function maybeInstallGuide() {
+  if (S.me && S.me.show_install && (installed() || device.phone) && !S.installAsked && !S.installTimer && !$('#modal').open) {
+    S.me.show_install = false;
+    rpc('install_help_seen').catch(() => {});
+    if (installed()) return;
+    S.installAsked = true;
+    S.installTimer = setTimeout(() => { S.installTimer = null; if (!$('#modal').open) installGuide(); }, 1500);
+    return;
+  }
   if (!device.phone || installed() || S.installAsked || S.installTimer || !S.me || $('#modal').open) return;
   const v = store.get(INSTALL_KEY);
   if (v === 'done' || (v && Date.now() < Number(v))) return;
@@ -5347,7 +5356,7 @@ async function viewMember(el, current) {
       ${personPic(p, 'xl')}
       <div><button class="link back" id="back">‹ Team</button><h1>${esc(p.name)}</h1>
         <p class="lvl-line">${levelPill(xp)} <span>${esc(levelTitle(xp.level))}</span> <span class="muted">· ${ROLE_NL[p.role]}${p.active ? '' : ' · Inactief'}</span> ${payPill(p.pay_method)}${p.officient_id ? ' <span class="pill">Officient</span>' : ''}</p></div>
-    </div>${driver ? `<button class="sm" id="see-routes">${ICONS.route} Ritten bekijken</button>` : ''}</div>
+    </div><div class="toolbar">${driver ? `<button class="sm" id="see-routes">${ICONS.route} Ritten bekijken</button>` : ''}${self ? '' : `<button class="sm" id="send-install">${p.show_install ? 'Uitleg "op je gsm" wacht' : 'Uitleg "op je gsm" tonen'}</button>`}</div></div>
     ${p.locked ? '<p class="hint bad">Geblokkeerd na te veel verkeerde pincodes. Stel hieronder een nieuwe pincode in om te deblokkeren.</p>' : ''}
     <div class="grid-2">
       <section class="card">
@@ -5454,6 +5463,18 @@ async function viewMember(el, current) {
   $('#back', el).addEventListener('click', () => { location.hash = 'team'; });
   const seeRoutes = $('#see-routes', el);
   if (seeRoutes) seeRoutes.addEventListener('click', () => { location.hash = `routes/${p.id}`; });
+  const sendInstall = $('#send-install', el);
+  if (sendInstall) sendInstall.addEventListener('click', async () => {
+    const ok = await modal.confirm({ title: `Uitleg tonen aan ${first}?`,
+      body: `De volgende keer dat ${first} Prikklok op de gsm opent, krijgt ${first} uitleg hoe je de app op het beginscherm zet, zoals een gewone app. Staat de app er al op, dan gebeurt er niets.`,
+      ok: 'Tonen' });
+    if (!ok) return;
+    busy(sendInstall, async () => {
+      await rpc('mgr_show_install', { p_staff_id: p.id, p_on: true });
+      toast(`${first} krijgt de uitleg bij het openen van de app.`);
+      renderView();
+    }).catch(() => {});
+  });
   const matoForm = $('#mato-form', el);
   if (matoForm) matoForm.addEventListener('submit', ev => {
     ev.preventDefault();
