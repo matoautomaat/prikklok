@@ -965,63 +965,67 @@ const IK = {
   more: '<svg viewBox="0 0 24 24" fill="currentColor"><circle cx="5" cy="12" r="2"/><circle cx="12" cy="12" r="2"/><circle cx="19" cy="12" r="2"/></svg>',
   menu: '<svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round"><path d="M4 7h16M4 12h16M4 17h16"/></svg>',
 };
+// The guide alone also exists in French: a manager can send it in French (Team → person).
+let guideLang = null;
+const G = (nl, zh, hu, fr) => (guideLang === 'fr' ? fr : T(nl, zh, hu));
 const ikey = (icon, label = '') => `<span class="ikey">${icon}${label ? `<span>${label}</span>` : ''}</span>`;
 
 // The steps for one kind of phone.
 function installSteps(kind) {
   if (kind === 'ios') return [
     device.iosOther
-      ? T(`Tik rechts in de adresbalk op ${ikey(IK.share)} <strong>Deel</strong>.`, `点地址栏右边的 ${ikey(IK.share)} <strong>共享</strong>（Deel）。`, `Koppints a címsor jobb oldalán a ${ikey(IK.share)} <strong>Megosztás</strong> gombra.`)
-      : T(`Tik onderaan in Safari op ${ikey(IK.share)} <strong>Deel</strong>. Zie je die knop niet, tik dan eerst op ${ikey(IK.more)}.`,
-          `在 Safari 底部点 ${ikey(IK.share)} <strong>共享</strong>（Deel）。看不到这个按钮？先点 ${ikey(IK.more)}。`, `Koppints a Safari alján a ${ikey(IK.share)} <strong>Megosztás</strong> gombra. Ha nem látod, előbb koppints erre: ${ikey(IK.more)}.`),
-    T(`Scroll een beetje naar beneden en tik op ${ikey(IK.add, 'Zet op beginscherm')}.`, `往下滑一点，点 ${ikey(IK.add, '添加到主屏幕')}（Zet op beginscherm）。`, `Görgess kicsit lejjebb, és koppints erre: ${ikey(IK.add, 'Hozzáadás a Főképernyőhöz')}.`),
-    T('Tik rechtsboven op <strong>Voeg toe</strong>.', '点右上角的<strong>添加</strong>（Voeg toe）。', 'Koppints jobb fent a <strong>Hozzáadás</strong> gombra.'),
-    T('Open Prikklok vanaf je beginscherm en meld je daar nog één keer aan.', '从主屏幕打开 Prikklok，再登录一次。', 'Nyisd meg a Prikklokot a főképernyőről, és ott jelentkezz be még egyszer.'),
+      ? G(`Tik rechts in de adresbalk op ${ikey(IK.share)} <strong>Deel</strong>.`, `点地址栏右边的 ${ikey(IK.share)} <strong>共享</strong>（Deel）。`, `Koppints a címsor jobb oldalán a ${ikey(IK.share)} <strong>Megosztás</strong> gombra.`, `Touchez ${ikey(IK.share)} <strong>Partager</strong> à droite de la barre d'adresse.`)
+      : G(`Tik onderaan in Safari op ${ikey(IK.share)} <strong>Deel</strong>. Zie je die knop niet, tik dan eerst op ${ikey(IK.more)}.`,
+          `在 Safari 底部点 ${ikey(IK.share)} <strong>共享</strong>（Deel）。看不到这个按钮？先点 ${ikey(IK.more)}。`, `Koppints a Safari alján a ${ikey(IK.share)} <strong>Megosztás</strong> gombra. Ha nem látod, előbb koppints erre: ${ikey(IK.more)}.`, `Dans Safari, touchez ${ikey(IK.share)} <strong>Partager</strong> en bas. Vous ne voyez pas ce bouton ? Touchez d'abord ${ikey(IK.more)}.`),
+    G(`Scroll een beetje naar beneden en tik op ${ikey(IK.add, 'Zet op beginscherm')}.`, `往下滑一点，点 ${ikey(IK.add, '添加到主屏幕')}（Zet op beginscherm）。`, `Görgess kicsit lejjebb, és koppints erre: ${ikey(IK.add, 'Hozzáadás a Főképernyőhöz')}.`, `Faites défiler un peu vers le bas et touchez ${ikey(IK.add, "Sur l'écran d'accueil")}.`),
+    G('Tik rechtsboven op <strong>Voeg toe</strong>.', '点右上角的<strong>添加</strong>（Voeg toe）。', 'Koppints jobb fent a <strong>Hozzáadás</strong> gombra.', 'Touchez <strong>Ajouter</strong> en haut à droite.'),
+    G('Open Prikklok vanaf je beginscherm en meld je daar nog één keer aan.', '从主屏幕打开 Prikklok，再登录一次。', 'Nyisd meg a Prikklokot a főképernyőről, és ott jelentkezz be még egyszer.', "Ouvrez Prikklok depuis votre écran d'accueil et connectez-vous encore une fois."),
   ];
   if (device.samsung) return [
-    T(`Tik onderaan op ${ikey(IK.menu)}.`, `点底部的 ${ikey(IK.menu)}。`, `Koppints lent erre: ${ikey(IK.menu)}.`),
-    T('Tik op <strong>Pagina toevoegen aan</strong> en dan op <strong>Startscherm</strong>.', '点<strong>添加页面到</strong>，再点<strong>主屏幕</strong>。', 'Koppints az <strong>Oldal hozzáadása</strong>, majd a <strong>Kezdőképernyő</strong> lehetőségre.'),
-    T('Tik op <strong>Toevoegen</strong>. Prikklok staat nu op je startscherm.', '点<strong>添加</strong>。Prikklok 就会出现在主屏幕上。', 'Koppints a <strong>Hozzáadás</strong> gombra. A Prikklok most már a kezdőképernyődön van.'),
+    G(`Tik onderaan op ${ikey(IK.menu)}.`, `点底部的 ${ikey(IK.menu)}。`, `Koppints lent erre: ${ikey(IK.menu)}.`, `Touchez ${ikey(IK.menu)} en bas.`),
+    G('Tik op <strong>Pagina toevoegen aan</strong> en dan op <strong>Startscherm</strong>.', '点<strong>添加页面到</strong>，再点<strong>主屏幕</strong>。', 'Koppints az <strong>Oldal hozzáadása</strong>, majd a <strong>Kezdőképernyő</strong> lehetőségre.', "Touchez <strong>Ajouter la page à</strong>, puis <strong>Écran d'accueil</strong>."),
+    G('Tik op <strong>Toevoegen</strong>. Prikklok staat nu op je startscherm.', '点<strong>添加</strong>。Prikklok 就会出现在主屏幕上。', 'Koppints a <strong>Hozzáadás</strong> gombra. A Prikklok most már a kezdőképernyődön van.', "Touchez <strong>Ajouter</strong>. Prikklok est maintenant sur votre écran d'accueil."),
   ];
   return [
-    T(`Tik in Chrome rechtsboven op ${ikey(IK.dots)}.`, `在 Chrome 右上角点 ${ikey(IK.dots)}。`, `Koppints a Chrome-ban jobb fent erre: ${ikey(IK.dots)}.`),
-    T('Tik op <strong>App installeren</strong> of <strong>Toevoegen aan startscherm</strong>.', '点<strong>安装应用</strong>或<strong>添加到主屏幕</strong>（App installeren / Toevoegen aan startscherm）。', 'Koppints az <strong>Alkalmazás telepítése</strong> vagy a <strong>Hozzáadás a kezdőképernyőhöz</strong> lehetőségre.'),
-    T('Tik op <strong>Installeren</strong>. Prikklok staat nu bij je apps.', '点<strong>安装</strong>（Installeren）。Prikklok 就会出现在你的应用里。', 'Koppints a <strong>Telepítés</strong> gombra. A Prikklok most már az alkalmazásaid között van.'),
+    G(`Tik in Chrome rechtsboven op ${ikey(IK.dots)}.`, `在 Chrome 右上角点 ${ikey(IK.dots)}。`, `Koppints a Chrome-ban jobb fent erre: ${ikey(IK.dots)}.`, `Dans Chrome, touchez ${ikey(IK.dots)} en haut à droite.`),
+    G('Tik op <strong>App installeren</strong> of <strong>Toevoegen aan startscherm</strong>.', '点<strong>安装应用</strong>或<strong>添加到主屏幕</strong>（App installeren / Toevoegen aan startscherm）。', 'Koppints az <strong>Alkalmazás telepítése</strong> vagy a <strong>Hozzáadás a kezdőképernyőhöz</strong> lehetőségre.', "Touchez <strong>Installer l'application</strong> ou <strong>Ajouter à l'écran d'accueil</strong>."),
+    G('Tik op <strong>Installeren</strong>. Prikklok staat nu bij je apps.', '点<strong>安装</strong>（Installeren）。Prikklok 就会出现在你的应用里。', 'Koppints a <strong>Telepítés</strong> gombra. A Prikklok most már az alkalmazásaid között van.', "Touchez <strong>Installer</strong>. Prikklok est maintenant dans vos applications."),
   ];
 }
 
-function installGuide({ auto = false } = {}) {
+function installGuide({ auto = false, lang = null } = {}) {
+  guideLang = lang;
   let kind = device.android ? 'android' : 'ios';
   const app = device.inApp, browser = device.ios ? 'Safari' : 'Chrome';
   const link = location.origin + location.pathname;
   const d = modal.open(`
     <div class="install-head">
       <img class="install-icon" src="icon-180.png" alt="" width="60" height="60">
-      <div><h2 id="modal-title">${T('Zet Prikklok op je telefoon', '把 Prikklok 添加到手机', 'Tedd fel a Prikklokot a telefonodra')}</h2>
-        <p class="muted small">${T('Dan open je hem met één tik vanaf je beginscherm, zonder adresbalk, net als een gewone app.', '以后在主屏幕上点一下就能打开，没有地址栏，跟普通 app 一样。', 'Így egy koppintással megnyithatod a kezdőképernyőről, címsor nélkül, mint egy rendes appot.')}</p></div>
+      <div><h2 id="modal-title">${G('Zet Prikklok op je telefoon', '把 Prikklok 添加到手机', 'Tedd fel a Prikklokot a telefonodra', 'Mettez Prikklok sur votre téléphone')}</h2>
+        <p class="muted small">${G('Dan open je hem met één tik vanaf je beginscherm, zonder adresbalk, net als een gewone app.', '以后在主屏幕上点一下就能打开，没有地址栏，跟普通 app 一样。', 'Így egy koppintással megnyithatod a kezdőképernyőről, címsor nélkül, mint egy rendes appot.', "Vous l'ouvrirez d'une seule touche depuis votre écran d'accueil, sans barre d'adresse, comme une vraie application.")}</p></div>
     </div>
     ${app ? `<div class="hint warn install-app">
-      <p>${T(`Je opent Prikklok nu in <strong>${app}</strong>. Daar kan je hem niet op je telefoon zetten: open hem eerst in ${browser}.`,
-        `你现在是在 <strong>${app}</strong> 里打开 Prikklok，这里没法添加到手机。请先用 ${browser} 打开。`, `A Prikklokot most a(z) <strong>${app}</strong> appban nyitottad meg. Innen nem teheted fel a telefonodra: előbb nyisd meg itt: ${browser}.`)}</p>
+      <p>${G(`Je opent Prikklok nu in <strong>${app}</strong>. Daar kan je hem niet op je telefoon zetten: open hem eerst in ${browser}.`,
+        `你现在是在 <strong>${app}</strong> 里打开 Prikklok，这里没法添加到手机。请先用 ${browser} 打开。`, `A Prikklokot most a(z) <strong>${app}</strong> appban nyitottad meg. Innen nem teheted fel a telefonodra: előbb nyisd meg itt: ${browser}.`, `Vous ouvrez Prikklok dans <strong>${app}</strong>. De là, vous ne pouvez pas l'ajouter à votre téléphone : ouvrez-le d'abord dans ${browser}.`)}</p>
       <ol class="install-steps">
-        <li><span>${T(`Tik rechtsboven op ${ikey(IK.more)}.`, `点右上角的 ${ikey(IK.more)}。`, `Koppints jobb fent erre: ${ikey(IK.more)}.`)}</span></li>
-        <li><span>${T(`Kies <strong>Openen in ${browser}</strong> of <strong>Openen in browser</strong>.`, `选<strong>在浏览器打开</strong>（或“在 ${browser} 中打开”）。`, `Válaszd a <strong>Megnyitás itt: ${browser}</strong> vagy a <strong>Megnyitás böngészőben</strong> lehetőséget.`)}</span></li>
+        <li><span>${G(`Tik rechtsboven op ${ikey(IK.more)}.`, `点右上角的 ${ikey(IK.more)}。`, `Koppints jobb fent erre: ${ikey(IK.more)}.`, `Touchez ${ikey(IK.more)} en haut à droite.`)}</span></li>
+        <li><span>${G(`Kies <strong>Openen in ${browser}</strong> of <strong>Openen in browser</strong>.`, `选<strong>在浏览器打开</strong>（或“在 ${browser} 中打开”）。`, `Válaszd a <strong>Megnyitás itt: ${browser}</strong> vagy a <strong>Megnyitás böngészőben</strong> lehetőséget.`, `Choisissez <strong>Ouvrir dans ${browser}</strong> ou <strong>Ouvrir dans le navigateur</strong>.`)}</span></li>
       </ol>
-      <div class="copybox"><code>${esc(link)}</code><button type="button" class="sm" id="ig-copy">${T('Kopieer', '复制', 'Másolás')}</button></div>
+      <div class="copybox"><code>${esc(link)}</code><button type="button" class="sm" id="ig-copy">${G('Kopieer', '复制', 'Másolás', 'Copier')}</button></div>
     </div>` : ''}
-    <div class="chips install-pick" role="group" aria-label="${T('Mijn telefoon', '我的手机', 'Az én telefonom')}">
+    <div class="chips install-pick" role="group" aria-label="${G('Mijn telefoon', '我的手机', 'Az én telefonom', 'Mon téléphone')}">
       <button type="button" class="chip" data-ig="ios">iPhone</button><button type="button" class="chip" data-ig="android">Android</button>
     </div>
     <div id="ig-body"></div>
     <div class="form-actions">${auto
-      ? `<button type="button" id="ig-never">${T('Staat er al op', '已经添加了', 'Már fent van')}</button><button type="button" class="primary" data-close>${T('Later', '以后再说', 'Később')}</button>`
-      : `<button type="button" class="primary" data-close>${T('Sluiten', '关闭', 'Bezárás')}</button>`}</div>`, null, { sheet: true });
+      ? `<button type="button" id="ig-never">${G('Staat er al op', '已经添加了', 'Már fent van', 'Déjà fait')}</button><button type="button" class="primary" data-close>${G('Later', '以后再说', 'Később', 'Plus tard')}</button>`
+      : `<button type="button" class="primary" data-close>${G('Sluiten', '关闭', 'Bezárás', 'Fermer')}</button>`}</div>`, null, { sheet: true });
   const draw = () => {
     $$('[data-ig]', d).forEach(b => { b.classList.toggle('is-on', b.dataset.ig === kind); b.setAttribute('aria-pressed', b.dataset.ig === kind); });
     const oneTap = kind === 'android' && installPrompt && !app;
     $('#ig-body', d).innerHTML = `
-      ${oneTap ? `<button type="button" class="primary big-install" id="ig-install">${IK.add}<span>${T('Zet op mijn telefoon', '添加到我的手机', 'Felteszem a telefonomra')}</span></button>
-        <p class="muted small">${T('Of zelf, via het menu:', '或者自己从菜单添加：', 'Vagy magad, a menün keresztül:')}</p>` : ''}
+      ${oneTap ? `<button type="button" class="primary big-install" id="ig-install">${IK.add}<span>${G('Zet op mijn telefoon', '添加到我的手机', 'Felteszem a telefonomra', 'Mettre sur mon téléphone')}</span></button>
+        <p class="muted small">${G('Of zelf, via het menu:', '或者自己从菜单添加：', 'Vagy magad, a menün keresztül:', 'Ou vous-même, via le menu :')}</p>` : ''}
       <ol class="install-steps">${installSteps(kind).map(x => `<li><span>${x}</span></li>`).join('')}</ol>`;
     const b = $('#ig-install', d);
     if (b) b.addEventListener('click', async () => {
@@ -1029,7 +1033,7 @@ function installGuide({ auto = false } = {}) {
       installPrompt = null;
       p.prompt();
       const { outcome } = await p.userChoice;
-      if (outcome === 'accepted') { store.set(INSTALL_KEY, 'done'); modal.close(); toast(T('Prikklok staat nu bij je apps.', 'Prikklok 已经添加到你的应用里。', 'A Prikklok most már az alkalmazásaid között van.')); }
+      if (outcome === 'accepted') { store.set(INSTALL_KEY, 'done'); modal.close(); toast(G('Prikklok staat nu bij je apps.', 'Prikklok 已经添加到你的应用里。', 'A Prikklok most már az alkalmazásaid között van.', 'Prikklok est maintenant dans vos applications.')); }
       else draw();
     });
   };
@@ -1038,7 +1042,7 @@ function installGuide({ auto = false } = {}) {
   if (never) never.addEventListener('click', () => { store.set(INSTALL_KEY, 'done'); modal.close(); });
   const copy = $('#ig-copy', d);
   if (copy) copy.addEventListener('click', async () => {
-    try { await navigator.clipboard.writeText(link); toast(T('Adres gekopieerd. Plak het in je browser.', '地址已复制，粘贴到浏览器里打开。', 'Cím kimásolva. Illeszd be a böngésződbe.')); }
+    try { await navigator.clipboard.writeText(link); toast(G('Adres gekopieerd. Plak het in je browser.', '地址已复制，粘贴到浏览器里打开。', 'Cím kimásolva. Illeszd be a böngésződbe.', "Adresse copiée. Collez-la dans votre navigateur.")); }
     catch { toast(link); }
   });
   draw();
@@ -1052,7 +1056,8 @@ function maybeInstallGuide() {
     rpc('install_help_seen').catch(() => {});
     if (installed()) return;
     S.installAsked = true;
-    S.installTimer = setTimeout(() => { S.installTimer = null; if (!$('#modal').open) installGuide(); }, 1500);
+    const lang = S.me.install_lang;
+    S.installTimer = setTimeout(() => { S.installTimer = null; if (!$('#modal').open) installGuide({ lang }); }, 1500);
     return;
   }
   if (!device.phone || installed() || S.installAsked || S.installTimer || !S.me || $('#modal').open) return;
@@ -5464,16 +5469,23 @@ async function viewMember(el, current) {
   const seeRoutes = $('#see-routes', el);
   if (seeRoutes) seeRoutes.addEventListener('click', () => { location.hash = `routes/${p.id}`; });
   const sendInstall = $('#send-install', el);
-  if (sendInstall) sendInstall.addEventListener('click', async () => {
-    const ok = await modal.confirm({ title: `Uitleg tonen aan ${first}?`,
-      body: `De volgende keer dat ${first} Prikklok op de gsm opent, krijgt ${first} uitleg hoe je de app op het beginscherm zet, zoals een gewone app. Staat de app er al op, dan gebeurt er niets.`,
-      ok: 'Tonen' });
-    if (!ok) return;
-    busy(sendInstall, async () => {
-      await rpc('mgr_show_install', { p_staff_id: p.id, p_on: true });
-      toast(`${first} krijgt de uitleg bij het openen van de app.`);
-      renderView();
-    }).catch(() => {});
+  if (sendInstall) sendInstall.addEventListener('click', () => {
+    modal.open(`
+      <h2 id="modal-title">Uitleg tonen aan ${esc(first)}?</h2>
+      <p>De volgende keer dat ${esc(first)} Prikklok op de gsm opent, krijgt ${esc(first)} uitleg hoe je de app op het beginscherm zet, zoals een gewone app. Staat de app er al op, dan gebeurt er niets.</p>
+      <div class="field"><label for="si-lang">Taal van de uitleg</label><select id="si-lang">
+        <option value="">Taal van de app (${esc(({ nl: 'Nederlands', zh: '中文', hu: 'Magyar' })[p.lang] || 'Nederlands')})</option>
+        <option value="fr" ${p.install_lang === 'fr' ? 'selected' : ''}>Français</option></select></div>
+      <p class="form-error" id="si-err"></p>
+      <div class="form-actions"><button type="button" data-close>Annuleren</button><button type="button" class="primary" id="si-go">Tonen</button></div>`, d => {
+      const go = $('#si-go', d);
+      go.addEventListener('click', () => busy(go, async () => {
+        await rpc('mgr_show_install', { p_staff_id: p.id, p_on: true, p_lang: $('#si-lang', d).value || null });
+        modal.close();
+        toast(`${first} krijgt de uitleg bij het openen van de app.`);
+        renderView();
+      }).catch(e => { $('#si-err', d).textContent = e.message; }));
+    });
   });
   const matoForm = $('#mato-form', el);
   if (matoForm) matoForm.addEventListener('submit', ev => {

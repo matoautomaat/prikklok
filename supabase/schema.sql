@@ -88,6 +88,7 @@ create table public.staff (
   -- the manager hides the schedule from this person for now: no open shifts, only their own
   shifts_hidden   boolean not null default false,
   show_install    boolean not null default false, -- the manager asked to show the 'on your phone' guide
+  install_lang    text check (install_lang in ('fr')), -- that guide in another language than the app's (French)
   -- a family account shown in the ranking too, with its avatar and level
   in_ranking      boolean not null default false,
   -- the app's language for this person: Dutch, Chinese or Hungarian; empty = what the phone chose
@@ -486,12 +487,13 @@ $$;
 
 -- "Zet Prikklok op je telefoon" for one person: the guide opens the next time
 -- they open the app on a phone (staff.show_install), until it is seen there.
-create function public.mgr_show_install(p_token text, p_staff_id uuid, p_on boolean) returns json
+create function public.mgr_show_install(p_token text, p_staff_id uuid, p_on boolean, p_lang text default null) returns json
 language plpgsql security definer set search_path = public, extensions as $$
 declare v public.staff;
 begin
   v := app_private.current_manager(p_token);
-  update public.staff set show_install = coalesce(p_on, true) where id = p_staff_id;
+  update public.staff set show_install = coalesce(p_on, true), install_lang = case when p_lang = 'fr' then 'fr' end
+   where id = p_staff_id;
   return json_build_object('ok', true);
 end $$;
 
@@ -518,7 +520,7 @@ begin
                                      and not v.shifts_hidden,
                             'shifts', not v.shifts_hidden,
                             -- a manager asked to show this person how to put the app on their phone
-                            'show_install', v.show_install),
+                            'show_install', v.show_install, 'install_lang', v.install_lang),
     'settings', (select json_build_object(
         'business_name', business_name, 'drop_cutoff_hours', drop_cutoff_hours,
         'grace_minutes', grace_minutes, 'currency', currency, 'timezone', timezone,
@@ -2006,7 +2008,7 @@ begin
       'officient_connected', (select o.refresh_token is not null from app_private.officient o where o.id = 1),
       'mato_name', app_private.mato_name(s), 'mato_name_own', s.mato_name,
       'lang', s.language, 'can_clock', not s.view_only and app_private.can_clock(s), 'fun_title', s.fun_title,
-      'shifts_hidden', s.shifts_hidden, 'in_ranking', s.in_ranking, 'show_install', s.show_install),
+      'shifts_hidden', s.shifts_hidden, 'in_ranking', s.in_ranking, 'show_install', s.show_install, 'install_lang', s.install_lang),
     'profile', app_private.profile_json(s),
     'xp', app_private.xp_json(s.id),
     'contracts', app_private.contracts_json(s.id),
