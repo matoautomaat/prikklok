@@ -2251,18 +2251,18 @@ function driverPunch(site) {
   const e = S.openEntry, t = now(), gps = !!S.settings.track_route;
   // One button to start, one to stop: nothing else to fill in or remember.
   const body = e ? `
-      <div class="punch-status"><span class="dot"></span>${F('Ingeklokt sinds', 'Pointé depuis')} ${sameDay(e.clock_in, t) ? fmt.time(e.clock_in) : fmt.when(e.clock_in)}</div>
+      <div class="punch-status"><span class="dot"></span>${F('Gestart om', 'Commencé à')} ${sameDay(e.clock_in, t) ? fmt.time(e.clock_in) : fmt.when(e.clock_in)}</div>
       <div class="punch-elapsed" data-live="since" data-since="${e.clock_in}">${fmt.dur(minutesBetween(e.clock_in, t))}</div>
       ${gps ? `<p class="track-line" id="track-line">${Tracker.status()}</p>
       ${'wakeLock' in navigator ? `<label class="check small"><input type="checkbox" id="tr-awake" ${Tracker.awake() ? 'checked' : ''}> ${F('Scherm aan houden tijdens de rit', 'Garder l’écran allumé pendant le trajet')}</label>` : ''}` : ''}
-      <button class="big stop" data-act="drv-out">${F('Uitklokken', 'Pointer le départ')}</button>
+      <button class="big stop" data-act="drv-out">${F('Eindigen', 'Terminer')}</button>
       <p class="muted small">${F('Tik hierop als je stopt met werken.', 'Touche ce bouton quand tu arrêtes de travailler.')}</p>`
     : `
-      <div class="punch-status"><span class="dot"></span>${F('Je bent niet ingeklokt', 'Tu n’as pas pointé')}</div>
-      <button class="big go" data-act="drv-in">${F('Inklokken', 'Pointer l’arrivée')}</button>
+      <div class="punch-status"><span class="dot"></span>${F('Nog niet gestart', 'Pas encore commencé')}</div>
+      <button class="big go" data-act="drv-in">${F('Starten', 'Commencer')}</button>
       <p class="muted small">${F('Tik hierop als je begint te werken.', 'Touche ce bouton quand tu commences à travailler.')}</p>`;
   return `
-    <section class="punch ${e ? 'is-on' : ''}" aria-label="${F('In- en uitklokken', 'Pointage')}">
+    <section class="punch ${e ? 'is-on' : ''}" aria-label="${F('Starten en eindigen', 'Commencer et terminer')}">
       <div class="punch-top">
         <span class="punch-clock" data-live="clock">${fmt.clock(t)}</span>
         <span class="punch-date">${fmt.dayLong(t)}</span>
@@ -2278,7 +2278,7 @@ function bindDriverPunch(root, after) {
     const p = await optionalPosition();
     await rpc('driver_clock_in', { p_lat: p.lat, p_lng: p.lng, p_accuracy: p.accuracy });
     await refreshMe();
-    toast(F(`Ingeklokt om ${fmt.time(now())}. Goede rit!`, `Arrivée pointée à ${fmt.time(now())}. Bonne route !`));
+    toast(F(`Gestart om ${fmt.time(now())}. Goede rit!`, `Commencé à ${fmt.time(now())}. Bonne route !`));
     after();
   }).catch(() => {}));
   const outBtn = $('[data-act=drv-out]', root);
@@ -2288,7 +2288,7 @@ function bindDriverPunch(root, after) {
     await Tracker.flush();
     await rpc('driver_clock_out', { p_lat: p.lat, p_lng: p.lng, p_accuracy: p.accuracy, p_note: '' });
     await refreshMe();
-    toast(F(`Uitgeklokt om ${fmt.time(now())}.`, `Départ pointé à ${fmt.time(now())}.`));
+    toast(F(`Geëindigd om ${fmt.time(now())}.`, `Terminé à ${fmt.time(now())}.`));
     after();
   }).catch(() => {}));
   const awake = $('#tr-awake', root);
@@ -2351,7 +2351,7 @@ async function viewDriver(el, current) {
             <div class="row"><div class="row-main"><span class="row-title">${fmt.dayLong(x.clock_in)}</span>
               <span class="row-sub"><span class="time">${fmt.time(x.clock_in)} – ${x.clock_out ? fmt.time(x.clock_out) : F('nu', 'maintenant')}</span></span></div>
               <span class="pill ${x.clock_out ? '' : 'on'}">${fmt.dur(minutesBetween(x.clock_in, x.clock_out || now()))}</span></div>`).join('')}</div>`
-            : `<p class="empty">${F('Nog geen uren. Klok in aan het restaurant om te beginnen.', 'Pas encore d’heures. Pointe ton arrivée au restaurant pour commencer.')}</p>`}
+            : `<p class="empty">${F('Nog geen uren. Tik op Starten om te beginnen.', 'Pas encore d’heures. Touche Commencer pour commencer.')}</p>`}
         </section>
       </div>
     </div>`;
