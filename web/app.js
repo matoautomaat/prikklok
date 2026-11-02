@@ -3327,6 +3327,13 @@ const CONTRACT_OPTIONS = [['', 'Geen keuze'], ['vast', 'Vast uurrooster'], ['vas
 const lastDay = m => addDays(addMonths(m, 1), -1);
 const toBase64 = bytes => { let s = ''; for (let i = 0; i < bytes.length; i += 0x8000) s += String.fromCharCode(...bytes.subarray(i, i + 0x8000)); return btoa(s); };
 
+// The day a month's planning is fixed (settings.plan_lock_day of the month
+// before), while that is still to come; otherwise null.
+function planOpen(m) {
+  const lock = new Date(m.getFullYear(), m.getMonth() - 1, S.settings.plan_lock_day || 24);
+  return now() < lock ? lock : null;
+}
+
 // Every student and their contract for one month: written from the planning
 // on Securex's model, kept with their contracts, and put in Officient with
 // the hours planned.
@@ -3368,6 +3375,7 @@ async function viewContracts(el, current) {
       ${periodBar(fmt.month(m), plural(r.students.length, 'student', 'studenten'), 'mo-prev', 'mo-next')}
     </div>
     ${ready ? '' : '<p class="hint warn">Vul eerst onderaan de gegevens van de zaak in: die staan op elk contract.</p>'}
+    ${planOpen(m) ? `<p class="hint warn">De planning van ${fmt.monthName(m)} ligt pas vast op ${fmt.short(planOpen(m))}. Tot dan kunnen studenten nog shiften opnemen en teruggeven, en klopt een contract dat je nu maakt misschien niet meer. Maak de contracten best vanaf ${fmt.short(planOpen(m))}.</p>` : ''}
     <section class="card">
       ${r.students.length ? `<div class="rows">${r.students.map(row).join('')}</div>`
         : '<p class="empty">Niemand met het statuut Student. Kies het statuut bij Team → (persoon) → Werk en loon.</p>'}

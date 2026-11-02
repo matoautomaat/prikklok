@@ -530,7 +530,7 @@ begin
                 then json_build_object('lat', site_lat, 'lng', site_lng, 'radius_m', site_radius_m) end,
         'has_drivers', v.role = 'manager' and exists (select 1 from public.staff where driver and active),
         'track_route', track_route, 'daily_xp', daily_xp,
-        'clock_types', case when v.role = 'manager' then clock_types end)
+        'clock_types', case when v.role = 'manager' then clock_types end, 'plan_lock_day', plan_lock_day)
       from public.settings where id = 1),
     'open_entry', (select json_build_object('id', e.id, 'clock_in', e.clock_in, 'shift', app_private.shift_json(e.shift_id))
       from public.time_entries e where e.staff_id = v.id and e.clock_out is null and e.deleted_at is null),
