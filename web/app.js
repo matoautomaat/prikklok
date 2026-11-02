@@ -3102,7 +3102,7 @@ function pushHoursModal(m, people, sx, again) {
         const cmp = people.find(x => x.id === p.staff_id) || { days: [] };
         const clocked = cmp.days.filter(x => x.app > 0).length, planned = cmp.days.filter(x => x.officient > 0).length;
         p.none = !clocked;
-        p.few = clocked && clocked < planned / 2;
+        p.few = !PLANNED && clocked && clocked < planned / 2;
         return `<tr data-push="${p.staff_id}">
         <td><input type="checkbox" class="push-on" aria-label="${esc(p.name)} sturen"></td>
         <td><strong>${esc(p.name)}</strong>${p.contract_type ? ` <span class="muted small">${CONTRACT_SHORT[p.contract_type]}</span>` : ''}
@@ -3114,7 +3114,7 @@ function pushHoursModal(m, people, sx, again) {
         <td class="num push-after" data-label="Daarna"></td></tr>
         <tr class="push-detail" data-detail="${p.staff_id}"><td colspan="5" class="push-what"></td></tr>`; }).join('')}</tbody>
     </table></div>
-    <p class="muted small">Zonder inklokken: dagen waarop Officient iemand ingeroosterd heeft, zonder geklokte uren. Aan voor wie per uur werkt (die dag niet gewerkt); laat het uit als iemand vergat in te klokken.</p>`;
+    <p class="muted small">${PLANNED ? 'Zonder shift: dagen waarop Officient iemand ingeroosterd heeft, zonder ingeplande shift in de app. Aan: die dag niet gewerkt.' : 'Zonder inklokken: dagen waarop Officient iemand ingeroosterd heeft, zonder geklokte uren. Aan voor wie per uur werkt (die dag niet gewerkt); laat het uit als iemand vergat in te klokken.'}</p>`;
     const update = tr => {
       const p = list.find(x => x.staff_id === tr.dataset.push), zero = !!($('.push-zero', tr) || {}).checked;
       const steps = p.none ? [] : active(p, zero), real = steps.filter(s => s.action !== 'skip');
@@ -3158,7 +3158,7 @@ function bindSecurex(el, m, sx) {
     try {
       // what the app counts: until October 2026 the planned shifts, from then on the clocked hours; fixed workers not for now
       const [calendar, basis] = await Promise.all([officientCall({ action: 'calendar', month: ym }), rpc('mgr_officient_basis', { p_month: toDateInput(m) })]);
-      const rows = basis.flatMap(b => Object.entries(b.days).map(([day, minutes]) => ({ staff_id: b.staff_id, name: b.name, start: day + 'T00:00', minutes })));
+      const rows = basis.flatMap(b => Object.entries(b.days).map(([day, minutes]) => ({ staff_id: b.staff_id, name: b.name, start: new Date(day + 'T00:00'), minutes })));
       const keep = new Set(basis.map(b => b.staff_id));
       PLANNED = !!(basis[0] && basis[0].basis === 'planned');
       out.innerHTML = note + (PLANNED ? '<p class="hint info">Voor deze maand vergelijkt de app de <strong>ingeplande shiften</strong> met Officient, niet de geklokte uren. Vaste werknemers staan er niet bij: zij werkten volgens hun contract.</p>' : '')
