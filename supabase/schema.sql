@@ -3060,6 +3060,7 @@ begin
   return json_build_object('month', v_month, 'info', (select contract_info from public.settings where id = 1),
     'students', coalesce((select json_agg(json_build_object(
         'staff_id', st.id, 'name', st.name, 'avatar', st.avatar, 'officient_id', st.officient_id, 'email', st.email,
+        'hourly_rate', st.hourly_rate,
         'planned_minutes', coalesce((select sum(round(extract(epoch from (sh.ends_at - sh.starts_at)) / 60)) from public.shifts sh
                                       where sh.staff_id = st.id and sh.cancelled_at is null
                                         and (sh.starts_at at time zone v_tz)::date between v_month and v_end), 0),
@@ -3070,7 +3071,7 @@ begin
         'contract', (select json_build_object('id', c.id, 'starts_on', c.starts_on, 'ends_on', c.ends_on, 'created_at', c.created_at,
                               'hours', c.details -> 'hours', 'officient_contract_id', c.officient_contract_id,
                               'officient_sent_at', c.officient_sent_at, 'signature_requested_at', c.signature_requested_at,
-                              'officient_hours_at', c.officient_hours_at, 'signed_at', c.signed_at)
+                              'officient_hours_at', c.officient_hours_at, 'signed_at', c.signed_at, 'rate', c.details -> 'rate')
                        from public.contracts c
                       where c.staff_id = st.id and c.archived_at is null and c.details ->> 'kind' = 'student'
                         and c.starts_on <= v_end and coalesce(c.ends_on, c.starts_on) >= v_month
