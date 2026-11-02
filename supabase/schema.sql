@@ -3338,10 +3338,13 @@ begin
   if exists (select 1 from public.time_entries where staff_id = v.id and clock_out is null) then
     raise exception using message = 'You''re already checked in.', errcode = 'P0001';
   end if;
-  v_d := app_private.check_at_site(p_lat, p_lng, p_accuracy);
+  -- one button, wherever he starts: the position is kept when the phone gives one
   insert into public.time_entries (staff_id, clock_in) values (v.id, now()) returning id into v_id;
-  insert into public.route_points (entry_id, staff_id, at, lat, lng, accuracy, kind)
-  values (v_id, v.id, now(), p_lat, p_lng, least(greatest(p_accuracy, 0), 100000), 'in');
+  if p_lat is not null and p_lng is not null then
+    v_d := (select app_private.distance_m(site_lat, site_lng, p_lat, p_lng) from public.settings where id = 1 and site_lat is not null);
+    insert into public.route_points (entry_id, staff_id, at, lat, lng, accuracy, kind)
+    values (v_id, v.id, now(), p_lat, p_lng, least(greatest(coalesce(p_accuracy, 0), 0), 100000), 'in');
+  end if;
   return json_build_object('ok', true, 'id', v_id, 'distance_m', round(v_d));
 exception when unique_violation then
   raise exception using message = 'You''re already checked in.', errcode = 'P0001';
@@ -3357,15 +3360,16 @@ begin
   if v_id is null then
     raise exception using message = 'You''re not checked in.', errcode = 'P0001';
   end if;
-  perform app_private.check_at_site(p_lat, p_lng, p_accuracy);
   update public.time_entries
      set clock_out = greatest(now(), clock_in + interval '1 second'),
          note = coalesce(nullif(app_private.clean_text(p_note, 300), ''), note)
    where id = v_id
   returning clock_out into v_at;
-  insert into public.route_points (entry_id, staff_id, at, lat, lng, accuracy, kind)
-  values (v_id, v.id, v_at, p_lat, p_lng, least(greatest(p_accuracy, 0), 100000), 'out')
-  on conflict do nothing;
+  if p_lat is not null and p_lng is not null then
+    insert into public.route_points (entry_id, staff_id, at, lat, lng, accuracy, kind)
+    values (v_id, v.id, v_at, p_lat, p_lng, least(greatest(coalesce(p_accuracy, 0), 0), 100000), 'out')
+    on conflict do nothing;
+  end if;
   return json_build_object('ok', true, 'id', v_id);
 end $$;
 

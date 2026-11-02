@@ -2152,6 +2152,10 @@ function getPosition({ timeout = 20000 } = {}) {
     p => resolve(fixOf(p)), e => reject(new AppError(geoError(e))), { enableHighAccuracy: true, timeout, maximumAge: Tracker.entry == null ? 0 : 5000 }));
 }
 
+// Where the driver clocks in or out, if the phone tells within a few seconds;
+// clocking never waits on it or fails for it.
+const optionalPosition = () => getPosition({ timeout: 6000 }).catch(() => ({ lat: null, lng: null, accuracy: null }));
+
 const Tracker = {
   entry: null, watch: null, timers: [], lock: null, last: null, lastAt: 0, kept: null, error: null, sending: false, sentAt: 0,
   key() { return `prikklok.route.${S.me ? S.me.id : ''}`; },
@@ -2245,24 +2249,18 @@ setInterval(() => Tracker.paint(), 5000);
 
 function driverPunch(site) {
   const e = S.openEntry, t = now(), gps = !!S.settings.track_route;
-  const zone = site && site.lat != null ? F(`tot ${metres(site.radius_m)} ervan`, `jusqu’à ${metres(site.radius_m)} de celui-ci`) : '';
+  // One button to start, one to stop: nothing else to fill in or remember.
   const body = e ? `
       <div class="punch-status"><span class="dot"></span>${F('Ingeklokt sinds', 'Pointé depuis')} ${sameDay(e.clock_in, t) ? fmt.time(e.clock_in) : fmt.when(e.clock_in)}</div>
       <div class="punch-elapsed" data-live="since" data-since="${e.clock_in}">${fmt.dur(minutesBetween(e.clock_in, t))}</div>
       ${gps ? `<p class="track-line" id="track-line">${Tracker.status()}</p>
       ${'wakeLock' in navigator ? `<label class="check small"><input type="checkbox" id="tr-awake" ${Tracker.awake() ? 'checked' : ''}> ${F('Scherm aan houden tijdens de rit', 'Garder l’écran allumé pendant le trajet')}</label>` : ''}` : ''}
-      <div class="field">
-        <label for="out-note">${F('Opmerking voor je verantwoordelijke (optioneel)', 'Remarque pour ton responsable (facultatif)')}</label>
-        <input id="out-note" maxlength="300" placeholder="${F('bv. automaat in de Markt was leeg', 'p. ex. le distributeur du Markt était vide')}">
-      </div>
       <button class="big stop" data-act="drv-out">${F('Uitklokken', 'Pointer le départ')}</button>
-      <p class="muted small">${F('Uitklokken kan alleen aan het restaurant. Al weg en vergeten uit te klokken?', 'Le départ se pointe uniquement au restaurant. Déjà parti et oublié de pointer ?')} <button class="link" data-act="drv-forgot">${F('Vul in wanneer je stopte', 'Indique quand tu as arrêté')}</button></p>`
+      <p class="muted small">${F('Tik hierop als je stopt met werken.', 'Touche ce bouton quand tu arrêtes de travailler.')}</p>`
     : `
       <div class="punch-status"><span class="dot"></span>${F('Je bent niet ingeklokt', 'Tu n’as pas pointé')}</div>
-      <div class="punch-meta">${F('Inklokken kan aan het restaurant', 'Tu peux pointer au restaurant')}${zone ? `, ${zone}` : ''}.</div>
       <button class="big go" data-act="drv-in">${F('Inklokken', 'Pointer l’arrivée')}</button>
-      <p class="muted small">${gps ? F('De app vraagt daarvoor je locatie. Zolang je ingeklokt bent, houdt de app je rit bij; daarna niet meer. Laat de app open tijdens je ronde.', 'L’app demande ta position pour cela. Tant que tu as pointé, l’app suit ton trajet ; ensuite plus. Laisse l’app ouverte pendant ta tournée.')
-        : F('De app vraagt daarvoor je locatie, alleen bij het in- en uitklokken. Wat je bijvult, komt vanzelf uit MATO Info.', 'L’app demande ta position pour cela, uniquement à l’arrivée et au départ. Ce que tu remplis arrive tout seul depuis MATO Info.')}</p>`;
+      <p class="muted small">${F('Tik hierop als je begint te werken.', 'Touche ce bouton quand tu commences à travailler.')}</p>`;
   return `
     <section class="punch ${e ? 'is-on' : ''}" aria-label="${F('In- en uitklokken', 'Pointage')}">
       <div class="punch-top">
@@ -2276,9 +2274,8 @@ function driverPunch(site) {
 function bindDriverPunch(root, after) {
   const inBtn = $('[data-act=drv-in]', root);
   if (inBtn) inBtn.addEventListener('click', () => busy(inBtn, async () => {
-    inBtn.textContent = F('Locatie zoeken…', 'Recherche de la position…');
-    const p = await getPosition();
     inBtn.textContent = F('Bezig…', 'Un instant…');
+    const p = await optionalPosition();
     await rpc('driver_clock_in', { p_lat: p.lat, p_lng: p.lng, p_accuracy: p.accuracy });
     await refreshMe();
     toast(F(`Ingeklokt om ${fmt.time(now())}. Goede rit!`, `Arrivée pointée à ${fmt.time(now())}. Bonne route !`));
@@ -2286,11 +2283,10 @@ function bindDriverPunch(root, after) {
   }).catch(() => {}));
   const outBtn = $('[data-act=drv-out]', root);
   if (outBtn) outBtn.addEventListener('click', () => busy(outBtn, async () => {
-    outBtn.textContent = F('Locatie zoeken…', 'Recherche de la position…');
-    const p = await getPosition();
     outBtn.textContent = F('Bezig…', 'Un instant…');
+    const p = await optionalPosition();
     await Tracker.flush();
-    await rpc('driver_clock_out', { p_lat: p.lat, p_lng: p.lng, p_accuracy: p.accuracy, p_note: ($('#out-note', root) || {}).value || '' });
+    await rpc('driver_clock_out', { p_lat: p.lat, p_lng: p.lng, p_accuracy: p.accuracy, p_note: '' });
     await refreshMe();
     toast(F(`Uitgeklokt om ${fmt.time(now())}.`, `Départ pointé à ${fmt.time(now())}.`));
     after();
@@ -2299,48 +2295,6 @@ function bindDriverPunch(root, after) {
   if (awake) awake.addEventListener('change', () => {
     store.set(AWAKE_KEY, awake.checked ? '1' : '0');
     if (awake.checked) Tracker.wake(); else Tracker.release();
-  });
-  const forgot = $('[data-act=drv-forgot]', root);
-  if (forgot) forgot.addEventListener('click', () => driverForgotModal(after));
-}
-
-// Away from the restaurant and forgot to clock out: clocked out now, and the
-// time he stopped goes to the manager to approve.
-function driverForgotModal(after) {
-  const e = S.openEntry;
-  if (!e) return;
-  const since = new Date(e.clock_in);
-  const guess = now();
-  modal.open(`
-    <h2 id="modal-title">${F('Wanneer stopte je?', 'Quand as-tu arrêté ?')}</h2>
-    <p>${F(`Je klokte in ${fmt.when(since)}. We klokken je nu uit en sturen het uur waarop je stopte naar je verantwoordelijke om goed te keuren.`, `Tu as pointé ${fmt.when(since)}. On pointe ton départ maintenant et on envoie l’heure à laquelle tu as arrêté à ton responsable pour validation.`)}</p>
-    <form id="dforgot-form" novalidate>
-      <div class="form-grid">
-        <div class="field"><label for="df-day">${F('Dag', 'Jour')}</label>${dateField('df-day', guess, since, now())}</div>
-        <div class="field"><label for="df-out">${F('Ik stopte om', 'J’ai arrêté à')}</label>${timeField('df-out', toTimeInput(guess))}</div>
-        <div class="field wide"><label for="df-reason">${F('Reden', 'Raison')}</label><input id="df-reason" maxlength="300" value="${F('Vergeten uit te klokken aan het restaurant', 'Oublié de pointer le départ au restaurant')}"></div>
-      </div>
-      <p class="form-error" id="df-err"></p>
-      <div class="form-actions"><button type="button" data-close>${F('Annuleren', 'Annuler')}</button><button type="submit" class="primary">${F('Uitklokken en versturen', 'Pointer le départ et envoyer')}</button></div>
-    </form>`, d => {
-    $('#dforgot-form', d).addEventListener('submit', async ev => {
-      ev.preventDefault();
-      const hm = parseHM($('#df-out', d).value), reason = $('#df-reason', d).value.trim(), err = $('#df-err', d);
-      if (!hm) { err.textContent = F('Vul in hoe laat je stopte, bv. 13:30.', 'Indique à quelle heure tu as arrêté, p. ex. 13:30.'); return; }
-      const out = atTime(new Date($('#df-day', d).value + 'T00:00'), hm);
-      if (out <= since || out > now()) { err.textContent = F('Kies een uur tussen je inklokken en nu.', 'Choisis une heure entre ton arrivée et maintenant.'); return; }
-      if (reason.length < 3) { err.textContent = F('Geef een korte reden.', 'Donne une courte raison.'); return; }
-      const btn = $('button[type=submit]', d);
-      btn.disabled = true;
-      try {
-        await Tracker.flush();
-        await rpc('driver_forgot_out', { p_out: out.toISOString(), p_reason: reason });
-        modal.close();
-        await refreshMe();
-        toast(F('Uitgeklokt. Je verantwoordelijke keurt het uur goed.', 'Départ pointé. Ton responsable va valider l’heure.'));
-        after();
-      } catch (x) { err.textContent = x.message; btn.disabled = false; }
-    });
   });
 }
 
