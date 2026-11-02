@@ -511,6 +511,12 @@ export function makeOfficient({ db: query, fetch, readPayslip, api = OFFICIENT_A
         if (t.refresh_token && t.refresh_token !== cfg.refresh_token) {
           await db('select app_private.officient_save_token($1, false) as r', [t.refresh_token]);
         }
+        // temporary, read only: Officient's own answer for one person's month
+        if (action === 'calendar' && staff) {
+          const o = await db('select officient_id as r from public.staff where id = $1::uuid', [staff]);
+          const [y, m] = month.split('-').map(Number);
+          return { ok: true, raw: await get(t.access_token, `/calendar/${o}/${y}/${m}`) };
+        }
         return { ok: true, ...(action === 'calendar' ? await calendar(t.access_token, month)
           : action === 'hours' ? await pushHours(t.access_token, month, people, appToken, !!dry)
           : action === 'contract' ? await sendContract(t.access_token, appToken, contract, !!sign)
