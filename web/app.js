@@ -3002,6 +3002,8 @@ function securexCard(rep, m, monthInfo) {
 // Officient's calendar for the month next to the hours clocked, per person and day.
 const OFF_KINDS = { time_off: 'afwezig', overtime: 'extra uren' };
 const HOURLY = ['student', 'flexi', 'extra'];
+let PLANNED = false; // the comparison uses planned shifts (before November 2026)
+const WORKED = () => PLANNED ? 'Gepland' : 'Geklokt';
 const holidayLabel = date => holidaysBE(+date.slice(0, 4)).get(date) || 'Feestdag';
 function officientCompare(cal, rows) {
   const name = id => ((S.staff || []).find(p => p.id === id) || rows.find(x => x.staff_id === id) || {}).name || '?';
@@ -3031,12 +3033,12 @@ function officientCompare(cal, rows) {
   const dayName = date => fmt.day(new Date(date + 'T00:00'));
   return `
     ${people.length ? `<div class="table-wrap"><table class="off-cal-table">
-      <thead><tr><th>Naam</th><th class="num">Geklokt</th><th class="num">In Officient</th><th class="num">Verschil</th><th>Dagen die verschillen</th></tr></thead>
+      <thead><tr><th>Naam</th><th class="num">${WORKED()}</th><th class="num">In Officient</th><th class="num">Verschil</th><th>Dagen die verschillen</th></tr></thead>
       <tbody>${people.map(p => `<tr>
         <td><strong>${esc(p.name)}</strong></td><td class="num">${h(p.app)}</td><td class="num">${h(p.officient)}</td>
         <td class="num ${Math.abs(p.app - p.officient) >= 15 ? 'flag' : 'zero'}">${p.app === p.officient ? '0' : (p.app > p.officient ? '+' : '−') + fmt.hours2(Math.abs(p.app - p.officient))}</td>
         <td class="off-days">${p.differ.length ? `<details><summary>${plural(p.differ.length, 'dag', 'dagen')}</summary><ul class="plain-list">${p.differ.map(d =>
-          `<li>${esc(dayName(d.date))}: geklokt ${fmt.hours2(d.app)} · Officient ${fmt.hours2(d.officient)}${d.events.length ? ` <span class="muted">(${esc(d.events.join(', '))})</span>` : ''}</li>`).join('')}</ul></details>`
+          `<li>${esc(dayName(d.date))}: ${WORKED().toLowerCase()} ${fmt.hours2(d.app)} · Officient ${fmt.hours2(d.officient)}${d.events.length ? ` <span class="muted">(${esc(d.events.join(', '))})</span>` : ''}</li>`).join('')}</ul></details>`
           : '<span class="muted">Geen</span>'}</td></tr>`).join('')}</tbody>
     </table></div>
     <p class="muted small" style="margin-top:8px">Uren in decimalen. "In Officient" is per dag het rooster, min afwezigheden, plus overuren. Een feestdag telt als 0: betaald, maar niet gewerkt.</p>
@@ -3060,8 +3062,8 @@ function pushHoursModal(m, people, sx, again) {
   const dayName = date => fmt.day(new Date(date + 'T00:00'));
   const warn = [];
   if (addMonths(m, 1) > now()) warn.push('De maand is nog niet voorbij. Je kan later opnieuw sturen; de app past dan aan wat veranderde, niets dubbel.');
-  if (sx.pending) warn.push(`${plural(sx.pending, 'aanpassing wacht', 'aanpassingen wachten')} nog bij Aanvragen. Die uren gaan pas mee als je ze goedkeurt.`);
-  if (sx.open) warn.push(`${plural(sx.open, 'persoon is', 'mensen zijn')} nog ingeklokt. Die shift gaat pas mee na het uitklokken.`);
+  if (sx.pending && !PLANNED) warn.push(`${plural(sx.pending, 'aanpassing wacht', 'aanpassingen wachten')} nog bij Aanvragen. Die uren gaan pas mee als je ze goedkeurt.`);
+  if (sx.open && !PLANNED) warn.push(`${plural(sx.open, 'persoon is', 'mensen zijn')} nog ingeklokt. Die shift gaat pas mee na het uitklokken.`);
   modal.open(`
     <h2 id="modal-title">Uren naar Officient · ${esc(fmt.month(m))}</h2>
     <p>Officient geeft zijn kalender door aan Securex. De app past die aan zoals jij dat nu met de hand doet, maar per dag: werkte iemand minder dan ingeroosterd, dan komt er voor de rest een <strong>Gewettigde Afwezigheid</strong>; werkte iemand meer, dan krijgt die dag meer uren. Feestdagen, verlof en ziekte blijven zoals ze zijn. Daarna verstuur jij in Officient de prestaties naar Securex, zoals nu.</p>
@@ -3077,8 +3079,8 @@ function pushHoursModal(m, people, sx, again) {
     const absence = res.absence || 'Gewettigde Afwezigheid';
     const before = new Map(people.map(p => [p.id, p.officient]));
     const list = res.people.filter(p => p.steps.length);
-    if (!list.length) { out.innerHTML = '<p class="hint info">Officient telt al wat er geklokt werd. Er is niets te veranderen.</p>'; return; }
-    const line = s => `<li>${esc(dayName(s.date))}: geklokt ${fmt.hours2(s.worked)} · Officient ${fmt.hours2(s.before)} → ${
+    if (!list.length) { out.innerHTML = `<p class="hint info">Officient telt al wat er ${PLANNED ? 'ingepland' : 'geklokt'} werd. Er is niets te veranderen.</p>`; return; }
+    const line = s => `<li>${esc(dayName(s.date))}: ${WORKED().toLowerCase()} ${fmt.hours2(s.worked)} · Officient ${fmt.hours2(s.before)} → ${
       s.action === 'raise' ? `de dag krijgt ${fmt.hours2(s.worked)} u`
       : s.action === 'absent' ? `${fmt.hours2(s.minutes)} u ${esc(absence)}`
       : s.action === 'clear' ? `${esc(absence)} eraf`
@@ -3093,7 +3095,7 @@ function pushHoursModal(m, people, sx, again) {
       return parts.length ? `<details><summary>${parts.join(' · ')}</summary><ul class="plain-list">${steps.map(line).join('')}</ul></details>` : '<span class="muted">Klopt al</span>';
     };
     out.innerHTML = `<div class="table-wrap"><table class="push-table">
-      <thead><tr><th>Sturen</th><th>Naam</th><th class="num">Geklokt</th><th class="num">Officient nu</th><th class="num">Daarna</th></tr></thead>
+      <thead><tr><th>Sturen</th><th>Naam</th><th class="num">${WORKED()}</th><th class="num">Officient nu</th><th class="num">Daarna</th></tr></thead>
       <tbody>${list.map(p => {
         const unclocked = p.steps.filter(s => s.unclocked).length;
         // the app only knows what was clocked: someone who hardly clocked would turn up absent everywhere
@@ -3104,10 +3106,10 @@ function pushHoursModal(m, people, sx, again) {
         return `<tr data-push="${p.staff_id}">
         <td><input type="checkbox" class="push-on" aria-label="${esc(p.name)} sturen"></td>
         <td><strong>${esc(p.name)}</strong>${p.contract_type ? ` <span class="muted small">${CONTRACT_SHORT[p.contract_type]}</span>` : ''}
-          ${p.none ? '<div class="hint warn small">Niets geklokt in de app deze maand: de app weet niet wat er gewerkt werd.</div>'
-            : unclocked ? `<label class="check small"><input type="checkbox" class="push-zero" ${HOURLY.includes(p.contract_type || staff(p.staff_id).contract_type) && !p.few ? 'checked' : ''}> ${plural(unclocked, 'dag', 'dagen')} zonder inklokken: afwezig</label>
+          ${p.none ? `<div class="hint warn small">${PLANNED ? 'Geen shiften ingepland' : 'Niets geklokt in de app'} deze maand: de app weet niet wat er gewerkt werd.</div>`
+            : unclocked ? `<label class="check small"><input type="checkbox" class="push-zero" ${HOURLY.includes(p.contract_type || staff(p.staff_id).contract_type) && !p.few ? 'checked' : ''}> ${plural(unclocked, 'dag', 'dagen')} ${PLANNED ? 'zonder shift' : 'zonder inklokken'}: afwezig</label>
               ${p.few ? `<div class="hint warn small">Maar ${plural(clocked, 'dag', 'dagen')} geklokt, tegenover ${planned} ingeroosterd. Zet afwezig alleen aan als dat klopt.</div>` : ''}` : ''}</td>
-        <td class="num" data-label="Geklokt">${fmt.hours2(people.find(x => x.id === p.staff_id)?.app || 0)}</td>
+        <td class="num" data-label="${WORKED()}">${fmt.hours2(people.find(x => x.id === p.staff_id)?.app || 0)}</td>
         <td class="num" data-label="Officient nu">${fmt.hours2(before.get(p.staff_id) || 0)}</td>
         <td class="num push-after" data-label="Daarna"></td></tr>
         <tr class="push-detail" data-detail="${p.staff_id}"><td colspan="5" class="push-what"></td></tr>`; }).join('')}</tbody>
@@ -3154,7 +3156,13 @@ function bindSecurex(el, m, sx) {
   const compare = async (note = '') => {
     const out = $('#off-cal-out', el);
     try {
-      out.innerHTML = note + officientCompare(await officientCall({ action: 'calendar', month: ym }), sx.rows);
+      // what the app counts: until October 2026 the planned shifts, from then on the clocked hours; fixed workers not for now
+      const [calendar, basis] = await Promise.all([officientCall({ action: 'calendar', month: ym }), rpc('mgr_officient_basis', { p_month: toDateInput(m) })]);
+      const rows = basis.flatMap(b => Object.entries(b.days).map(([day, minutes]) => ({ staff_id: b.staff_id, name: b.name, start: day + 'T00:00', minutes })));
+      const keep = new Set(basis.map(b => b.staff_id));
+      PLANNED = !!(basis[0] && basis[0].basis === 'planned');
+      out.innerHTML = note + (PLANNED ? '<p class="hint info">Voor deze maand vergelijkt de app de <strong>ingeplande shiften</strong> met Officient, niet de geklokte uren. Vaste werknemers staan er niet bij: zij werkten volgens hun contract.</p>' : '')
+        + officientCompare({ ...calendar, people: calendar.people.filter(p => keep.has(p.staff_id)) }, rows);
       const push = $('#off-push', out);
       if (push) push.addEventListener('click', () => pushHoursModal(m, officientCompare.people, sx, n => busy(cal, () => compare(n)).catch(() => {})));
     } catch (e) {

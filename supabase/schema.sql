@@ -2935,23 +2935,43 @@ end $$;
 -- needs a look: someone still clocked in, or a change that waits.
 create function app_private.clocked_by_day(p_month date) returns json
 language sql stable set search_path = public as $$
+  -- Until October 2026 the hours are the planned shifts (clocking only counts
+  -- from November 2026). Fixed workers (vast) are left out for now: they
+  -- worked their contract hours, which Officient has already.
   with tz as (select coalesce(timezone, 'UTC') as tz from public.settings where id = 1),
   bounds as (select date_trunc('month', p_month)::timestamp at time zone tz.tz as a,
-                    (date_trunc('month', p_month) + interval '1 month')::timestamp at time zone tz.tz as b, tz.tz from tz),
+                    (date_trunc('month', p_month) + interval '1 month')::timestamp at time zone tz.tz as b, tz.tz,
+                    date_trunc('month', p_month) < date '2026-11-01' as planned from tz),
   e as (select t.staff_id, greatest(t.clock_in, bounds.a) at time zone bounds.tz as li, least(t.clock_out, bounds.b) at time zone bounds.tz as lo
           from public.time_entries t, bounds
-         where t.deleted_at is null and t.clock_out is not null and t.clock_out > bounds.a and t.clock_in < bounds.b),
+         where not bounds.planned and t.deleted_at is null and t.clock_out is not null and t.clock_out > bounds.a and t.clock_in < bounds.b
+        union all
+        select sh.staff_id, greatest(sh.starts_at, bounds.a) at time zone bounds.tz, least(sh.ends_at, bounds.b) at time zone bounds.tz
+          from public.shifts sh, bounds
+         where bounds.planned and sh.staff_id is not null and sh.cancelled_at is null and sh.ends_at > bounds.a and sh.starts_at < bounds.b),
   d as (select e.staff_id, g::date as day, extract(epoch from (least(e.lo, g + interval '1 day') - greatest(e.li, g))) / 60 as minutes
           from e, generate_series(date_trunc('day', e.li), date_trunc('day', e.lo - interval '1 microsecond'), interval '1 day') g)
   select coalesce(json_agg(json_build_object(
       'staff_id', st.id, 'officient_id', st.officient_id, 'name', st.name, 'contract_type', st.contract_type,
+      'basis', case when (select planned from bounds) then 'planned' else 'clocked' end,
       'days', coalesce((select json_object_agg(q.day, q.m) from (
                 select d.day::text as day, round(sum(d.minutes))::int as m from d where d.staff_id = st.id group by d.day having round(sum(d.minutes)) > 0) q), '{}'::json),
-      'open', (select count(*) from public.time_entries t where t.staff_id = st.id and t.clock_out is null and t.deleted_at is null),
-      'pending', (select count(*) from public.time_edits x where x.staff_id = st.id and x.status = 'pending'))
+      'open', case when (select planned from bounds) then 0 else
+              (select count(*) from public.time_entries t where t.staff_id = st.id and t.clock_out is null and t.deleted_at is null) end,
+      'pending', case when (select planned from bounds) then 0 else
+              (select count(*) from public.time_edits x where x.staff_id = st.id and x.status = 'pending') end)
       order by lower(st.name)), '[]'::json)
     from public.staff st where st.officient_id is not null and not st.driver -- a driver's hours don't go to Officient
+      and st.contract_type is distinct from 'vast'
 $$;
+
+-- What the app counts for a month, per person and day (the comparison with Officient).
+create function public.mgr_officient_basis(p_token text, p_month date) returns json
+language plpgsql stable security definer set search_path = public, extensions as $$
+begin
+  perform app_private.current_manager(p_token);
+  return app_private.clocked_by_day(p_month);
+end $$;
 
 -- Notes that a manager wrote a month's hours into Officient.
 create function app_private.officient_record_push(p_token text, p_month date, p_rows int, p_minutes numeric) returns void
