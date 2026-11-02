@@ -3330,7 +3330,7 @@ const toBase64 = bytes => { let s = ''; for (let i = 0; i < bytes.length; i += 0
 // The day a month's planning is fixed (settings.plan_lock_day of the month
 // before), while that is still to come; otherwise null.
 function planOpen(m) {
-  const lock = new Date(m.getFullYear(), m.getMonth() - 1, S.settings.plan_lock_day || 24);
+  const lock = new Date(m.getFullYear(), m.getMonth() - 1, S.settings.plan_lock_day || 28);
   return now() < lock ? lock : null;
 }
 

@@ -18,7 +18,7 @@ create table public.settings (
   business_name     text not null default 'Ons team',
   drop_cutoff_hours int  not null default 24 check (drop_cutoff_hours between 0 and 336),
   -- from this day of the month, next month's planning is fixed: staff can't pick up or give back its shifts
-  plan_lock_day     int  not null default 24 check (plan_lock_day between 2 and 28),
+  plan_lock_day     int  not null default 28 check (plan_lock_day between 2 and 28),
   grace_minutes     int  not null default 5  check (grace_minutes between 0 and 120),
   currency          text not null default '€',
   timezone          text, -- set from the manager's device; standard shifts use it
