@@ -96,7 +96,6 @@ const SERVER_NL = {
   "This shift isn't over yet. Clock them in instead.": 'Deze shift is nog niet voorbij. Klok de persoon in.',
   'Clocking in only works during the shift.': 'Inklokken kan alleen tijdens de shift.',
   'Pick how to clock in.': 'Kies hoe je inklokt.',
-  "Next month's planning is fixed. Ask your manager.": 'De planning van volgende maand ligt vast. Vraag het aan je verantwoordelijke.',
   'Someone on the team already has that name. Try adding a last initial.': 'Iemand in het team heeft die naam al. Voeg bijvoorbeeld de eerste letter van de achternaam toe.',
   "Start and end can't be the same time.": 'Begin en einde kunnen niet hetzelfde uur zijn.',
   "That file couldn't be read. Try again.": 'Dat bestand kon niet gelezen worden. Probeer opnieuw.',
@@ -195,7 +194,6 @@ const SERVER_ZH = {
   'PIN must be 4 to 8 digits.': '密码必须是 4 到 8 位数字。',
   'Say briefly why you give this shift back.': '请简单说说为什么退回这个班次。',
   'Someone else already picked up this shift.': '别人已经认领了这个班次。',
-  "Next month's planning is fixed. Ask your manager.": '下个月的排班已经确定。请问负责人。',
   "That file couldn't be read. Try again.": '文件无法读取，请重试。',
   "That isn't one of your shifts.": '这不是你的班次。',
   "That name and PIN don't match.": '名字或密码不对。',
@@ -253,7 +251,6 @@ const SERVER_HU = {
   'PIN must be 4 to 8 digits.': 'A PIN-kód 4–8 számjegyből álljon.',
   'Say briefly why you give this shift back.': 'Írd le röviden, miért adod vissza ezt a műszakot.',
   'Someone else already picked up this shift.': 'Ezt a műszakot már valaki más elvállalta.',
-  "Next month's planning is fixed. Ask your manager.": 'A jövő havi beosztás már végleges. Kérdezd meg a vezetődet.',
   "That file couldn't be read. Try again.": 'A fájlt nem sikerült beolvasni. Próbáld újra.',
   "That isn't one of your shifts.": 'Ez nem a te műszakod.',
   "That name and PIN don't match.": 'A név és a PIN-kód nem egyezik.',
@@ -332,7 +329,6 @@ const SERVER_FR = {
   'Wrong name or PIN.': 'Nom ou code PIN incorrect.',
   'Someone else already picked up this shift.': 'Quelqu’un d’autre a déjà pris ce service.',
   'This overlaps a shift you already have.': 'Ce service chevauche un service que tu as déjà.',
-  "Next month's planning is fixed. Ask your manager.": 'Le planning du mois prochain est fixé. Demande à ton responsable.',
   'Say briefly why you give this shift back.': 'Dis brièvement pourquoi tu rends ce service.',
   'Pick a language.': 'Choisis une langue.',
 };
@@ -3327,7 +3323,7 @@ const CONTRACT_OPTIONS = [['', 'Geen keuze'], ['vast', 'Vast uurrooster'], ['vas
 const lastDay = m => addDays(addMonths(m, 1), -1);
 const toBase64 = bytes => { let s = ''; for (let i = 0; i < bytes.length; i += 0x8000) s += String.fromCharCode(...bytes.subarray(i, i + 0x8000)); return btoa(s); };
 
-// The day a month's planning is fixed (settings.plan_lock_day of the month
+// The day to make a month's contracts (settings.plan_lock_day of the month
 // before), while that is still to come; otherwise null.
 function planOpen(m) {
   const lock = new Date(m.getFullYear(), m.getMonth() - 1, S.settings.plan_lock_day || 28);
@@ -3375,7 +3371,7 @@ async function viewContracts(el, current) {
       ${periodBar(fmt.month(m), plural(r.students.length, 'student', 'studenten'), 'mo-prev', 'mo-next')}
     </div>
     ${ready ? '' : '<p class="hint warn">Vul eerst onderaan de gegevens van de zaak in: die staan op elk contract.</p>'}
-    ${planOpen(m) ? `<p class="hint warn">De planning van ${fmt.monthName(m)} ligt pas vast op ${fmt.short(planOpen(m))}. Tot dan kunnen studenten nog shiften opnemen en teruggeven, en klopt een contract dat je nu maakt misschien niet meer. Maak de contracten best vanaf ${fmt.short(planOpen(m))}.</p>` : ''}
+    ${planOpen(m) ? `<p class="hint warn">Studenten kiezen nog shiften voor ${fmt.monthName(m)}. Maak de contracten best vanaf ${fmt.short(planOpen(m))}, dan staan de meeste shiften erin. Verandert de planning nadien veel, dan zie je dat hieronder.</p>` : ''}
     <section class="card">
       ${r.students.length ? `<div class="rows">${r.students.map(row).join('')}</div>`
         : '<p class="empty">Niemand met het statuut Student. Kies het statuut bij Team → (persoon) → Werk en loon.</p>'}
