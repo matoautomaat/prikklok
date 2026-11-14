@@ -313,7 +313,6 @@ const SERVER_NL_PATTERNS = [
   [/^Question (\d+) wasn't found\. Reload the page\.$/, 'Vraag $1 bestaat niet meer. Laad de pagina opnieuw.'],
   [/^Question (\d+) was already answered: you can still change the text and the right answer, but not the number of answers\.$/,
     'Op vraag $1 is al geantwoord: je kan de tekst en het juiste antwoord nog aanpassen, maar niet het aantal antwoorden.'],
-  [/^You're (\d+) m from the restaurant\. Clock in and out at the restaurant\.$/, (_, m) => `Je bent ${metres(+m)} van het restaurant. In- en uitklokken kan alleen aan het restaurant.`],
 ];
 // French: the messages staff and the driver meet; the rest falls back to Dutch.
 const SERVER_FR = {
@@ -333,7 +332,6 @@ const SERVER_FR = {
   'Pick a language.': 'Choisis une langue.',
 };
 const SERVER_FR_PATTERNS = [
-  [/^You're (\d+) m from the restaurant\. Clock in and out at the restaurant\.$/, (_, m) => `Tu es à ${metres(+m)} du restaurant. Le pointage se fait uniquement au restaurant.`],
   [/^Your shift starts at (\d\d:\d\d)\. You can check in from (\d\d:\d\d)\.$/, 'Ton service commence à $1. Tu peux pointer à partir de $2.'],
   [/^Shifts can't be dropped less than (\d+) hours before they start\. Ask your manager\.$/, 'Tu ne peux plus rendre un service moins de $1 h avant le début. Demande à ton responsable.'],
   [/^Too many wrong PINs\. Try again in (\d+) min, or ask your manager to reset your PIN\.$/, 'Trop de codes PIN incorrects. Réessaie dans $1 min, ou demande un nouveau code à ton responsable.'],
@@ -400,7 +398,6 @@ async function refreshMe() {
   S.offset = new Date(r.server_time).getTime() - Date.now();
   updateBadges();
   checkLevelUp();
-  syncTracker();
   return r;
 }
 
@@ -731,9 +728,8 @@ if (darkQuery && darkQuery.addEventListener) darkQuery.addEventListener('change'
 
 function tabsFor() {
   if (isViewer()) return [['family', L('Kalender', '排班')], ['famstaff', L('Personeel', '员工')]];
-  if (isDriver()) return [['clock', F('Klok', 'Pointage')], ['hours', F('Mijn uren', 'Mes heures')], ['profile', F('Profiel', 'Profil')]];
   if (isManager()) return [['today', 'Vandaag'], ['schedule', 'Planning'], ['monthly', 'Overzicht'], ['requests', 'Aanvragen'],
-    ...(S.settings.has_drivers ? [['routes', 'Ritten']] : []), ['team', 'Team'], ['quiz', 'Quiz'], ['ranking', 'Ranglijst'], ['profile', 'Profiel']];
+    ['team', 'Team'], ['quiz', 'Quiz'], ['ranking', 'Ranglijst'], ['profile', 'Profiel']];
   // Who doesn't clock in gets a start page instead of the clock.
   return [['clock', canClock() ? T('Klok', '打卡', 'Óra', 'Pointage') : T('Start', '首页', 'Kezdőlap', 'Accueil')], ...(seesShifts() ? [['shifts', T('Shiften', '班次', 'Műszakok', 'Services')]] : []),
     ['hours', T('Mijn uren', '我的工时', 'Óráim', 'Mes heures')], ['ranking', T('Ranglijst', '排行榜', 'Ranglista', 'Classement')], ['profile', T('Profiel', '我的资料', 'Profil', 'Profil')]];
@@ -1266,7 +1262,6 @@ function setToken(t) { S.token = t; store.set(TOKEN_KEY, t); }
 
 async function signOut({ silent = false } = {}) {
   const t = S.token;
-  if (Tracker.entry != null) { Tracker.flush({ keepalive: true }); Tracker.stop(); }
   setToken(null);
   S.me = null; S.staff = null; S.alertsAt = 0;
   $('#toast').hidden = true;
@@ -1362,9 +1357,9 @@ function updateBadges() {
 }
 
 const VIEWS = {
-  clock: (el, current) => isDriver() ? viewDriver(el, current) : viewClock(el, current), shifts: viewShifts, hours: viewHours, profile: viewProfile, ranking: viewRanking,
+  clock: viewClock, shifts: viewShifts, hours: viewHours, profile: viewProfile, ranking: viewRanking,
   today: viewToday, schedule: viewSchedule, monthly: viewMonthly, requests: viewRequests, team: viewTeam, member: viewMember,
-  family: viewFamily, famstaff: viewFamilyStaff, docs: viewDocs, contracts: viewContracts, routes: viewRoutes,
+  family: viewFamily, famstaff: viewFamilyStaff, docs: viewDocs, contracts: viewContracts,
   quiz: (el, current) => isManager() ? (S.quizEdit ? viewQuizEdit(el, current) : S.quizId ? viewQuizResults(el, current) : viewQuizAdmin(el, current))
     : S.quizId ? viewPastQuiz(el, current) : viewQuiz(el, current),
 };
@@ -1412,7 +1407,6 @@ function route() {
   let v = location.hash.replace('#', ''), tab = v;
   const member = v.match(/^team\/([0-9a-f-]{36})$/);
   const ctMonth = v.match(/^contracts(?:\/(\d{4}-\d{2}))?$/);
-  const rt = v.match(/^routes(?:\/([0-9a-f-]{36}))?(?:\/(\d{4}-\d{2}-\d{2}))?$/);
   // #quiz: the quiz; #quiz/<id> an earlier one (staff) or its results (managers),
   // #quiz/new and #quiz/<id>/edit the editor
   const qz = v.match(/^quiz(?:\/(new|[0-9a-f-]{36}))?(\/edit)?$/);
@@ -1422,14 +1416,9 @@ function route() {
     v = 'quiz'; tab = isManager() ? 'quiz' : tabs[0];
   }
   if (ctMonth && isManager()) { v = 'contracts'; tab = 'schedule'; }
-  if (rt && isManager()) {
-    v = 'routes'; tab = 'routes';
-    if (rt[1]) S.routeStaff = rt[1];
-    S.routeDay = rt[2] ? new Date(rt[2] + 'T00:00') : rt[1] ? null : S.routeDay;
-  }
   if (member && isManager()) { S.memberId = member[1]; v = 'member'; tab = 'team'; }
   else if ((v === 'family' || v === 'famstaff' || v === 'docs') && isManager()) tab = 'team';
-  else if (((v === 'contracts' || v === 'routes') && isManager()) || quiz) { /* set above */ }
+  else if ((v === 'contracts' && isManager()) || quiz) { /* set above */ }
   else if (!tabs.includes(v)) { v = tabs[0]; tab = v; }
   if (S.view !== v) S.month = null;
   if (ctMonth && ctMonth[1] && v === 'contracts') S.month = new Date(ctMonth[1] + '-01T00:00');
@@ -2118,251 +2107,6 @@ async function viewQuizEdit(el, current) {
       location.hash = `quiz/${r.id}`;
     }).catch(e => { err.textContent = e.message; });
   });
-}
-
-/* ------------------------------------------------------------ driver */
-
-// A driver clocks in and out at the restaurant with his phone's location, and
-// while he is clocked in the app keeps where he drives: a position every 30
-// seconds or 60 metres, sent every minute. Browsers only give positions while
-// the app is open on the screen, so the screen can be kept on during the round.
-// Positions wait in the phone (per person) until the server has them.
-const metres = m => m >= 1000 ? `${num(m / 1000, 1)} km` : `${Math.round(m)} m`;
-const AWAKE_KEY = 'prikklok.awake';
-
-function geoError(e) {
-  if (e && e.code === 1) return F('Je locatie staat uit voor deze app. Sta locatie toe in de instellingen van je browser (voor deze website) en probeer opnieuw.', 'La localisation est désactivée pour cette app. Autorise-la dans les réglages de ton navigateur (pour ce site) et réessaie.');
-  if (e && e.code === 3) return F('Je locatie zoeken duurde te lang. Probeer opnieuw, liefst buiten.', 'La recherche de ta position a pris trop de temps. Réessaie, de préférence dehors.');
-  return F('Je locatie kon niet bepaald worden. Zet de locatie (gps) van je telefoon aan en probeer opnieuw.', 'Impossible de trouver ta position. Active la localisation (GPS) de ton téléphone et réessaie.');
-}
-
-const fixOf = pos => ({ at: new Date(pos.timestamp + S.offset).toISOString(), lat: +pos.coords.latitude.toFixed(6),
-  lng: +pos.coords.longitude.toFixed(6), accuracy: Math.round(pos.coords.accuracy) });
-
-// Where the phone is now: the route's own position when it is a few seconds
-// old, otherwise a new one.
-function getPosition({ timeout = 20000 } = {}) {
-  if (Tracker.last && Date.now() - Tracker.lastAt < 15000 && Tracker.last.accuracy <= 200) return Promise.resolve({ ...Tracker.last, at: now().toISOString() });
-  if (!navigator.geolocation) return Promise.reject(new AppError(F('Deze telefoon of browser kan je locatie niet geven. Probeer een andere browser.', 'Ce téléphone ou ce navigateur ne peut pas donner ta position. Essaie un autre navigateur.')));
-  return new Promise((resolve, reject) => navigator.geolocation.getCurrentPosition(
-    p => resolve(fixOf(p)), e => reject(new AppError(geoError(e))), { enableHighAccuracy: true, timeout, maximumAge: Tracker.entry == null ? 0 : 5000 }));
-}
-
-// Where the driver clocks in or out, if the phone tells within a few seconds;
-// clocking never waits on it or fails for it.
-const optionalPosition = () => getPosition({ timeout: 6000 }).catch(() => ({ lat: null, lng: null, accuracy: null }));
-
-const Tracker = {
-  entry: null, watch: null, timers: [], lock: null, last: null, lastAt: 0, kept: null, error: null, sending: false, sentAt: 0,
-  key() { return `prikklok.route.${S.me ? S.me.id : ''}`; },
-  queue() { try { return JSON.parse(store.get(this.key()) || '[]'); } catch { return []; } },
-  save(q) { store.set(this.key(), q.length ? JSON.stringify(q.slice(-5000)) : null); },
-  awake() { return store.get(AWAKE_KEY) !== '0'; },
-  start(entryId) {
-    if (this.entry === entryId) return;
-    this.stop();
-    this.entry = entryId;
-    this.error = navigator.geolocation ? null : 'unsupported';
-    if (this.error) return;
-    const opts = { enableHighAccuracy: true, maximumAge: 15000, timeout: 60000 };
-    this.watch = navigator.geolocation.watchPosition(p => this.fix(p), e => this.fail(e), opts);
-    // standing still, a phone may stop reporting: ask now and then
-    this.timers.push(setInterval(() => this.nudge(), 45000), setInterval(() => this.flush(), 60000));
-    this.wake();
-    this.flush();
-  },
-  stop() {
-    if (this.watch != null && navigator.geolocation) navigator.geolocation.clearWatch(this.watch);
-    this.timers.forEach(clearInterval);
-    Object.assign(this, { entry: null, watch: null, timers: [], last: null, lastAt: 0, kept: null, error: null });
-    this.release();
-  },
-  nudge() {
-    if (this.entry == null || !navigator.geolocation || Date.now() - this.lastAt < 40000) return;
-    navigator.geolocation.getCurrentPosition(p => this.fix(p), e => this.fail(e), { enableHighAccuracy: true, maximumAge: 10000, timeout: 30000 });
-  },
-  fix(pos) {
-    if (this.entry == null) return;
-    const p = fixOf(pos);
-    this.error = null; this.last = p; this.lastAt = Date.now();
-    const k = this.kept, gap = k ? Date.parse(p.at) - Date.parse(k.at) : Infinity;
-    if (p.accuracy <= 200 && (gap >= 30000 || (gap >= 5000 && Route.distance(k, p) >= 60))) this.push(p);
-    this.paint();
-  },
-  push(p) {
-    if (p.kind !== 'here') this.kept = p;
-    const q = this.queue();
-    q.push(p);
-    this.save(q);
-    if (q.length >= 20) this.flush();
-  },
-  fail(e) { this.error = e && e.code === 1 ? 'denied' : 'nofix'; this.paint(); },
-  async flush({ keepalive = false } = {}) {
-    const q = this.queue();
-    if (this.sending || !q.length || !S.token) return;
-    this.sending = true;
-    const batch = q.slice(0, 500);
-    try {
-      await rpc('driver_track', { p_points: batch }, { keepalive });
-      this.save(this.queue().slice(batch.length));
-      this.sentAt = Date.now();
-    } catch { /* they stay in the phone for the next try */ }
-    finally { this.sending = false; this.paint(); }
-  },
-  // positions not on the server yet, for the driver's own screen
-  pending(entryId) { return this.queue().map(p => ({ ...p, acc: p.accuracy, kind: p.kind || 'track', entry_id: entryId })); },
-  async wake() {
-    if (!this.awake() || this.lock || this.entry == null || !('wakeLock' in navigator) || document.visibilityState !== 'visible') return;
-    try {
-      this.lock = await navigator.wakeLock.request('screen');
-      this.lock.addEventListener('release', () => { this.lock = null; });
-    } catch { /* not allowed right now (battery saver) */ }
-  },
-  release() { if (this.lock) { quiet(this.lock.release()); this.lock = null; } },
-  status() {
-    if (this.error === 'unsupported') return F('<span class="pill bad">Geen locatie</span> Deze telefoon of browser kan geen locatie geven. Je rit wordt niet bijgehouden.', '<span class="pill bad">Pas de position</span> Ce téléphone ou ce navigateur ne donne pas de position. Ton trajet n’est pas suivi.');
-    if (this.error === 'denied') return F('<span class="pill bad">Locatie staat uit</span> Sta locatie toe voor deze website in je browser, anders wordt je rit niet bijgehouden.', '<span class="pill bad">Localisation désactivée</span> Autorise la localisation pour ce site dans ton navigateur, sinon ton trajet n’est pas suivi.');
-    const waiting = this.queue().length;
-    const wait = waiting > 3 ? F(` · ${plural(waiting, 'plek wacht', 'plekken wachten')} op verbinding`, ` · ${plural(waiting, 'position attend', 'positions attendent')} la connexion`) : '';
-    if (!this.last) return `<span class="pill">${F('Locatie zoeken…', 'Recherche de la position…')}</span>${this.error === 'nofix' ? F(' Zet de gps van je telefoon aan.', ' Active le GPS de ton téléphone.') : ''}`;
-    if (Date.now() - this.lastAt > 3 * 60000) return F(`<span class="pill warn">Geen locatie sinds ${fmt.time(this.last.at)}</span> Laat de app open terwijl je rijdt.${wait}`, `<span class="pill warn">Pas de position depuis ${fmt.time(this.last.at)}</span> Laisse l’app ouverte pendant que tu roules.${wait}`);
-    return F(`<span class="pill on">Rit wordt bijgehouden</span> laatst ${fmt.time(this.last.at)} · tot op ${this.last.accuracy} m${wait}`, `<span class="pill on">Trajet suivi</span> dernière position ${fmt.time(this.last.at)} · à ${this.last.accuracy} m près${wait}`);
-  },
-  paint() { const el = $('#track-line'); if (el) el.innerHTML = this.status(); },
-};
-
-// The GPS route only when the manager turned it on (Ritten → Gps-rit).
-function syncTracker() {
-  if (isDriver() && S.openEntry && S.settings.track_route) Tracker.start(S.openEntry.id);
-  else if (Tracker.entry != null) { Tracker.flush(); Tracker.stop(); }
-}
-document.addEventListener('visibilitychange', () => {
-  if (Tracker.entry == null) return;
-  if (document.visibilityState === 'hidden') Tracker.flush({ keepalive: true });
-  else { Tracker.wake(); Tracker.nudge(); }
-});
-setInterval(() => Tracker.paint(), 5000);
-
-function driverPunch(site) {
-  const e = S.openEntry, t = now(), gps = !!S.settings.track_route;
-  // One button to start, one to stop: nothing else to fill in or remember.
-  const body = e ? `
-      <div class="punch-status"><span class="dot"></span>${F('Gestart om', 'Commencé à')} ${sameDay(e.clock_in, t) ? fmt.time(e.clock_in) : fmt.when(e.clock_in)}</div>
-      <div class="punch-elapsed" data-live="since" data-since="${e.clock_in}">${fmt.dur(minutesBetween(e.clock_in, t))}</div>
-      ${gps ? `<p class="track-line" id="track-line">${Tracker.status()}</p>
-      ${'wakeLock' in navigator ? `<label class="check small"><input type="checkbox" id="tr-awake" ${Tracker.awake() ? 'checked' : ''}> ${F('Scherm aan houden tijdens de rit', 'Garder l’écran allumé pendant le trajet')}</label>` : ''}` : ''}
-      <button class="big stop" data-act="drv-out">${F('Eindigen', 'Terminer')}</button>
-      <p class="muted small">${F('Tik hierop als je stopt met werken.', 'Touche ce bouton quand tu arrêtes de travailler.')}</p>`
-    : `
-      <div class="punch-status"><span class="dot"></span>${F('Nog niet gestart', 'Pas encore commencé')}</div>
-      <button class="big go" data-act="drv-in">${F('Starten', 'Commencer')}</button>
-      <p class="muted small">${F('Tik hierop als je begint te werken.', 'Touche ce bouton quand tu commences à travailler.')}</p>`;
-  return `
-    <section class="punch ${e ? 'is-on' : ''}" aria-label="${F('Starten en eindigen', 'Commencer et terminer')}">
-      <div class="punch-top">
-        <span class="punch-clock" data-live="clock">${fmt.clock(t)}</span>
-        <span class="punch-date">${fmt.dayLong(t)}</span>
-      </div>
-      ${body}
-    </section>`;
-}
-
-function bindDriverPunch(root, after) {
-  const inBtn = $('[data-act=drv-in]', root);
-  if (inBtn) inBtn.addEventListener('click', () => busy(inBtn, async () => {
-    inBtn.textContent = F('Bezig…', 'Un instant…');
-    const p = await optionalPosition();
-    await rpc('driver_clock_in', { p_lat: p.lat, p_lng: p.lng, p_accuracy: p.accuracy });
-    await refreshMe();
-    toast(F(`Gestart om ${fmt.time(now())}. Goede rit!`, `Commencé à ${fmt.time(now())}. Bonne route !`));
-    after();
-  }).catch(() => {}));
-  const outBtn = $('[data-act=drv-out]', root);
-  if (outBtn) outBtn.addEventListener('click', () => busy(outBtn, async () => {
-    outBtn.textContent = F('Bezig…', 'Un instant…');
-    const p = await optionalPosition();
-    await Tracker.flush();
-    await rpc('driver_clock_out', { p_lat: p.lat, p_lng: p.lng, p_accuracy: p.accuracy, p_note: '' });
-    await refreshMe();
-    toast(F(`Geëindigd om ${fmt.time(now())}.`, `Terminé à ${fmt.time(now())}.`));
-    after();
-  }).catch(() => {}));
-  const awake = $('#tr-awake', root);
-  if (awake) awake.addEventListener('change', () => {
-    store.set(AWAKE_KEY, awake.checked ? '1' : '0');
-    if (awake.checked) Tracker.wake(); else Tracker.release();
-  });
-}
-
-async function viewDriver(el, current) {
-  await refreshMe();
-  const t = now(), monthStart = startOfMonth(t), wk = startOfWeek(t), day = startOfDay(t);
-  const from = monthStart < wk ? monthStart : wk;
-  const [hours, today] = await Promise.all([
-    rpc('my_hours', { p_from: addDays(from, -1).toISOString(), p_to: addDays(t, 1).toISOString() }),
-    rpc('driver_today'),
-  ]);
-  if (!current()) return;
-  const worked = since => hours.entries.reduce((a, x) => {
-    const b = x.clock_out ? new Date(x.clock_out) : now(), s = new Date(Math.max(new Date(x.clock_in), since));
-    return b > s ? a + minutesBetween(s, b) : a;
-  }, 0);
-  const todays = hours.entries.filter(x => !x.clock_out || new Date(x.clock_out) > day);
-  const a = Route.analyse({ entries: todays, points: [...today.points, ...(S.openEntry ? Tracker.pending(S.openEntry.id) : [])],
-    checkpoints: today.checkpoints, site: today.site, now: now().getTime() });
-  const gps = !!S.settings.track_route, visits = today.visits || [];
-  const here = gps && S.openEntry && Tracker.last ? Route.placeOf({ ...Tracker.last, acc: Tracker.last.accuracy }, a.places) : null;
-  const hour = t.getHours(), hello = hour < 12 ? F('Goedemorgen', 'Bonjour') : hour < 18 ? F('Goedemiddag', 'Bonjour') : F('Goedenavond', 'Bonsoir');
-  el.innerHTML = `
-    <div class="view-head"><div class="hello">
-      <button class="hello-pic" data-go="profile" aria-label="${F('Mijn profiel', 'Mon profil')}">${personPic(S.me, 'xl')}</button>
-      <div><h1>${hello}, ${esc(S.me.name.split(' ')[0])}</h1><p class="muted">Chauffeur</p></div>
-    </div></div>
-    <div class="grid-2">
-      ${driverPunch(today.site)}
-      <div style="display:flex;flex-direction:column;gap:18px;min-width:0">
-        <div class="stats stats-3">
-          <div class="stat good"><span class="v">${fmt.dur(worked(day))}</span><span class="k">${F('Vandaag gewerkt', 'Travaillé aujourd’hui')}</span></div>
-          <div class="stat"><span class="v">${fmt.dur(worked(wk))}</span><span class="k">${F('Deze week', 'Cette semaine')}</span></div>
-          <div class="stat"><span class="v">${fmt.dur(worked(monthStart))}</span><span class="k">${F('In', 'En')} ${fmt.monthName(t)}</span></div>
-        </div>
-        <section class="card">
-          <div class="card-head"><h2>${F('Je ronde vandaag', 'Ta tournée aujourd’hui')}</h2>${gps && S.openEntry ? `<button class="sm primary" id="drv-here">${F('Ik ben hier', 'Je suis ici')}</button>` : ''}</div>
-          ${visits.length ? `<div class="rows">${visits.map(v => `
-            <div class="row"><div class="row-main"><span class="row-title">${esc(v.machine)}</span>
-              <span class="row-sub">${esc(visitWhat(v))}</span></div>
-              <span class="pill on">✓</span></div>`).join('')}</div>`
-            : `<p class="empty">${gps ? F('Nog niets bijgevuld in MATO Info.', 'Rien encore rempli dans MATO Info.') : F('Nog niets bijgevuld vandaag. Wat je in MATO Info bijvult, verschijnt hier vanzelf, binnen 5 minuten.', 'Rien rempli aujourd’hui. Ce que tu remplis dans MATO Info apparaît ici tout seul, en moins de 5 minutes.')}</p>`}
-          ${gps && today.checkpoints.length ? `<h3 style="margin-top:14px">${F('Plaatsen', 'Lieux')}</h3><div class="rows">${today.checkpoints.map(cp => {
-            const v = a.visited.get(cp.id) || [];
-            return `<div class="row"><div class="row-main"><span class="row-title">${esc(cp.name)}</span>
-              ${here && here.id === cp.id ? `<span class="row-sub">${F('Je bent hier', 'Tu es ici')}</span>` : ''}</div>
-              ${v.length ? '<span class="pill on">✓</span>' : `<span class="pill">${F('Nog niet', 'Pas encore')}</span>`}</div>`;
-          }).join('')}</div>` : ''}
-          ${gps && S.openEntry ? `<p class="muted small" style="margin-top:10px">${F('Aan een automaat? Tik op <strong>Ik ben hier</strong>: zo staat het zeker op je rit, ook als je telefoon even geen locatie had.', 'À un distributeur ? Touche <strong>Je suis ici</strong> : comme ça, c’est sûr sur ton trajet, même si ton téléphone n’avait pas de position un moment.')}</p>` : ''}
-        </section>
-        <section class="card">
-          <div class="card-head"><h2>${F('Je uren', 'Tes heures')}</h2><button class="sm" data-go="hours">${F('Alle uren', 'Toutes les heures')}</button></div>
-          ${hours.entries.length ? `<div class="rows">${hours.entries.slice(0, 7).map(x => `
-            <div class="row"><div class="row-main"><span class="row-title">${fmt.dayLong(x.clock_in)}</span>
-              <span class="row-sub"><span class="time">${fmt.time(x.clock_in)} – ${x.clock_out ? fmt.time(x.clock_out) : F('nu', 'maintenant')}</span></span></div>
-              <span class="pill ${x.clock_out ? '' : 'on'}">${fmt.dur(minutesBetween(x.clock_in, x.clock_out || now()))}</span></div>`).join('')}</div>`
-            : `<p class="empty">${F('Nog geen uren. Tik op Starten om te beginnen.', 'Pas encore d’heures. Touche Commencer pour commencer.')}</p>`}
-        </section>
-      </div>
-    </div>`;
-  bindDriverPunch(el, renderView);
-  $$('[data-go]', el).forEach(b => b.addEventListener('click', () => { location.hash = b.dataset.go; }));
-  const hereBtn = $('#drv-here', el);
-  if (hereBtn) hereBtn.addEventListener('click', () => busy(hereBtn, async () => {
-    const p = await getPosition({ timeout: 15000 });
-    Tracker.push({ ...p, kind: 'here' });
-    await Tracker.flush();
-    const at = Route.placeOf({ ...p, acc: p.accuracy }, a.places);
-    toast(at ? F(`Aangekomen bij ${at.name} om ${fmt.time(p.at)}.`, `Arrivé à ${at.name} à ${fmt.time(p.at)}.`) : F(`Je plek is bewaard (${fmt.time(p.at)}). Dit is geen plaats van de ronde.`, `Ta position est enregistrée (${fmt.time(p.at)}). Ce n’est pas un lieu de la tournée.`));
-    renderView();
-  }).catch(() => {}));
-  if (S.openEntry) startPolling(60000);
 }
 
 /* ------------------------------------------------------- shifts & schedule */
@@ -4439,364 +4183,6 @@ async function viewToday(el, current) {
   startPolling(60000);
 }
 
-/* ------------------------------------------------------ manager: routes */
-
-// Leaflet and the map tiles of OpenStreetMap, only loaded on these pages.
-// Leaflet is window.L: in this file L is the language helper.
-let leafletLoading = null;
-function loadLeaflet() {
-  if (window.L) return Promise.resolve(window.L);
-  if (!leafletLoading) leafletLoading = new Promise((resolve, reject) => {
-    const css = document.createElement('link');
-    css.rel = 'stylesheet'; css.href = 'vendor/leaflet/leaflet.css';
-    document.head.appendChild(css);
-    const s = document.createElement('script');
-    s.src = 'vendor/leaflet/leaflet.js';
-    s.onload = () => resolve(window.L);
-    s.onerror = () => { leafletLoading = null; reject(new AppError('De kaart kon niet geladen worden. Controleer je verbinding.')); };
-    document.head.appendChild(s);
-  });
-  return leafletLoading;
-}
-const cssVar = k => getComputedStyle(document.documentElement).getPropertyValue(k).trim();
-function makeMap(box) {
-  const map = window.L.map(box, { scrollWheelZoom: false });
-  // the site sends no referrer; OpenStreetMap's tile servers ask for one
-  window.L.tileLayer('https://tile.openstreetmap.org/{z}/{x}/{y}.png', {
-    maxZoom: 19, referrerPolicy: 'strict-origin-when-cross-origin',
-    attribution: '&copy; <a href="https://www.openstreetmap.org/copyright" target="_blank" rel="noopener">OpenStreetMap</a>',
-  }).addTo(map);
-  return map;
-}
-const placeLabel = (layer, text) => layer.bindTooltip(esc(text), { permanent: true, direction: 'top', className: 'map-label', offset: [0, -4] });
-
-// The restaurant, the places of the round, the route of each clocked time,
-// stops outside the places, and where he is now.
-function drawRoute(map, a, data) {
-  const accent = cssVar('--accent') || '#8E1B24', brand = cssVar('--brand') || '#6E141A', on = cssVar('--on') || '#008B3C', warn = cssVar('--warn') || '#8F5B00';
-  const bounds = [];
-  if (data.site && data.site.lat != null) {
-    window.L.circle([data.site.lat, data.site.lng], { radius: data.site.radius_m, color: brand, weight: 1, fillOpacity: 0.08 }).addTo(map);
-    placeLabel(window.L.circleMarker([data.site.lat, data.site.lng], { radius: 6, color: brand, fillColor: brand, fillOpacity: 1, weight: 2 }).addTo(map), 'Restaurant');
-    bounds.push([data.site.lat, data.site.lng]);
-  }
-  for (const cp of data.checkpoints) {
-    const seen = a.visited.has(cp.id);
-    window.L.circle([cp.lat, cp.lng], { radius: cp.radius_m, color: seen ? on : warn, weight: 1, fillOpacity: 0.12 }).addTo(map);
-    placeLabel(window.L.circleMarker([cp.lat, cp.lng], { radius: 5, color: seen ? on : warn, fillColor: seen ? on : warn, fillOpacity: 1, weight: 2 }).addTo(map), cp.name);
-    bounds.push([cp.lat, cp.lng]);
-  }
-  for (const s of a.sessions) {
-    const line = s.points.map(p => [p.lat, p.lng]);
-    if (line.length > 1) window.L.polyline(line, { color: accent, weight: 4, opacity: 0.8 }).addTo(map);
-    bounds.push(...line);
-    for (const it of s.items) if (it.type === 'stop') {
-      window.L.circleMarker([it.lat, it.lng], { radius: 6, color: warn, fillColor: '#fff', fillOpacity: 1, weight: 3 }).addTo(map)
-        .bindTooltip(`Stop ${fmt.time(it.from)} – ${fmt.time(it.to)}`);
-    }
-    if (s.open && s.last) {
-      window.L.circleMarker([s.last.lat, s.last.lng], { radius: 9, color: '#fff', fillColor: accent, fillOpacity: 1, weight: 3, className: 'map-now' }).addTo(map)
-        .bindTooltip(`Nu · laatst gezien ${fmt.time(s.last.at)}`, { permanent: true, direction: 'right', className: 'map-label now' });
-    }
-  }
-  if (bounds.length > 1) map.fitBounds(bounds, { padding: [30, 30], maxZoom: 16 });
-  else if (bounds.length) map.setView(bounds[0], 14);
-  else map.setView([50.85, 4.35], 8);
-}
-
-// The day as a list: clocked in, each place or stop with the drive in
-// between, the times without a position, clocked out.
-function routeTimeline(a) {
-  if (!a.sessions.length) return '<p class="empty">Niet ingeklokt op deze dag.</p>';
-  const gapNote = (s, from, to, used) => s.gaps.filter(g => !used.has(g) && g.from < to && g.to > from).map(g => {
-    used.add(g);
-    return `<span class="pill warn">Geen locatie ${fmt.time(g.from)} – ${fmt.time(g.to)}</span>`;
-  }).join(' ');
-  return a.sessions.map(s => {
-    const used = new Set(), rows = [];
-    const first = s.items[0], lastItem = s.items[s.items.length - 1];
-    rows.push(`<li class="tl-in"><span class="tl-time">${fmt.time(s.start)}</span><span class="tl-what"><strong>Ingeklokt</strong>
-      ${gapNote(s, s.start, first ? first.from : s.end, used)}</span></li>`);
-    s.items.forEach((it, i) => {
-      const mins = (it.to - it.from) / 60000;
-      rows.push(it.type === 'visit'
-        ? `<li class="tl-visit ${it.place.site ? 'is-site' : ''}"><span class="tl-time">${fmt.time(it.from)}</span><span class="tl-what"><strong>${esc(it.place.name)}</strong>
-            <span class="muted small">${fmt.time(it.from)} – ${fmt.time(it.to)} · ${fmt.dur(mins)} ter plaatse</span> ${gapNote(s, it.from, it.to, used)}</span></li>`
-        : `<li class="tl-stop"><span class="tl-time">${fmt.time(it.from)}</span><span class="tl-what"><strong>Stop, geen plaats van de ronde</strong>
-            <span class="muted small">${fmt.time(it.from)} – ${fmt.time(it.to)} · ${fmt.dur(mins)}${it.gap ? ' · deels zonder locatie' : ''}</span>
-            <button class="link small" data-stop="${it.lat.toFixed(6)},${it.lng.toFixed(6)}">Als plaats bewaren</button> ${gapNote(s, it.from, it.to, used)}</span></li>`);
-      const leg = s.legs[i];
-      if (leg) rows.push(`<li class="tl-leg"><span class="tl-time"></span><span class="tl-what">↓ ${fmt.dur(leg.minutes)} rijden · ${num(leg.km, 1)} km ${gapNote(s, leg.from, leg.to, used)}</span></li>`);
-    });
-    rows.push(s.open
-      ? `<li class="tl-out is-open"><span class="tl-time">nu</span><span class="tl-what"><strong>Nog ingeklokt</strong>
-          ${s.last ? `<span class="muted small">laatst gezien ${fmt.time(s.last.at)}</span>` : ''} ${gapNote(s, lastItem ? lastItem.to : s.start, s.end, used)}</span></li>`
-      : `<li class="tl-out"><span class="tl-time">${fmt.time(s.end)}</span><span class="tl-what"><strong>Uitgeklokt</strong>
-          ${s.entry.pending ? '<span class="pill accent">Uur wacht op goedkeuring</span>' : s.entry.edited ? '<span class="pill">Aangepast</span>' : ''}
-          ${s.entry.note ? `<span class="muted small">“${esc(s.entry.note)}”</span>` : ''} ${gapNote(s, lastItem ? lastItem.to : s.start, s.end, used)}</span></li>`);
-    return `<ol class="timeline">${rows.join('')}</ol>`;
-  }).join('');
-}
-
-// A machine visit from MATO Info: what went in and out, and how.
-function visitWhat(v) {
-  const parts = [];
-  if (v.added) parts.push(F(`${v.added} ${v.added === 1 ? 'stuk' : 'stuks'} erin`, `${v.added} ${v.added === 1 ? 'pièce ajoutée' : 'pièces ajoutées'}`));
-  if (v.removed) parts.push(F(`${v.removed} eruit`, `${v.removed} retirée${v.removed === 1 ? '' : 's'}`));
-  return parts.join(' · ') || F('nagekeken', 'contrôlé');
-}
-const visitHow = v => v.round_no != null ? `ronde ${v.round_no}${v.round_done ? '' : ', nog bezig'}` : v.via_adjust ? 'via Voorraad aanpassen' : 'bijgevuld';
-const visitSpan = v => new Date(v.last_at) - new Date(v.first_at) >= 120000 ? ` · ${fmt.time(v.first_at)} – ${fmt.time(v.last_at)}` : '';
-
-// The day from MATO Info: clocked in, each machine he filled with the time in
-// between, clocked out. Visits more than 15 minutes outside a clocked time are
-// returned apart.
-function matoTimeline(entries, visits, nowMs) {
-  const t = x => new Date(x).getTime();
-  const sessions = [...entries].sort((x, y) => t(x.clock_in) - t(y.clock_in))
-    .map(e => ({ e, start: t(e.clock_in), end: e.clock_out ? t(e.clock_out) : nowMs, visits: [] }));
-  const outside = [];
-  for (const v of visits) {
-    const at = t(v.first_at), s = sessions.find(x => at >= x.start - 15 * 60000 && at <= x.end + 15 * 60000);
-    (s ? s.visits : outside).push(v);
-  }
-  const row = (time, what, cls) => `<li class="${cls}"><span class="tl-time">${time}</span><span class="tl-what">${what}</span></li>`;
-  const leg = (mins, text) => row('', `↓ ${fmt.dur(mins)} ${text}`, 'tl-leg');
-  const html = sessions.map(s => {
-    const rows = [row(fmt.time(s.start), '<strong>Ingeklokt</strong>', 'tl-in')];
-    let prev = s.start;
-    s.visits.forEach((v, i) => {
-      const gap = (t(v.first_at) - prev) / 60000;
-      if (gap >= 1) rows.push(leg(gap, i ? 'tot de volgende automaat' : 'tot de eerste automaat'));
-      rows.push(row(fmt.time(v.first_at), `<strong>${esc(v.machine)}</strong>
-        <span class="muted small">${esc(visitWhat(v))} · ${esc(visitHow(v))}${visitSpan(v)}</span>`, 'tl-visit'));
-      prev = Math.max(prev, t(v.last_at));
-    });
-    if (!s.visits.length) rows.push(row('', '<span class="muted small">Nog niets bijgevuld in MATO Info.</span>', 'tl-leg'));
-    else if ((s.end - prev) / 60000 >= 1) rows.push(leg((s.end - prev) / 60000, s.e.clock_out ? 'tot het uitklokken' : 'sinds de laatste automaat'));
-    rows.push(s.e.clock_out
-      ? row(fmt.time(s.end), `<strong>Uitgeklokt</strong>
-          ${s.e.pending ? '<span class="pill accent">Uur wacht op goedkeuring</span>' : s.e.edited ? '<span class="pill">Aangepast</span>' : ''}
-          ${s.e.note ? `<span class="muted small">“${esc(s.e.note)}”</span>` : ''}`, 'tl-out')
-      : row('nu', '<strong>Nog ingeklokt</strong>', 'tl-out is-open'));
-    return `<ol class="timeline">${rows.join('')}</ol>`;
-  }).join('');
-  return { html, outside };
-}
-
-const visitRows = list => `<ol class="timeline">${list.map(v => `<li class="tl-visit"><span class="tl-time">${fmt.time(v.first_at)}</span>
-  <span class="tl-what"><strong>${esc(v.machine)}</strong><span class="muted small">${esc(visitWhat(v))} · ${esc(visitHow(v))}${visitSpan(v)}</span></span></li>`).join('')}</ol>`;
-
-async function viewRoutes(el, current) {
-  const day = S.routeDay || startOfDay(now());
-  S.routeDay = day;
-  const gps = !!S.settings.track_route;
-  const [data] = await Promise.all([
-    rpc('mgr_routes', { p_staff_id: S.routeStaff || null, p_from: day.toISOString(), p_to: addDays(day, 1).toISOString() }),
-    gps ? loadLeaflet().catch(e => e) : null,
-  ]);
-  if (!current()) return;
-  S.routeStaff = data.staff_id;
-  const driver = data.drivers.find(d => d.id === data.staff_id);
-  const a = Route.analyse({ entries: data.entries, points: data.points, checkpoints: data.checkpoints, site: data.site, now: now().getTime() });
-  const visits = data.visits || [];
-  const mt = matoTimeline(data.entries, visits, now().getTime());
-  const isToday = sameDay(day, now());
-  const go = (id, d) => { location.hash = `routes/${id}/${toDateInput(d)}`; };
-  const working = a.sessions.some(s => s.open);
-  const first = driver ? esc(driver.name.split(' ')[0]) : '';
-  const m = data.mato;
-  const matoCard = `<section class="card">
-      <div class="card-head"><h2>MATO Info</h2>${m ? '<button class="sm" id="mato-now">Nu ophalen</button>' : ''}</div>
-      ${m ? `<p class="muted small" style="margin-top:6px">Wat ${driver ? `<strong>${esc(data.mato_name)}</strong>` : 'de chauffeur'} in MATO Info bijvult, komt hier elke 5 minuten vanzelf binnen, met de automaat, het uur en het aantal stuks.${m.last_sync_at ? ` Laatst opgehaald ${esc(fmt.when(m.last_sync_at))}.` : ''}</p>
-        ${m.last_error ? `<p class="hint bad">De laatste keer lukte het niet: ${esc(tr(m.last_error))}</p>` : ''}
-        ${driver ? `<p class="muted small">Heet hij anders in MATO Info? Pas het aan bij <a href="#team/${driver.id}">Team</a>.</p>` : ''}`
-        : '<p class="muted small" style="margin-top:6px">MATO Info is nog niet gekoppeld.</p>'}
-    </section>`;
-  const zoneCard = `<section class="card">
-      <div class="card-head"><h2>Inklokzone</h2><button class="sm" id="site-edit">Aanpassen</button></div>
-      <p class="muted small" style="margin-top:6px">${data.site.lat != null
-        ? `De chauffeur kan alleen in- en uitklokken binnen <strong>${metres(data.site.radius_m)}</strong> van het restaurant. Hoe nauwkeurig zijn telefoon is, telt in zijn voordeel: binnen staat een telefoon vaak 30 tot 100 m naast.`
-        : 'Duid aan waar het restaurant is. Zonder die plaats kan de chauffeur niet inklokken.'}</p>
-    </section>`;
-  const gpsCard = `<section class="card">
-      <h2>Gps-rit</h2>
-      <label class="check" style="margin-top:10px"><input type="checkbox" id="rt-gps" ${gps ? 'checked' : ''}> Ook de gereden weg met gps bijhouden</label>
-      <p class="muted small" style="margin-top:6px">Dan zie je de rit op een kaart, met plaatsen die je zelf aanduidt. De app moet daarvoor open blijven op zijn telefoon tijdens de ronde. Uit: de ronde komt alleen uit MATO Info, en zijn locatie wordt enkel bij het in- en uitklokken gevraagd.</p>
-    </section>`;
-  const outsideNote = mt.outside.length ? `<div class="hint warn" style="margin-top:12px"><strong>Bijgevuld terwijl hij niet ingeklokt was</strong>${visitRows(mt.outside)}</div>` : '';
-  const added = visits.reduce((x, v) => x + v.added, 0);
-  el.innerHTML = `
-    <div class="view-head">
-      <div><h1>Ritten</h1><p>Wanneer de chauffeur bij elke automaat was, wat hij bijvulde en hoe lang hij erover deed.</p></div>
-      ${periodBar(fmt.dayLong(day), isToday ? 'Vandaag' : '', 'rt-prev', 'rt-next')}
-    </div>
-    ${data.drivers.length > 1 ? `<div class="chips">${data.drivers.map(d => `<button class="chip ${d.id === data.staff_id ? 'is-on' : ''}" data-driver="${d.id}">${esc(d.name)}${d.working ? ' ●' : ''}</button>`).join('')}</div>` : ''}
-    ${driver ? '' : '<p class="hint info">Nog geen chauffeur. Geef iemand bij Team de rol <strong>Chauffeur</strong>.</p>'}
-    ${driver ? `<div class="stats">
-      <div class="stat good"><span class="v">${fmt.dur(a.minutes)}</span><span class="k">${first} gewerkt${working ? ' (bezig)' : ''}</span></div>
-      <div class="stat"><span class="v">${visits.length}</span><span class="k">${visits.length === 1 ? 'Automaat bijgevuld' : 'Automaten bijgevuld'}</span></div>
-      <div class="stat"><span class="v">${added}</span><span class="k">Stuks erin</span></div>
-      ${gps ? `<div class="stat"><span class="v">${num(a.km, 1)} km</span><span class="k">Gereden (gps)</span></div>`
-        : `<div class="stat ${mt.outside.length ? 'alert' : ''}"><span class="v">${mt.outside.length}</span><span class="k">Buiten de geklokte uren</span></div>`}
-    </div>` : ''}
-    <div class="route-grid">
-      ${gps ? `<section class="card route-map-card"><div class="route-map" id="rt-map" role="img" aria-label="Kaart met de rit"></div>
-        <p class="muted small" style="margin-top:8px">Rode lijn: de rit. Groen: plaats bezocht, oranje: nog niet. Witte bolletjes: stops buiten de plaatsen.</p></section>` : ''}
-      <section class="card">
-        <div class="card-head"><h2>Verloop</h2>${working ? '<span class="pill on">Onderweg</span>' : ''}</div>
-        ${!driver ? '<p class="empty">Nog geen ritten.</p>'
-          : gps ? `${routeTimeline(a)}${a.sessions.some(s => s.gaps.length) ? '<p class="muted small" style="margin-top:10px">Geen locatie: de app was dicht, het scherm stond uit of de telefoon had geen bereik. De uren tellen wel.</p>' : ''}
-              ${visits.length ? `<h3 style="margin-top:16px">Bijgevuld volgens MATO Info</h3>${visitRows(visits)}` : ''}`
-          : data.entries.length ? mt.html : `<p class="empty">Niet ingeklokt op deze dag.</p>`}
-        ${driver ? outsideNote : ''}
-        ${driver && !gps && data.entries.length ? '<p class="muted small" style="margin-top:10px">De tijd tussen twee automaten is rijden én klaarzetten: MATO Info noteert wanneer hij een automaat bijvult, niet wanneer hij aankomt.</p>' : ''}
-      </section>
-      ${gps ? '' : `<div class="stack">${matoCard}${zoneCard}${gpsCard}</div>`}
-    </div>
-    ${gps ? `<div class="grid-2">
-      <section class="card">
-        <div class="card-head"><h2>Plaatsen van de ronde</h2><button class="sm primary" id="cp-add">+ Plaats toevoegen</button></div>
-        <p class="muted small" style="margin-top:6px">Plaatsen waar de chauffeur langs moet, voor de gps-rit. Komt hij binnen de zone, dan telt hij als aangekomen.</p>
-        ${data.checkpoints.length ? `<div class="rows">${data.checkpoints.map(cp => {
-          const v = a.visited.get(cp.id) || [];
-          return `<div class="row"><div class="row-main"><span class="row-title">${esc(cp.name)}</span>
-            <span class="row-sub">Zone ${metres(cp.radius_m)}${v.length ? ` · ${isToday ? 'vandaag' : 'die dag'} om ${v.map(x => fmt.time(x.from)).join(', ')}` : ''}</span></div>
-            <div class="row-actions"><button class="sm" data-cp="${cp.id}">Wijzigen</button></div></div>`;
-        }).join('')}</div>` : '<p class="empty">Nog geen plaatsen. Voeg ze toe met een adres, door op de kaart te tikken, of bewaar een stop uit het verloop.</p>'}
-      </section>
-      <div class="stack">${matoCard}${zoneCard}${gpsCard}</div>
-    </div>` : ''}`;
-
-  const box = $('#rt-map', el);
-  if (box) {
-    if (window.L) drawRoute(makeMap(box), a, data);
-    else box.innerHTML = '<p class="empty">De kaart kon niet geladen worden. Het verloop hiernaast klopt wel.</p>';
-  }
-  $('#rt-prev', el).addEventListener('click', () => go(data.staff_id, addDays(day, -1)));
-  $('#rt-next', el).addEventListener('click', () => go(data.staff_id, addDays(day, 1)));
-  $$('[data-driver]', el).forEach(b => b.addEventListener('click', () => go(b.dataset.driver, day)));
-  const cpAdd = $('#cp-add', el);
-  if (cpAdd) cpAdd.addEventListener('click', () => placeModal({ center: data.site }));
-  $$('[data-cp]', el).forEach(b => b.addEventListener('click', () => placeModal({ place: data.checkpoints.find(c => c.id === b.dataset.cp), center: data.site })));
-  $$('[data-stop]', el).forEach(b => b.addEventListener('click', () => {
-    const [lat, lng] = b.dataset.stop.split(',').map(Number);
-    placeModal({ place: { lat, lng, radius_m: 75 }, center: data.site });
-  }));
-  $('#site-edit', el).addEventListener('click', () => placeModal({ site: data.site }));
-  const now_ = $('#mato-now', el);
-  if (now_) now_.addEventListener('click', () => busy(now_, async () => {
-    const r = await rpc('mato', { token: S.token }, { auth: false, path: '/functions/v1/mato' });
-    toast(r.report.new || r.report.updated ? `Opgehaald uit MATO Info: ${plural(r.report.new, 'nieuwe bijvulling', 'nieuwe bijvullingen')}${r.report.updated ? `, ${r.report.updated} bijgewerkt` : ''}.` : 'Opgehaald uit MATO Info. Niets nieuws.');
-    renderView();
-  }).catch(() => renderView()));
-  const gpsBox = $('#rt-gps', el);
-  gpsBox.addEventListener('change', async () => {
-    const on = gpsBox.checked;
-    if (on && !(await modal.confirm({ title: 'Gps-rit aanzetten?', body: 'De app vraagt dan de hele ronde de locatie van de chauffeur en moet daarvoor open blijven op zijn telefoon. Vertel hem dat op voorhand.', ok: 'Aanzetten' }))) { gpsBox.checked = false; return; }
-    busy(null, async () => {
-      await rpc('mgr_save_track_route', { p_on: on });
-      await refreshMe();
-      toast(on ? 'De gps-rit staat aan.' : 'De gps-rit staat uit. De ronde komt uit MATO Info.');
-      renderView();
-    }).catch(() => { gpsBox.checked = !on; });
-  });
-  if (isToday) startPolling(working ? 60000 : 300000);
-}
-
-// Add or change a place of the round, or the restaurant's zone (site): tap the
-// map, use this phone's location, or look up an address.
-function placeModal({ place = null, site = null, center = null }) {
-  const isSite = !!site, cur = isSite ? site : place || {};
-  let pos = cur.lat != null ? { lat: cur.lat, lng: cur.lng } : null;
-  const radii = isSite ? [50, 75, 100, 150, 200, 300, 500] : [30, 50, 75, 100, 150, 200, 300];
-  const radius = cur.radius_m || (isSite ? 150 : 75);
-  const d = modal.open(`
-    <h2 id="modal-title">${isSite ? 'Inklokzone van het restaurant' : place && place.id ? 'Plaats wijzigen' : 'Plaats toevoegen'}</h2>
-    <form id="pl-form" novalidate>
-      <div class="form-grid">
-        ${isSite ? '' : `<div class="field wide"><label for="pl-name">Naam</label><input id="pl-name" maxlength="80" value="${esc(cur.name || '')}" placeholder="bv. Automaat station Torhout"></div>`}
-        <div class="field"><label for="pl-radius">Zone</label><select id="pl-radius">${[...new Set([...radii, radius])].sort((x, y) => x - y)
-          .map(r => `<option value="${r}" ${r === radius ? 'selected' : ''}>${metres(r)} rondom</option>`).join('')}</select></div>
-        <div class="field"><label>&nbsp;</label><button type="button" id="pl-here">Mijn locatie nu</button></div>
-        <div class="field wide"><label for="pl-q">Adres zoeken</label>
-          <div class="copybox"><input id="pl-q" maxlength="120" placeholder="Straat en nummer, gemeente"><button type="button" class="sm" id="pl-find">Zoeken</button></div>
-          <div id="pl-results" class="pl-results"></div></div>
-      </div>
-      <div class="pl-map" id="pl-map" role="img" aria-label="Tik op de kaart om de plaats aan te duiden"></div>
-      <p class="muted small" id="pl-pos" style="margin-top:6px"></p>
-      <p class="form-error" id="pl-err"></p>
-      <div class="form-actions">
-        ${place && place.id ? '<button type="button" class="danger" id="pl-rm">Verwijderen</button>' : ''}
-        <button type="button" data-close>Annuleren</button><button type="submit" class="primary">Opslaan</button>
-      </div>
-    </form>`, null, { wide: true });
-  const err = $('#pl-err', d), info = $('#pl-pos', d);
-  let map = null, pin = null, ring = null;
-  const show = () => {
-    info.textContent = pos ? `Aangeduid: ${pos.lat.toFixed(5)}, ${pos.lng.toFixed(5)}` : 'Tik op de kaart, zoek een adres of gebruik je locatie.';
-    if (!map || !pos) return;
-    const r = Number($('#pl-radius', d).value);
-    if (!pin) {
-      pin = window.L.marker([pos.lat, pos.lng], { draggable: true, icon: window.L.divIcon({ className: 'map-pin', iconSize: [18, 18] }) }).addTo(map);
-      pin.on('dragend', () => { const ll = pin.getLatLng(); pos = { lat: ll.lat, lng: ll.lng }; show(); });
-      ring = window.L.circle([pos.lat, pos.lng], { radius: r, color: cssVar('--accent'), weight: 1, fillOpacity: 0.12 }).addTo(map);
-    }
-    pin.setLatLng([pos.lat, pos.lng]);
-    ring.setLatLng([pos.lat, pos.lng]).setRadius(r);
-  };
-  const moveTo = (p, zoom = 17) => { pos = p; show(); if (map) map.setView([p.lat, p.lng], Math.max(map.getZoom(), zoom)); };
-  loadLeaflet().then(() => {
-    if (!d.open) return;
-    map = makeMap($('#pl-map', d));
-    const c = pos || (center && center.lat != null ? center : null);
-    map.setView(c ? [c.lat, c.lng] : [51.03, 3.1], pos ? 17 : c ? 13 : 10);
-    map.on('click', ev => { pos = { lat: ev.latlng.lat, lng: ev.latlng.lng }; show(); });
-    setTimeout(() => map.invalidateSize(), 50);
-    show();
-  }).catch(e => { $('#pl-map', d).innerHTML = `<p class="empty">${esc(e.message)} Gebruik je locatie of zoek een adres.</p>`; });
-  show();
-  $('#pl-radius', d).addEventListener('change', show);
-  $('#pl-here', d).addEventListener('click', ev => busy(ev.currentTarget, async () => moveTo(await getPosition())).catch(() => {}));
-  const find = async () => {
-    const q = $('#pl-q', d).value.trim(), out = $('#pl-results', d);
-    if (q.length < 3) { out.innerHTML = '<p class="muted small">Typ een straat en een gemeente.</p>'; return; }
-    out.innerHTML = '<p class="muted small">Zoeken…</p>';
-    try {
-      const res = await fetch(`https://nominatim.openstreetmap.org/search?format=jsonv2&limit=5&countrycodes=be,fr,nl&q=${encodeURIComponent(q)}`,
-        { referrerPolicy: 'strict-origin-when-cross-origin', headers: { 'Accept-Language': 'nl' } });
-      const list = res.ok ? await res.json() : [];
-      out.innerHTML = list.length ? list.map((x, i) => `<button type="button" class="pl-hit" data-hit="${i}">${esc(x.display_name)}</button>`).join('')
-        : '<p class="muted small">Niets gevonden. Probeer het met minder woorden, of tik op de kaart.</p>';
-      $$('[data-hit]', out).forEach(b => b.addEventListener('click', () => { const x = list[+b.dataset.hit]; moveTo({ lat: +x.lat, lng: +x.lon }); out.innerHTML = ''; }));
-    } catch { out.innerHTML = '<p class="muted small">Zoeken lukte niet. Tik op de kaart of gebruik je locatie.</p>'; }
-  };
-  $('#pl-find', d).addEventListener('click', find);
-  $('#pl-q', d).addEventListener('keydown', ev => { if (ev.key === 'Enter') { ev.preventDefault(); find(); } });
-  const rm = $('#pl-rm', d);
-  if (rm) rm.addEventListener('click', () => busy(rm, async () => {
-    await rpc('mgr_archive_checkpoint', { p_id: place.id });
-    modal.close();
-    toast(`${place.name} verwijderd.`);
-    renderView();
-  }).catch(() => {}));
-  $('#pl-form', d).addEventListener('submit', async ev => {
-    ev.preventDefault();
-    err.textContent = '';
-    const name = isSite ? '' : $('#pl-name', d).value.trim(), r = Number($('#pl-radius', d).value);
-    if (!isSite && !name) { err.textContent = 'Geef de plaats een naam.'; return; }
-    if (!pos) { err.textContent = 'Duid aan waar het is: tik op de kaart, zoek een adres of gebruik je locatie.'; return; }
-    await busy($('button[type=submit]', d), async () => {
-      if (isSite) await rpc('mgr_save_site', { p_lat: pos.lat, p_lng: pos.lng, p_radius: r });
-      else await rpc('mgr_save_checkpoint', { p_id: (place && place.id) || null, p_name: name, p_lat: pos.lat, p_lng: pos.lng, p_radius: r });
-      modal.close();
-      if (isSite) await refreshMe();
-      toast(isSite ? 'Inklokzone opgeslagen.' : `${name} opgeslagen.`);
-      renderView();
-    }).catch(x => { err.textContent = x.message; });
-  });
-}
-
 /* -------------------------------------------------------- manager: monthly */
 
 // Belgian Excel opens semicolon-separated files with decimal commas.
@@ -5070,7 +4456,7 @@ async function viewRequests(el, current) {
 /* ----------------------------------------------------------- manager: team */
 
 const ROLE_NL = { staff: 'Medewerker', manager: 'Verantwoordelijke', viewer: 'Familie · alleen overzicht', driver: 'Chauffeur' };
-const roleOptions = sel => Object.entries({ staff: 'Medewerker', manager: 'Verantwoordelijke (ziet alles)', viewer: 'Familie (alleen het maandoverzicht)', driver: 'Chauffeur (geen planning, klokt in aan het restaurant)' })
+const roleOptions = sel => Object.entries({ staff: 'Medewerker', manager: 'Verantwoordelijke (ziet alles)', viewer: 'Familie (alleen het maandoverzicht)' })
   .map(([k, l]) => `<option value="${k}" ${k === sel ? 'selected' : ''}>${l}</option>`).join('');
 const payOptions = sel => `<option value="">Niet ingevuld</option>${Object.entries(PAY)
   .map(([k, [l]]) => `<option value="${k}" ${k === sel ? 'selected' : ''}>${l}</option>`).join('')}`;
@@ -5159,8 +4545,7 @@ async function viewTeam(el, current) {
             <div class="field"><label for="ap-pid">Werknemersnummer (Securex)</label><input id="ap-pid" maxlength="30" autocomplete="off" placeholder="Optioneel"></div>
             <div class="field"><label for="ap-pay">Betaling</label><select id="ap-pay">${payOptions(null)}</select></div>
             <div class="field wide"><label for="ap-role">Rol</label><select id="ap-role">${roleOptions('staff')}</select>
-              <span class="help" id="ap-role-help" hidden>Een familie-account ziet alleen het maandoverzicht: wie wanneer werkt, de open shiften, de uren, het uurloon en cash of ingeschreven. In het Nederlands of het Chinees. Het kan niet inklokken en geen shiften opnemen.</span>
-              <span class="help" id="ap-driver-help" hidden>Een chauffeur ziet geen planning. Hij klokt in en uit aan het restaurant, met de locatie van zijn telefoon, en ziet zijn uren per dag. Terwijl hij ingeklokt is, houdt de app zijn rit bij: dat zie je bij Ritten. Zijn uren gaan niet naar Officient.</span></div>
+              <span class="help" id="ap-role-help" hidden>Een familie-account ziet alleen het maandoverzicht: wie wanneer werkt, de open shiften, de uren, het uurloon en cash of ingeschreven. In het Nederlands of het Chinees. Het kan niet inklokken en geen shiften opnemen.</span></div>
           </div>
           <p class="form-error" id="ap-err"></p>
           <div class="form-actions"><button type="submit" class="primary">Persoon toevoegen</button></div>
@@ -5230,7 +4615,6 @@ async function viewTeam(el, current) {
     const family = apRole.value === 'viewer';
     ['#ap-rate', '#ap-type', '#ap-pid', '#ap-pay'].forEach(sel => { $(sel, ap).closest('.field').hidden = family; });
     $('#ap-role-help', ap).hidden = !family;
-    $('#ap-driver-help', ap).hidden = apRole.value !== 'driver';
   });
   const tzBtn = $('#st-tz', el);
   if (tzBtn) tzBtn.addEventListener('click', () => busy(tzBtn, async () => {
@@ -5370,7 +4754,7 @@ async function viewMember(el, current) {
       ${personPic(p, 'xl')}
       <div><button class="link back" id="back">‹ Team</button><h1>${esc(p.name)}</h1>
         <p class="lvl-line">${levelPill(xp)} <span>${esc(levelTitle(xp.level))}</span> <span class="muted">· ${ROLE_NL[p.role]}${p.active ? '' : ' · Inactief'}</span> ${payPill(p.pay_method)}${p.officient_id ? ' <span class="pill">Officient</span>' : ''}</p></div>
-    </div><div class="toolbar">${driver ? `<button class="sm" id="see-routes">${ICONS.route} Ritten bekijken</button>` : ''}${self ? '' : `<button class="sm" id="send-install">${p.show_install ? 'Uitleg "op je gsm" wacht' : 'Uitleg "op je gsm" tonen'}</button>`}</div></div>
+    </div><div class="toolbar">${self ? '' : `<button class="sm" id="send-install">${p.show_install ? 'Uitleg "op je gsm" wacht' : 'Uitleg "op je gsm" tonen'}</button>`}</div></div>
     ${p.locked ? '<p class="hint bad">Geblokkeerd na te veel verkeerde pincodes. Stel hieronder een nieuwe pincode in om te deblokkeren.</p>' : ''}
     <div class="grid-2">
       <section class="card">
@@ -5475,8 +4859,6 @@ async function viewMember(el, current) {
     <input type="file" id="slip-file" accept="application/pdf,image/png,image/jpeg" hidden>`;
 
   $('#back', el).addEventListener('click', () => { location.hash = 'team'; });
-  const seeRoutes = $('#see-routes', el);
-  if (seeRoutes) seeRoutes.addEventListener('click', () => { location.hash = `routes/${p.id}`; });
   const sendInstall = $('#send-install', el);
   if (sendInstall) sendInstall.addEventListener('click', () => {
     modal.open(`
